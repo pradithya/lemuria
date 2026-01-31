@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/lemuria-logo.png" alt="Lemuria Logo" width="200">
+</p>
+
 # Lemuria
 
 Argo CD Pull Request Automation - inspired by Atlantis for Terraform.
