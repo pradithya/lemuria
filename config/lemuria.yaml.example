@@ -6,6 +6,9 @@ server:
   port: 4141
   # Host to bind to (0.0.0.0 for all interfaces)
   host: "0.0.0.0"
+  # Base URL for OAuth callbacks (required if auth enabled)
+  # Example: https://lemuria.example.com
+  base_url: "${LEMURIA_BASE_URL}"
 
 github:
   # GitHub webhook secret for validating incoming webhooks
@@ -58,3 +61,79 @@ defaults:
     - "myorg/myrepo"
     - "myorg/infrastructure-*"
     # - "myorg/*"  # Allow all repos in myorg
+
+# Authentication configuration (optional)
+# Uncomment and configure to enable the web UI with SSO
+auth:
+  # Enable authentication (default: false)
+  enabled: false
+
+  # Secret for signing session cookies (required if auth enabled)
+  # Generate with: openssl rand -hex 32
+  session_secret: "${SESSION_SECRET}"
+
+  # Session duration (default: 24h)
+  session_ttl: 24h
+
+  # Cookie settings
+  cookie_domain: ""        # Leave empty for auto-detect
+  cookie_secure: true      # Set to true for HTTPS
+
+  # Default role for new users: "admin" or "user"
+  default_role: "user"
+
+  # GitHub OAuth configuration (optional)
+  # Create OAuth App at: https://github.com/settings/developers
+  github:
+    client_id: "${GITHUB_OAUTH_CLIENT_ID}"
+    client_secret: "${GITHUB_OAUTH_CLIENT_SECRET}"
+    # Restrict to organization members (optional)
+    # allowed_orgs:
+    #   - "myorg"
+    # Restrict to team members (optional)
+    # allowed_teams:
+    #   - "myorg/platform-team"
+
+  # Generic OIDC configuration (optional)
+  # Works with Okta, Auth0, Keycloak, Azure AD, etc.
+  # oidc:
+  #   name: "Company SSO"
+  #   issuer_url: "https://login.example.com"
+  #   client_id: "${OIDC_CLIENT_ID}"
+  #   client_secret: "${OIDC_CLIENT_SECRET}"
+  #   scopes:
+  #     - "openid"
+  #     - "profile"
+  #     - "email"
+  #   username_claim: "preferred_username"
+  #   email_claim: "email"
+  #   groups_claim: "groups"  # Optional: for group-based role assignment
+
+  # Basic auth configuration (for local development only)
+  # WARNING: Not recommended for production use
+  # basic:
+  #   users:
+  #     - username: admin
+  #       password: admin
+  #       role: admin
+  #     - username: user
+  #       password: user
+  #       role: user
+
+  # Role assignments - first match wins
+  # Patterns: exact email, wildcard (*@domain.com), @org/team (GitHub), group-name (OIDC)
+  role_assignments:
+    # Specific users
+    - pattern: "admin@example.com"
+      role: "admin"
+    # Domain-based
+    - pattern: "*@platform.example.com"
+      role: "admin"
+    # GitHub team
+    # - pattern: "@myorg/platform-admins"
+    #   provider: "github"
+    #   role: "admin"
+    # OIDC group
+    # - pattern: "platform-admins"
+    #   provider: "oidc"
+    #   role: "admin"

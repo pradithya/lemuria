@@ -9,12 +9,14 @@ type Config struct {
 	ArgoCD   ArgoCDConfig   `yaml:"argocd"`
 	Redis    RedisConfig    `yaml:"redis"`
 	Defaults DefaultsConfig `yaml:"defaults"`
+	Auth     AuthConfig     `yaml:"auth"`
 }
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port int    `yaml:"port"`
-	Host string `yaml:"host"`
+	Port    int    `yaml:"port"`
+	Host    string `yaml:"host"`
+	BaseURL string `yaml:"base_url"`
 }
 
 // GitHubConfig holds GitHub App authentication settings.
@@ -44,6 +46,59 @@ type DefaultsConfig struct {
 	RequireApproval    bool     `yaml:"require_approval"`
 	DeleteSourceBranch bool     `yaml:"delete_source_branch"`
 	AllowedRepos       []string `yaml:"allowed_repos"`
+}
+
+// AuthConfig holds authentication settings.
+type AuthConfig struct {
+	Enabled         bool               `yaml:"enabled"`
+	SessionSecret   string             `yaml:"session_secret"`
+	SessionTTL      time.Duration      `yaml:"session_ttl"`
+	CookieDomain    string             `yaml:"cookie_domain"`
+	CookieSecure    bool               `yaml:"cookie_secure"`
+	DefaultRole     string             `yaml:"default_role"`
+	GitHub          *GitHubOAuthConfig `yaml:"github,omitempty"`
+	OIDC            *OIDCConfig        `yaml:"oidc,omitempty"`
+	Basic           *BasicAuthConfig   `yaml:"basic,omitempty"`
+	RoleAssignments []RoleAssignment   `yaml:"role_assignments"`
+}
+
+// BasicAuthConfig holds basic auth settings for local development.
+type BasicAuthConfig struct {
+	Users []BasicAuthUser `yaml:"users"`
+}
+
+// BasicAuthUser represents a basic auth user.
+type BasicAuthUser struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+	Role     string `yaml:"role"`
+}
+
+// GitHubOAuthConfig holds GitHub OAuth settings (separate from GitHub App).
+type GitHubOAuthConfig struct {
+	ClientID     string   `yaml:"client_id"`
+	ClientSecret string   `yaml:"client_secret"`
+	AllowedOrgs  []string `yaml:"allowed_orgs,omitempty"`
+	AllowedTeams []string `yaml:"allowed_teams,omitempty"`
+}
+
+// OIDCConfig holds generic OIDC provider settings.
+type OIDCConfig struct {
+	Name          string   `yaml:"name"`
+	IssuerURL     string   `yaml:"issuer_url"`
+	ClientID      string   `yaml:"client_id"`
+	ClientSecret  string   `yaml:"client_secret"`
+	Scopes        []string `yaml:"scopes"`
+	UsernameClaim string   `yaml:"username_claim"`
+	EmailClaim    string   `yaml:"email_claim"`
+	GroupsClaim   string   `yaml:"groups_claim,omitempty"`
+}
+
+// RoleAssignment maps patterns to roles.
+type RoleAssignment struct {
+	Pattern  string `yaml:"pattern"`
+	Role     string `yaml:"role"`
+	Provider string `yaml:"provider,omitempty"`
 }
 
 // RepoConfig represents per-repository configuration (.lemuria.yaml).
@@ -85,7 +140,33 @@ func DefaultConfig() *Config {
 			RequireApproval:    false,
 			DeleteSourceBranch: false,
 		},
+		Auth: AuthConfig{
+			Enabled:      false,
+			SessionTTL:   24 * time.Hour,
+			CookieSecure: true,
+			DefaultRole:  "user",
+		},
 	}
+}
+
+// AuthEnabled returns true if authentication is enabled.
+func (c *Config) AuthEnabled() bool {
+	return c.Auth.Enabled
+}
+
+// HasGitHubOAuth returns true if GitHub OAuth is configured.
+func (c *Config) HasGitHubOAuth() bool {
+	return c.Auth.GitHub != nil && c.Auth.GitHub.ClientID != ""
+}
+
+// HasOIDC returns true if OIDC is configured.
+func (c *Config) HasOIDC() bool {
+	return c.Auth.OIDC != nil && c.Auth.OIDC.IssuerURL != ""
+}
+
+// HasBasicAuth returns true if basic auth is configured.
+func (c *Config) HasBasicAuth() bool {
+	return c.Auth.Basic != nil && len(c.Auth.Basic.Users) > 0
 }
 
 // LockTTL returns the default lock TTL (7 days).

@@ -1,4 +1,4 @@
-.PHONY: build test test-unit test-e2e e2e-setup e2e-teardown clean docker-build
+.PHONY: build build-frontend build-backend test test-unit test-e2e e2e-setup e2e-teardown clean docker-build run run-redis run-backend run-frontend stop
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -11,11 +11,25 @@ ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 
+# Node/npm variables
+NPM ?= npm
+
 # Default target
 all: build
 
-# Build the binary
-build:
+# Build frontend and backend
+build: build-frontend build-backend
+
+# Build frontend assets
+build-frontend:
+	cd web && $(NPM) install && $(NPM) run build
+
+# Build the Go binary (requires frontend to be built first)
+build-backend:
+	go build $(LDFLAGS) -o bin/lemuria ./cmd/lemuria
+
+# Build backend only (skip frontend, for development)
+build-go:
 	go build $(LDFLAGS) -o bin/lemuria ./cmd/lemuria
 
 # Run all tests
@@ -67,19 +81,94 @@ fmt:
 generate:
 	go generate ./...
 
+# ============================================================================
+# Development Commands
+# ============================================================================
+
+# Configuration
+CONFIG ?= config/test.yaml
+
+# Start Redis in Docker (if not already running)
+run-redis:
+	@if [ -z "$$(docker ps -q -f name=lemuria-redis)" ]; then \
+		echo "Starting Redis..."; \
+		docker run -d --name lemuria-redis -p 6379:6379 redis:7-alpine; \
+		sleep 2; \
+	else \
+		echo "Redis is already running"; \
+	fi
+
+# Stop Redis container
+stop-redis:
+	@if [ -n "$$(docker ps -q -f name=lemuria-redis)" ]; then \
+		echo "Stopping Redis..."; \
+		docker stop lemuria-redis; \
+	fi
+	@if [ -n "$$(docker ps -aq -f name=lemuria-redis)" ]; then \
+		docker rm lemuria-redis; \
+	fi
+
+# Run the backend server
+run-backend: build-go
+	./bin/lemuria -config $(CONFIG)
+
+# Run the frontend dev server
+run-frontend:
+	cd web && $(NPM) install && $(NPM) run dev
+
+# Run everything (Redis + backend + frontend in parallel)
+# Use: make run
+# Or with custom config: make run CONFIG=path/to/config.yaml
+run: run-redis
+	@echo "Starting Lemuria development environment..."
+	@echo "Backend will be available at http://localhost:4141"
+	@echo "Frontend dev server will be available at http://localhost:5173"
+	@echo ""
+	@echo "Press Ctrl+C to stop all services"
+	@trap 'kill 0' INT; \
+		(cd web && $(NPM) install --silent && $(NPM) run dev) & \
+		($(MAKE) build-go && ./bin/lemuria -config $(CONFIG)) & \
+		wait
+
+# Stop all development services
+stop: stop-redis
+	@echo "Stopping Lemuria processes..."
+	@pkill -f "bin/lemuria" 2>/dev/null || true
+	@pkill -f "vite" 2>/dev/null || true
+	@echo "All services stopped"
+
 # Show help
 help:
 	@echo "Lemuria Makefile"
 	@echo ""
 	@echo "Usage:"
-	@echo "  make build        - Build the lemuria binary"
-	@echo "  make test         - Run unit tests"
-	@echo "  make test-e2e     - Run e2e tests (requires e2e-setup)"
-	@echo "  make e2e-setup    - Setup k3d cluster with Argo CD and Redis"
-	@echo "  make e2e-teardown - Teardown e2e test infrastructure"
-	@echo "  make e2e          - Setup, run e2e tests (no auto-teardown)"
-	@echo "  make docker-build - Build Docker image"
-	@echo "  make clean        - Clean build artifacts"
-	@echo "  make deps         - Download and tidy dependencies"
-	@echo "  make lint         - Run linter"
-	@echo "  make fmt          - Format code"
+	@echo ""
+	@echo "Development:"
+	@echo "  make run            - Run Redis, backend, and frontend dev server"
+	@echo "  make run-redis      - Start Redis in Docker"
+	@echo "  make run-backend    - Run backend server only"
+	@echo "  make run-frontend   - Run frontend dev server only"
+	@echo "  make stop           - Stop all development services"
+	@echo ""
+	@echo "Build:"
+	@echo "  make build          - Build frontend and backend"
+	@echo "  make build-frontend - Build frontend assets only"
+	@echo "  make build-backend  - Build Go binary (requires frontend)"
+	@echo "  make build-go       - Build Go binary only (skip frontend)"
+	@echo "  make docker-build   - Build Docker image"
+	@echo ""
+	@echo "Testing:"
+	@echo "  make test           - Run unit tests"
+	@echo "  make test-e2e       - Run e2e tests (requires e2e-setup)"
+	@echo "  make e2e-setup      - Setup k3d cluster with Argo CD and Redis"
+	@echo "  make e2e-teardown   - Teardown e2e test infrastructure"
+	@echo "  make e2e            - Setup, run e2e tests (no auto-teardown)"
+	@echo ""
+	@echo "Other:"
+	@echo "  make clean          - Clean build artifacts"
+	@echo "  make deps           - Download and tidy dependencies"
+	@echo "  make lint           - Run linter"
+	@echo "  make fmt            - Format code"
+	@echo ""
+	@echo "Options:"
+	@echo "  CONFIG=path/to/config.yaml  - Use custom config (default: config/test.yaml)"
