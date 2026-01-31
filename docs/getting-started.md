@@ -41,7 +41,7 @@ helm install lemuria lemuria/lemuria \
 
 ```bash
 # Clone the repository
-git clone https://github.com/org/lemuria.git
+git clone https://github.com/pradithya/lemuria.git
 cd lemuria
 
 # Apply the manifests

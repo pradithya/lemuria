@@ -118,4 +118,4 @@ lemuria sync
 
 ## License
 
-Lemuria is open source software licensed under the [Apache 2.0 License](https://github.com/org/lemuria/blob/main/LICENSE).
+Lemuria is open source software licensed under the [Apache 2.0 License](https://github.com/pradithya/lemuria/blob/main/LICENSE).
