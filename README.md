@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/lemuria-logo.png" alt="Lemuria Logo" width="200">
+  <img src="assets/lemuria-logo.png" alt="Lemuria Logo">
 </p>
 
 # Lemuria
