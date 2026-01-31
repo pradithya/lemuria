@@ -1,0 +1,60 @@
+# Lemuria Configuration Example
+# Copy this file to lemuria.yaml and customize for your environment
+
+server:
+  # Port to listen on
+  port: 4141
+  # Host to bind to (0.0.0.0 for all interfaces)
+  host: "0.0.0.0"
+
+github:
+  # GitHub webhook secret for validating incoming webhooks
+  # Set via environment variable for security
+  webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
+
+  # GitHub App ID
+  app_id: 12345
+
+  # Path to GitHub App private key file
+  # Can also be set via GITHUB_APP_PRIVATE_KEY environment variable
+  app_private_key: "/app/secrets/github-app.pem"
+
+argocd:
+  # Argo CD server URL
+  server_url: "https://argocd.example.com"
+
+  # Argo CD API token
+  # Set via environment variable for security
+  token: "${ARGOCD_TOKEN}"
+
+  # Skip TLS verification (not recommended for production)
+  insecure: false
+
+redis:
+  # Redis server address
+  address: "localhost:6379"
+
+  # Redis password (optional)
+  # Set via environment variable for security
+  password: "${REDIS_PASSWORD}"
+
+  # Redis database number
+  db: 0
+
+defaults:
+  # Automatically run plan when PR is opened or updated
+  autoplan: true
+
+  # Require PR approval before allowing sync
+  require_approval: false
+
+  # Delete source branch after successful sync (not implemented)
+  delete_source_branch: false
+
+  # Repository allowlist - only process webhooks from these repos
+  # Supports wildcards: "org/*" matches all repos in org
+  # Empty list allows all repos
+  allowed_repos:
+    - "myorg/myrepo"
+    - "myorg/infrastructure-*"
+    # - "myorg/*"  # Allow all repos in myorg
