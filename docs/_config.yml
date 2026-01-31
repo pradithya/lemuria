@@ -1,0 +1,33 @@
+title: Lemuria
+description: GitOps Pull Request Automation for Argo CD
+theme: jekyll-theme-cayman
+baseurl: "/lemuria"
+url: "https://org.github.io"
+
+# Navigation
+nav:
+  - title: Home
+    url: /
+  - title: Getting Started
+    url: /getting-started
+  - title: Configuration
+    url: /configuration
+  - title: Authentication
+    url: /authentication
+  - title: Commands
+    url: /commands
+  - title: Workflow
+    url: /workflow
+  - title: Troubleshooting
+    url: /troubleshooting
+
+# Markdown settings
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+# Plugins
+plugins:
+  - jekyll-seo-tag
+  - jekyll-sitemap
