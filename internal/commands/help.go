@@ -58,7 +58,7 @@ Depending on configuration, sync and rollback may require:
 - Valid (non-stale) plan (for sync)
 
 ---
-[Lemuria Documentation](https://github.com/org/lemuria)`
+[Lemuria Documentation](https://github.com/pradithya/lemuria)`
 
 	return e.postComment(ctx, event, "", helpText)
 }

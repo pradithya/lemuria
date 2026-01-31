@@ -2,7 +2,7 @@ title: Lemuria
 description: GitOps Pull Request Automation for Argo CD
 theme: jekyll-theme-cayman
 baseurl: "/lemuria"
-url: "https://org.github.io"
+url: "https://pradithya.github.io"
 
 # Navigation
 nav:

@@ -464,7 +464,7 @@ redis-cli -h redis ping
 
 If you're still stuck:
 
-1. **Check existing issues:** [GitHub Issues](https://github.com/org/lemuria/issues)
+1. **Check existing issues:** [GitHub Issues](https://github.com/pradithya/lemuria/issues)
 2. **Open a new issue** with:
    - Lemuria version
    - Configuration (redact secrets)

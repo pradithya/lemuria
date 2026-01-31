@@ -222,5 +222,5 @@ Lemuria provides Argo CD pull request automation.
 4. Merge PR when ready
 
 ---
-[Documentation](https://github.com/org/lemuria)`
+[Documentation](https://github.com/pradithya/lemuria)`
 }
