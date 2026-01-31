@@ -27,7 +27,7 @@ Before installing Lemuria, ensure you have:
 
 ```bash
 # Add the Lemuria Helm repository
-helm repo add lemuria https://org.github.io/lemuria/charts
+helm repo add lemuria https://pradithya.github.io/lemuria/charts
 helm repo update
 
 # Install Lemuria
@@ -56,7 +56,7 @@ docker run -d \
   -v /path/to/config:/app/config \
   -e GITHUB_WEBHOOK_SECRET=your-secret \
   -e ARGOCD_TOKEN=your-token \
-  ghcr.io/org/lemuria:latest
+  ghcr.io/pradithya/lemuria:latest
 ```
 
 ---
