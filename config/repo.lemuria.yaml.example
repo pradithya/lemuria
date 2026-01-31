@@ -1,0 +1,47 @@
+# Repository Configuration Example for Lemuria
+# Place this file as .lemuria.yaml in your repository root
+
+# Configuration version
+version: 1
+
+# Override server defaults
+autoplan: true
+require_approval: true
+
+# Application mappings - which Argo CD applications to track
+applications:
+  # Simple application mapping
+  - name: "my-app"
+    paths:
+      - "apps/my-app/**"
+      - "base/**"
+
+  # Wildcard for ApplicationSet-generated applications
+  - name: "my-app-*"
+    paths:
+      - "apps/my-app/**"
+    applicationset: "my-appset"
+
+  # Multiple paths for a single app
+  - name: "platform-services"
+    paths:
+      - "platform/**"
+      - "shared/configs/**"
+      - "helm/platform-*.yaml"
+
+# Sync requirements per application pattern
+sync_requirements:
+  # Production apps require approval and limited users
+  - name: "production-*"
+    require_approval: true
+    allowed_users:
+      - "platform-admin"
+      - "sre-team"
+
+  # Staging apps can be synced by anyone
+  - name: "staging-*"
+    require_approval: false
+
+  # Dev apps - no restrictions
+  - name: "dev-*"
+    require_approval: false

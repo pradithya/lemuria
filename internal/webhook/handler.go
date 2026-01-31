@@ -1,0 +1,182 @@
+package webhook
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+
+	"github.com/org/lemuria/internal/commands"
+	"github.com/org/lemuria/internal/config"
+	"github.com/org/lemuria/internal/github"
+	"github.com/org/lemuria/internal/models"
+)
+
+// Handler processes GitHub webhook events.
+type Handler struct {
+	config       *config.Config
+	githubClient *github.Client
+	cmdExecutor  *commands.Executor
+	logger       *slog.Logger
+	validator    *Validator
+}
+
+// NewHandler creates a new webhook handler.
+func NewHandler(cfg *config.Config, gh *github.Client, executor *commands.Executor, logger *slog.Logger) *Handler {
+	return &Handler{
+		config:       cfg,
+		githubClient: gh,
+		cmdExecutor:  executor,
+		logger:       logger,
+		validator:    NewValidator(cfg.GitHub.WebhookSecret),
+	}
+}
+
+// Handle processes incoming GitHub webhook requests.
+func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
+	// Read request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		h.logger.Error("failed to read request body", "error", err)
+		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate webhook signature
+	signature := r.Header.Get("X-Hub-Signature-256")
+	if !h.validator.Validate(body, signature) {
+		h.logger.Warn("invalid webhook signature")
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+
+	// Determine event type
+	eventType := r.Header.Get("X-GitHub-Event")
+	deliveryID := r.Header.Get("X-GitHub-Delivery")
+
+	h.logger.Info("received webhook",
+		"event_type", eventType,
+		"delivery_id", deliveryID,
+	)
+
+	// Parse and handle the event
+	event, err := ParseEvent(eventType, body)
+	if err != nil {
+		h.logger.Error("failed to parse event", "error", err)
+		http.Error(w, "failed to parse event", http.StatusBadRequest)
+		return
+	}
+
+	if event == nil {
+		// Event type not handled
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ignored"})
+		return
+	}
+
+	// Check if repo is allowed
+	if !h.config.IsRepoAllowed(event.Repo.FullName) {
+		h.logger.Info("repository not in allowlist", "repo", event.Repo.FullName)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "repo not allowed"})
+		return
+	}
+
+	// Process the event asynchronously
+	go h.processEvent(context.Background(), event)
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+}
+
+// processEvent handles the webhook event based on its type.
+func (h *Handler) processEvent(ctx context.Context, event *models.PREvent) {
+	h.logger.Info("processing event",
+		"type", event.Type,
+		"action", event.Action,
+		"repo", event.Repo.FullName,
+		"pr", event.PR.Number,
+	)
+
+	// Handle PR close/merge - release all locks
+	if event.ShouldUnlockAll() {
+		h.handlePRClosed(ctx, event)
+		return
+	}
+
+	// Handle autoplan on PR open or push
+	if event.ShouldAutoplan() && h.config.Defaults.Autoplan {
+		h.handleAutoplan(ctx, event)
+		return
+	}
+
+	// Handle issue comment (commands)
+	if event.Type == models.EventTypeIssueComment && event.Comment != nil {
+		h.handleComment(ctx, event)
+		return
+	}
+}
+
+// handlePRClosed releases all locks held by the closed PR.
+func (h *Handler) handlePRClosed(ctx context.Context, event *models.PREvent) {
+	h.logger.Info("PR closed, releasing locks",
+		"repo", event.Repo.FullName,
+		"pr", event.PR.Number,
+		"merged", event.PR.Merged,
+	)
+
+	if err := h.cmdExecutor.UnlockAll(ctx, event); err != nil {
+		h.logger.Error("failed to release locks",
+			"error", err,
+			"repo", event.Repo.FullName,
+			"pr", event.PR.Number,
+		)
+	}
+}
+
+// handleAutoplan runs plan for affected applications.
+func (h *Handler) handleAutoplan(ctx context.Context, event *models.PREvent) {
+	h.logger.Info("running autoplan",
+		"repo", event.Repo.FullName,
+		"pr", event.PR.Number,
+	)
+
+	if err := h.cmdExecutor.RunAutoplan(ctx, event); err != nil {
+		h.logger.Error("autoplan failed",
+			"error", err,
+			"repo", event.Repo.FullName,
+			"pr", event.PR.Number,
+		)
+	}
+}
+
+// handleComment parses and executes commands from PR comments.
+func (h *Handler) handleComment(ctx context.Context, event *models.PREvent) {
+	// Only handle new comments
+	if event.Action != "created" {
+		return
+	}
+
+	cmd, err := commands.Parse(event.Comment.Body)
+	if err != nil {
+		h.logger.Debug("not a lemuria command", "error", err)
+		return
+	}
+
+	h.logger.Info("executing command",
+		"command", cmd.Name,
+		"repo", event.Repo.FullName,
+		"pr", event.PR.Number,
+		"user", event.Comment.Author.Login,
+	)
+
+	if err := h.cmdExecutor.Execute(ctx, cmd, event); err != nil {
+		h.logger.Error("command execution failed",
+			"error", err,
+			"command", cmd.Name,
+			"repo", event.Repo.FullName,
+			"pr", event.PR.Number,
+		)
+	}
+}

@@ -1,0 +1,43 @@
+# Test ApplicationSet for E2E tests
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: test-appset
+  namespace: argocd
+spec:
+  generators:
+  - list:
+      elements:
+      - env: dev
+        namespace: test-apps-dev
+      - env: staging
+        namespace: test-apps-staging
+  template:
+    metadata:
+      name: 'appset-{{env}}'
+      labels:
+        env: '{{env}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/argoproj/argocd-example-apps.git
+        targetRevision: HEAD
+        path: guestbook
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: false
+---
+# Create namespaces for ApplicationSet
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-apps-dev
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-apps-staging
