@@ -46,6 +46,8 @@ func (e *Executor) Execute(ctx context.Context, cmd *Command, event *models.PREv
 		return e.executeUnlock(ctx, cmd, event)
 	case CommandHelp:
 		return e.executeHelp(ctx, event)
+	case CommandRollback:
+		return e.executeRollback(ctx, cmd, event)
 	default:
 		return fmt.Errorf("unknown command: %s", cmd.Name)
 	}

@@ -48,11 +48,18 @@ defaults:
   # Automatically run plan when PR is opened or updated
   autoplan: true
 
-  # Require PR approval before allowing sync
+  # Require PR approval before allowing sync or rollback
   require_approval: false
 
-  # Delete source branch after successful sync (not implemented)
+  # Delete source branch after successful sync
   delete_source_branch: false
+
+  # Automatically merge PR after all syncs succeed
+  # When enabled, the PR will be merged using the specified merge_method
+  auto_merge: false
+
+  # Merge method for auto-merge: "squash", "merge", or "rebase"
+  merge_method: "squash"
 
   # Repository allowlist - only process webhooks from these repos
   # Supports wildcards: "org/*" matches all repos in org

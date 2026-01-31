@@ -2,19 +2,20 @@ package models
 
 // Application represents an Argo CD application with relevant metadata.
 type Application struct {
-	Name             string            `json:"name"`
-	Namespace        string            `json:"namespace"`
-	Project          string            `json:"project"`
-	RepoURL          string            `json:"repoURL"`
-	Path             string            `json:"path"`
-	TargetRevision   string            `json:"targetRevision"`
-	DestinationServer string           `json:"destinationServer"`
-	DestinationNamespace string        `json:"destinationNamespace"`
-	SyncStatus       SyncStatus        `json:"syncStatus"`
-	HealthStatus     HealthStatus      `json:"healthStatus"`
-	Sources          []ApplicationSource `json:"sources,omitempty"`
-	ApplicationSetName string          `json:"applicationSetName,omitempty"`
-	Labels           map[string]string `json:"labels,omitempty"`
+	Name                 string              `json:"name"`
+	Namespace            string              `json:"namespace"`
+	Project              string              `json:"project"`
+	RepoURL              string              `json:"repoURL"`
+	Path                 string              `json:"path"`
+	TargetRevision       string              `json:"targetRevision"`
+	DestinationServer    string              `json:"destinationServer"`
+	DestinationNamespace string              `json:"destinationNamespace"`
+	SyncStatus           SyncStatus          `json:"syncStatus"`
+	HealthStatus         HealthStatus        `json:"healthStatus"`
+	Sources              []ApplicationSource `json:"sources,omitempty"`
+	ApplicationSetName   string              `json:"applicationSetName,omitempty"`
+	Labels               map[string]string   `json:"labels,omitempty"`
+	AutoSyncEnabled      bool                `json:"autoSyncEnabled"`
 }
 
 // ApplicationSource represents a source in a multi-source application.
@@ -145,4 +146,9 @@ func (a *Application) GetRepoURLs() []string {
 		return urls
 	}
 	return []string{a.RepoURL}
+}
+
+// HasAutoSync returns true if the application has auto-sync enabled.
+func (a *Application) HasAutoSync() bool {
+	return a.AutoSyncEnabled
 }
