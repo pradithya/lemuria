@@ -8,14 +8,15 @@ import (
 
 func TestCommandParsing(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		wantCmd     commands.CommandType
-		wantApp     string
-		wantAll     bool
-		wantPrune   bool
-		wantDryRun  bool
-		wantErr     bool
+		name          string
+		input         string
+		wantCmd       commands.CommandType
+		wantApp       string
+		wantAll       bool
+		wantPrune     bool
+		wantDryRun    bool
+		wantHistoryID int64
+		wantErr       bool
 	}{
 		{
 			name:    "simple plan",
@@ -111,6 +112,27 @@ func TestCommandParsing(t *testing.T) {
 			input:   "lemuria deploy",
 			wantErr: true,
 		},
+		{
+			name:    "rollback command",
+			input:   "lemuria rollback -a my-app",
+			wantCmd: commands.CommandRollback,
+			wantApp: "my-app",
+		},
+		{
+			name:       "rollback with dry-run",
+			input:      "lemuria rollback -a my-app --dry-run",
+			wantCmd:    commands.CommandRollback,
+			wantApp:    "my-app",
+			wantDryRun: true,
+		},
+		{
+			name:       "rollback with all options",
+			input:      "lemuria rollback -a my-app --dry-run --prune",
+			wantCmd:    commands.CommandRollback,
+			wantApp:    "my-app",
+			wantDryRun: true,
+			wantPrune:  true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -146,6 +168,10 @@ func TestCommandParsing(t *testing.T) {
 
 			if cmd.DryRun != tt.wantDryRun {
 				t.Errorf("DryRun: got %v, want %v", cmd.DryRun, tt.wantDryRun)
+			}
+
+			if cmd.HistoryID != tt.wantHistoryID {
+				t.Errorf("HistoryID: got %d, want %d", cmd.HistoryID, tt.wantHistoryID)
 			}
 		})
 	}

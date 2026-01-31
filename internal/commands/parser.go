@@ -3,6 +3,7 @@ package commands
 import (
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -10,10 +11,11 @@ import (
 type CommandType string
 
 const (
-	CommandPlan   CommandType = "plan"
-	CommandSync   CommandType = "sync"
-	CommandUnlock CommandType = "unlock"
-	CommandHelp   CommandType = "help"
+	CommandPlan     CommandType = "plan"
+	CommandSync     CommandType = "sync"
+	CommandUnlock   CommandType = "unlock"
+	CommandHelp     CommandType = "help"
+	CommandRollback CommandType = "rollback"
 )
 
 // Command represents a parsed Lemuria command.
@@ -23,6 +25,7 @@ type Command struct {
 	All         bool
 	Prune       bool
 	DryRun      bool
+	HistoryID   int64
 	RawArgs     string
 }
 
@@ -69,6 +72,8 @@ func parseLine(line string) (*Command, error) {
 		cmd.Name = CommandUnlock
 	case "help":
 		cmd.Name = CommandHelp
+	case "rollback":
+		cmd.Name = CommandRollback
 	default:
 		return nil, ErrNotCommand
 	}
@@ -101,6 +106,13 @@ func parseArgs(cmd *Command, args string) {
 			cmd.Prune = true
 		case "--dry-run":
 			cmd.DryRun = true
+		case "--id":
+			if i+1 < len(tokens) && !strings.HasPrefix(tokens[i+1], "-") {
+				if id, err := strconv.ParseInt(tokens[i+1], 10, 64); err == nil {
+					cmd.HistoryID = id
+				}
+				i++
+			}
 		default:
 			// Treat bare words as application names if not a flag
 			if !strings.HasPrefix(token, "-") && cmd.Application == "" {
@@ -162,6 +174,9 @@ func (c *Command) String() string {
 	}
 	if c.DryRun {
 		parts = append(parts, "--dry-run")
+	}
+	if c.HistoryID > 0 {
+		parts = append(parts, "--id", strconv.FormatInt(c.HistoryID, 10))
 	}
 
 	return strings.Join(parts, " ")

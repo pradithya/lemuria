@@ -64,6 +64,7 @@ type appPlanResult struct {
 	Diffs       []models.ManifestDiff
 	Summary     argocd.DiffSummary
 	LockStatus  string
+	Warning     string
 	Error       error
 }
 
@@ -71,6 +72,11 @@ type appPlanResult struct {
 func (e *Executor) planApplication(ctx context.Context, app models.Application, event *models.PREvent) appPlanResult {
 	result := appPlanResult{
 		Application: app.Name,
+	}
+
+	// Check if auto-sync is enabled
+	if app.HasAutoSync() {
+		result.Warning = "Auto-sync is enabled. Disable auto-sync before using Lemuria to prevent conflicts."
 	}
 
 	// Try to acquire lock
@@ -126,6 +132,7 @@ func convertToRenderResults(results []appPlanResult) []diff.PlanResult {
 			Updated:     r.Summary.Updated,
 			Deleted:     r.Summary.Deleted,
 			LockStatus:  r.LockStatus,
+			Warning:     r.Warning,
 			Error:       r.Error,
 		}
 	}

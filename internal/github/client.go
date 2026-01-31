@@ -151,3 +151,44 @@ func (c *Client) IsPRApproved(ctx context.Context, owner, repo string, number in
 
 	return false, nil
 }
+
+// MergePullRequest merges a pull request using the specified method.
+// Supported methods: "merge", "squash", "rebase".
+func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, number int, title, message, method string) error {
+	client, err := c.GetInstallationClient(ctx, owner)
+	if err != nil {
+		return err
+	}
+
+	opts := &github.PullRequestOptions{
+		MergeMethod: method,
+	}
+
+	// Use title as commit message for squash/merge
+	commitMessage := message
+	if commitMessage == "" {
+		commitMessage = title
+	}
+
+	_, _, err = client.PullRequests.Merge(ctx, owner, repo, number, commitMessage, opts)
+	if err != nil {
+		return fmt.Errorf("merging PR #%d: %w", number, err)
+	}
+
+	return nil
+}
+
+// DeleteBranch deletes a branch from the repository.
+func (c *Client) DeleteBranch(ctx context.Context, owner, repo, branch string) error {
+	client, err := c.GetInstallationClient(ctx, owner)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.Git.DeleteRef(ctx, owner, repo, "heads/"+branch)
+	if err != nil {
+		return fmt.Errorf("deleting branch %s: %w", branch, err)
+	}
+
+	return nil
+}

@@ -46,6 +46,8 @@ type DefaultsConfig struct {
 	RequireApproval    bool     `yaml:"require_approval"`
 	DeleteSourceBranch bool     `yaml:"delete_source_branch"`
 	AllowedRepos       []string `yaml:"allowed_repos"`
+	AutoMerge          bool     `yaml:"auto_merge"`
+	MergeMethod        string   `yaml:"merge_method"`
 }
 
 // AuthConfig holds authentication settings.
@@ -139,6 +141,8 @@ func DefaultConfig() *Config {
 			Autoplan:           true,
 			RequireApproval:    false,
 			DeleteSourceBranch: false,
+			AutoMerge:          false,
+			MergeMethod:        "squash",
 		},
 		Auth: AuthConfig{
 			Enabled:      false,

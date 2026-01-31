@@ -45,10 +45,19 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n❌ %s", err.Error()))
 	}
 
-	// Verify plans are not stale
+	// Verify plans are not stale and check for auto-sync
 	for _, l := range locks {
 		if l.PlanRevision != event.PR.HeadSHA {
 			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n⚠️ Plan for `%s` is stale. Please run `lemuria plan` again.", l.Application))
+		}
+
+		// Check if auto-sync is enabled
+		app, err := e.argocd.GetApplication(ctx, l.Application)
+		if err != nil {
+			return e.postError(ctx, event, fmt.Errorf("getting application %s: %w", l.Application, err))
+		}
+		if app.HasAutoSync() {
+			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n❌ Application `%s` has auto-sync enabled.\n\nDisable auto-sync before using Lemuria to prevent conflicts.", l.Application))
 		}
 	}
 
@@ -57,6 +66,22 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	for _, l := range locks {
 		result := e.syncApplication(ctx, l, cmd, event)
 		results = append(results, result)
+	}
+
+	// Check if all syncs succeeded
+	allSucceeded := true
+	for _, r := range results {
+		if r.Error != nil || (r.Result != nil && r.Result.Phase != models.SyncPhaseSucceeded) {
+			allSucceeded = false
+			break
+		}
+	}
+
+	// Auto-merge if enabled and all syncs succeeded (not dry-run)
+	if allSucceeded && !cmd.DryRun && e.config.Defaults.AutoMerge {
+		if err := e.autoMergePR(ctx, event); err != nil {
+			e.logger.Warn("auto-merge failed", "error", err)
+		}
 	}
 
 	// Render and post results
@@ -159,4 +184,60 @@ func (e *Executor) renderSyncResults(results []syncResult) string {
 	}
 
 	return sb.String()
+}
+
+// autoMergePR merges the PR and optionally deletes the source branch.
+func (e *Executor) autoMergePR(ctx context.Context, event *models.PREvent) error {
+	// Determine merge method
+	method := e.config.Defaults.MergeMethod
+	if method == "" {
+		method = "squash"
+	}
+
+	// Merge the PR
+	if err := e.github.MergePullRequest(
+		ctx,
+		event.Repo.Owner,
+		event.Repo.Name,
+		event.PR.Number,
+		event.PR.Title,
+		"",
+		method,
+	); err != nil {
+		return fmt.Errorf("merging PR: %w", err)
+	}
+
+	e.logger.Info("auto-merged PR",
+		"repo", event.Repo.FullName,
+		"pr", event.PR.Number,
+		"method", method,
+	)
+
+	// Delete source branch if configured and not a protected branch
+	if e.config.Defaults.DeleteSourceBranch {
+		branch := event.PR.HeadRef
+		if !IsProtectedBranch(branch) {
+			if err := e.github.DeleteBranch(ctx, event.Repo.Owner, event.Repo.Name, branch); err != nil {
+				e.logger.Warn("failed to delete source branch",
+					"branch", branch,
+					"error", err,
+				)
+			} else {
+				e.logger.Info("deleted source branch", "branch", branch)
+			}
+		}
+	}
+
+	return nil
+}
+
+// IsProtectedBranch returns true if the branch should never be deleted.
+func IsProtectedBranch(branch string) bool {
+	protected := []string{"main", "master", "develop", "development"}
+	for _, p := range protected {
+		if branch == p {
+			return true
+		}
+	}
+	return false
 }

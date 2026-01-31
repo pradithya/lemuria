@@ -22,6 +22,8 @@ redis:
 defaults:
   autoplan: true
   require_approval: false
+  auto_merge: false
+  merge_method: "squash"
   allowed_repos: []
 
 auth:

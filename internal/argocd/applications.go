@@ -41,6 +41,12 @@ type applicationResponse struct {
 			Server    string `json:"server"`
 			Namespace string `json:"namespace"`
 		} `json:"destination"`
+		SyncPolicy *struct {
+			Automated *struct {
+				Prune    bool `json:"prune"`
+				SelfHeal bool `json:"selfHeal"`
+			} `json:"automated,omitempty"`
+		} `json:"syncPolicy,omitempty"`
 	} `json:"spec"`
 	Status struct {
 		Sync struct {
@@ -102,6 +108,7 @@ func convertApplication(resp applicationResponse) models.Application {
 		SyncStatus:           models.SyncStatus(resp.Status.Sync.Status),
 		HealthStatus:         models.HealthStatus(resp.Status.Health.Status),
 		Labels:               resp.Metadata.Labels,
+		AutoSyncEnabled:      resp.Spec.SyncPolicy != nil && resp.Spec.SyncPolicy.Automated != nil,
 	}
 
 	// Single source
@@ -231,4 +238,75 @@ func NormalizeRepoURL(u string) string {
 	u = strings.Replace(u, ":", "/", 1)
 	u = strings.TrimSuffix(u, ".git")
 	return strings.ToLower(u)
+}
+
+// ApplicationHistoryEntry represents a deployment history entry.
+type ApplicationHistoryEntry struct {
+	ID         int64  `json:"id"`
+	Revision   string `json:"revision"`
+	DeployedAt string `json:"deployedAt"`
+	Source     struct {
+		RepoURL        string `json:"repoURL"`
+		Path           string `json:"path"`
+		TargetRevision string `json:"targetRevision"`
+	} `json:"source"`
+}
+
+// GetApplicationHistory returns the deployment history for an application.
+func (c *Client) GetApplicationHistory(ctx context.Context, name string) ([]ApplicationHistoryEntry, error) {
+	var resp struct {
+		Status struct {
+			History []ApplicationHistoryEntry `json:"history"`
+		} `json:"status"`
+	}
+
+	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
+		return nil, fmt.Errorf("getting application history for %s: %w", name, err)
+	}
+
+	return resp.Status.History, nil
+}
+
+// RollbackOptions configures a rollback operation.
+type RollbackOptions struct {
+	ID     int64
+	Prune  bool
+	DryRun bool
+}
+
+// RollbackApplication rolls back an application to a previous deployment.
+func (c *Client) RollbackApplication(ctx context.Context, name string, opts *RollbackOptions) (*models.SyncResult, error) {
+	if opts == nil || opts.ID == 0 {
+		return nil, fmt.Errorf("rollback ID is required")
+	}
+
+	payload := map[string]interface{}{
+		"id": opts.ID,
+	}
+
+	if opts.Prune {
+		payload["prune"] = true
+	}
+	if opts.DryRun {
+		payload["dryRun"] = true
+	}
+
+	var resp struct {
+		Status struct {
+			OperationState struct {
+				Phase   string `json:"phase"`
+				Message string `json:"message"`
+			} `json:"operationState"`
+		} `json:"status"`
+	}
+
+	if err := c.post(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/rollback", nil, payload, &resp); err != nil {
+		return nil, fmt.Errorf("rolling back application %s: %w", name, err)
+	}
+
+	return &models.SyncResult{
+		Application: name,
+		Phase:       models.SyncPhase(resp.Status.OperationState.Phase),
+		Message:     resp.Status.OperationState.Message,
+	}, nil
 }

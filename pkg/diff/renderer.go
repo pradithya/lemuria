@@ -15,6 +15,7 @@ type PlanResult struct {
 	Updated     int
 	Deleted     int
 	LockStatus  string
+	Warning     string
 	Error       error
 }
 
@@ -58,6 +59,11 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 	if result.LockStatus != "" && !strings.Contains(result.LockStatus, "this PR") {
 		sb.WriteString(fmt.Sprintf("⚠️ **%s**\n\n", result.LockStatus))
 		return sb.String()
+	}
+
+	// Warning (e.g., auto-sync enabled)
+	if result.Warning != "" {
+		sb.WriteString(fmt.Sprintf("⚠️ **Warning:** %s\n\n", result.Warning))
 	}
 
 	// Summary
