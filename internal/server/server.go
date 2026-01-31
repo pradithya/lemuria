@@ -12,26 +12,38 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/org/lemuria/internal/argocd"
+	"github.com/org/lemuria/internal/auth"
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/github"
 	"github.com/org/lemuria/internal/lock"
+	"github.com/org/lemuria/internal/models"
 	"github.com/org/lemuria/internal/webhook"
 )
 
 // Server is the main HTTP server for Lemuria.
 type Server struct {
-	config        *config.Config
-	router        *chi.Mux
-	httpServer    *http.Server
-	logger        *slog.Logger
+	config         *config.Config
+	router         *chi.Mux
+	httpServer     *http.Server
+	logger         *slog.Logger
 	webhookHandler *webhook.Handler
-	githubClient  *github.Client
-	argoClient    *argocd.Client
-	lockManager   lock.Manager
-	cmdExecutor   *commands.Executor
+	githubClient   *github.Client
+	argoClient     *argocd.Client
+	lockManager    lock.Manager
+	cmdExecutor    *commands.Executor
+
+	// Auth components (nil if auth disabled)
+	redisClient         *redis.Client
+	sessionStore        *auth.RedisSessionStore
+	roleResolver        *auth.ConfigRoleResolver
+	authMiddleware      *auth.Middleware
+	githubOAuthProvider *auth.GitHubProvider
+	oidcProvider        *auth.OIDCProvider
+	basicAuthProvider   *auth.BasicProvider
 }
 
 // New creates a new Server instance.
@@ -61,14 +73,21 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	webhookHandler := webhook.NewHandler(cfg, ghClient, cmdExecutor, logger)
 
 	s := &Server{
-		config:        cfg,
-		router:        chi.NewRouter(),
-		logger:        logger,
+		config:         cfg,
+		router:         chi.NewRouter(),
+		logger:         logger,
 		webhookHandler: webhookHandler,
-		githubClient:  ghClient,
-		argoClient:    argoClient,
-		lockManager:   lockMgr,
-		cmdExecutor:   cmdExecutor,
+		githubClient:   ghClient,
+		argoClient:     argoClient,
+		lockManager:    lockMgr,
+		cmdExecutor:    cmdExecutor,
+	}
+
+	// Initialize auth components if enabled
+	if cfg.AuthEnabled() {
+		if err := s.setupAuth(cfg); err != nil {
+			return nil, fmt.Errorf("setting up auth: %w", err)
+		}
 	}
 
 	s.setupMiddleware()
@@ -83,6 +102,77 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	}
 
 	return s, nil
+}
+
+// setupAuth initializes authentication components.
+func (s *Server) setupAuth(cfg *config.Config) error {
+	// Create Redis client for sessions
+	s.redisClient = redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Address,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+
+	// Test connection
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.redisClient.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("connecting to Redis for sessions: %w", err)
+	}
+
+	// Create session store
+	s.sessionStore = auth.NewRedisSessionStore(s.redisClient, cfg.Auth.SessionTTL)
+
+	// Convert config role assignments to auth role assignments
+	roleAssignments := make([]auth.RoleAssignment, len(cfg.Auth.RoleAssignments))
+	for i, ra := range cfg.Auth.RoleAssignments {
+		roleAssignments[i] = auth.RoleAssignment{
+			Pattern:  ra.Pattern,
+			Role:     ra.Role,
+			Provider: ra.Provider,
+		}
+	}
+
+	// Create role resolver
+	defaultRole := models.Role(cfg.Auth.DefaultRole)
+	if !defaultRole.Valid() {
+		defaultRole = models.RoleUser
+	}
+	s.roleResolver = auth.NewConfigRoleResolver(roleAssignments, defaultRole, s.sessionStore)
+
+	// Create auth middleware
+	s.authMiddleware = auth.NewMiddleware(
+		s.sessionStore,
+		s.roleResolver,
+		cfg.Auth.CookieDomain,
+		cfg.Auth.CookieSecure,
+		s.logger,
+	)
+
+	// Initialize GitHub OAuth provider if configured
+	if cfg.HasGitHubOAuth() {
+		s.githubOAuthProvider = auth.NewGitHubProvider(cfg.Auth.GitHub, cfg.Server.BaseURL)
+		s.logger.Info("GitHub OAuth provider initialized")
+	}
+
+	// Initialize OIDC provider if configured
+	if cfg.HasOIDC() {
+		oidcProvider, err := auth.NewOIDCProvider(context.Background(), cfg.Auth.OIDC, cfg.Server.BaseURL)
+		if err != nil {
+			return fmt.Errorf("initializing OIDC provider: %w", err)
+		}
+		s.oidcProvider = oidcProvider
+		s.logger.Info("OIDC provider initialized", "name", cfg.Auth.OIDC.Name)
+	}
+
+	// Initialize basic auth provider if configured
+	if cfg.HasBasicAuth() {
+		s.basicAuthProvider = auth.NewBasicProvider(cfg.Auth.Basic)
+		s.logger.Info("basic auth provider initialized", "users", len(cfg.Auth.Basic.Users))
+	}
+
+	s.logger.Info("authentication enabled")
+	return nil
 }
 
 // setupMiddleware configures the middleware stack.
@@ -160,6 +250,11 @@ func (s *Server) Close() error {
 	if s.lockManager != nil {
 		if err := s.lockManager.Close(); err != nil {
 			s.logger.Error("error closing lock manager", "error", err)
+		}
+	}
+	if s.redisClient != nil {
+		if err := s.redisClient.Close(); err != nil {
+			s.logger.Error("error closing auth redis client", "error", err)
 		}
 	}
 	return nil

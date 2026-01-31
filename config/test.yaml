@@ -1,0 +1,42 @@
+# Test configuration for local development
+server:
+  port: 4141
+  host: "0.0.0.0"
+  base_url: "http://localhost:4141"
+
+github:
+  webhook_secret: "test-webhook-secret"
+  app_id: 12345
+  app_private_key: "config/test-key.pem"
+
+argocd:
+  server_url: "https://localhost:8080"
+  token: "test-argocd-token"
+  insecure: true
+
+redis:
+  address: "localhost:6379"
+  password: ""
+  db: 0
+
+defaults:
+  autoplan: true
+  require_approval: false
+  allowed_repos: []
+
+auth:
+  enabled: true
+  session_secret: "dev-session-secret-change-in-production"
+  session_ttl: 24h
+  cookie_secure: false  # Allow non-HTTPS for local dev
+  default_role: "user"
+
+  # Basic auth for local development
+  basic:
+    users:
+      - username: admin
+        password: admin
+        role: admin
+      - username: user
+        password: user
+        role: user

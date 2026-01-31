@@ -1,5 +1,22 @@
-# Build stage
-FROM golang:1.22-alpine AS builder
+# Frontend build stage
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app/web
+
+# Copy frontend package files
+COPY web/package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy frontend source
+COPY web/ ./
+
+# Build frontend
+RUN npm run build
+
+# Backend build stage
+FROM golang:1.22-alpine AS backend-builder
 
 WORKDIR /app
 
@@ -14,6 +31,9 @@ RUN go mod download
 
 # Copy source code
 COPY . .
+
+# Copy built frontend from frontend-builder
+COPY --from=frontend-builder /app/static ./static
 
 # Build arguments for version info
 ARG VERSION=dev
@@ -38,7 +58,7 @@ RUN addgroup -g 1000 lemuria && \
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /lemuria /app/lemuria
+COPY --from=backend-builder /lemuria /app/lemuria
 
 # Use non-root user
 USER lemuria
