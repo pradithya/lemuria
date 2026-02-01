@@ -232,12 +232,14 @@ func (c *Client) FindApplicationsByRepo(ctx context.Context, repoURL string) ([]
 
 // NormalizeRepoURL removes protocol and .git suffix for comparison.
 func NormalizeRepoURL(u string) string {
+	// Convert to lowercase first for case-insensitive prefix matching
+	u = strings.ToLower(u)
 	u = strings.TrimPrefix(u, "https://")
 	u = strings.TrimPrefix(u, "http://")
 	u = strings.TrimPrefix(u, "git@")
 	u = strings.Replace(u, ":", "/", 1)
 	u = strings.TrimSuffix(u, ".git")
-	return strings.ToLower(u)
+	return u
 }
 
 // ApplicationHistoryEntry represents a deployment history entry.

@@ -66,12 +66,29 @@ type appPlanResult struct {
 	LockStatus  string
 	Warning     string
 	Error       error
+	ChangeType  models.ApplicationChangeType
+	SourceFile  string
 }
 
 // planApplication generates a diff for a single application.
 func (e *Executor) planApplication(ctx context.Context, app models.Application, event *models.PREvent) appPlanResult {
 	result := appPlanResult{
 		Application: app.Name,
+		ChangeType:  app.ChangeType,
+		SourceFile:  app.SourceFile,
+	}
+
+	// Handle new applications (not yet in ArgoCD)
+	if app.IsNew() {
+		result.LockStatus = "New application"
+		return result
+	}
+
+	// Handle deleted applications
+	if app.IsDeleted() {
+		result.LockStatus = "Will be deleted"
+		result.Warning = "This application will be removed after the PR is merged."
+		return result
 	}
 
 	// Check if auto-sync is enabled
@@ -134,6 +151,8 @@ func convertToRenderResults(results []appPlanResult) []diff.PlanResult {
 			LockStatus:  r.LockStatus,
 			Warning:     r.Warning,
 			Error:       r.Error,
+			ChangeType:  r.ChangeType,
+			SourceFile:  r.SourceFile,
 		}
 	}
 	return rendered

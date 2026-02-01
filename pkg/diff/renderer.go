@@ -7,6 +7,12 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
+// Change type constants for rendering
+const (
+	changeTypeNew     = "new"
+	changeTypeDeleted = "deleted"
+)
+
 // PlanResult represents the result of planning a single application.
 type PlanResult struct {
 	Application string
@@ -17,6 +23,8 @@ type PlanResult struct {
 	LockStatus  string
 	Warning     string
 	Error       error
+	ChangeType  models.ApplicationChangeType
+	SourceFile  string
 }
 
 // Renderer formats diffs as markdown for PR comments.
@@ -49,14 +57,42 @@ func (r *Renderer) RenderPlan(results []PlanResult, prNumber int) string {
 func (r *Renderer) renderAppPlan(result PlanResult) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("### Application: `%s`\n\n", result.Application))
+	// Header with status indicator for new/deleted apps
+	header := fmt.Sprintf("### Application: `%s`", result.Application)
+	switch result.ChangeType {
+	case models.ApplicationNew:
+		header += " 🆕"
+	case models.ApplicationDeleted:
+		header += " 🗑️"
+	}
+	sb.WriteString(header + "\n\n")
 
 	if result.Error != nil {
 		sb.WriteString(fmt.Sprintf("❌ **Error:** %s\n\n", result.Error.Error()))
 		return sb.String()
 	}
 
-	if result.LockStatus != "" && !strings.Contains(result.LockStatus, "this PR") {
+	// Handle new applications
+	if result.ChangeType == models.ApplicationNew {
+		sb.WriteString("➕ **New application** - will be created when the Application CR is applied\n\n")
+		if result.SourceFile != "" {
+			sb.WriteString(fmt.Sprintf("**Source file:** `%s`\n\n", result.SourceFile))
+		}
+		sb.WriteString("ℹ️ Lemuria cannot generate a diff for new applications until they exist in Argo CD.\n\n")
+		return sb.String()
+	}
+
+	// Handle deleted applications
+	if result.ChangeType == models.ApplicationDeleted {
+		sb.WriteString("➖ **Application will be deleted** when the Application CR is removed\n\n")
+		if result.SourceFile != "" {
+			sb.WriteString(fmt.Sprintf("**Source file:** `%s`\n\n", result.SourceFile))
+		}
+		sb.WriteString("⚠️ All resources managed by this application will be orphaned or pruned depending on the deletion policy.\n\n")
+		return sb.String()
+	}
+
+	if result.LockStatus != "" && !strings.Contains(result.LockStatus, "this PR") && result.LockStatus != "New application" && result.LockStatus != "Will be deleted" {
 		sb.WriteString(fmt.Sprintf("⚠️ **%s**\n\n", result.LockStatus))
 		return sb.String()
 	}
@@ -80,7 +116,7 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 	}
 
 	// Lock status
-	if result.LockStatus != "" {
+	if result.LockStatus != "" && result.LockStatus != "New application" && result.LockStatus != "Will be deleted" {
 		sb.WriteString(fmt.Sprintf("**Status:** 🔒 %s\n\n", result.LockStatus))
 	}
 
@@ -211,6 +247,8 @@ Lemuria provides Argo CD pull request automation.
 | ` + "`lemuria plan -a <app>`" + ` | Plan specific application |
 | ` + "`lemuria sync`" + ` | Sync all planned applications |
 | ` + "`lemuria sync -a <app>`" + ` | Sync specific application |
+| ` + "`lemuria rollback -a <app>`" + ` | Show deployment history for an application |
+| ` + "`lemuria rollback -a <app> --id <n>`" + ` | Rollback to a specific revision |
 | ` + "`lemuria unlock`" + ` | Release all locks for this PR |
 | ` + "`lemuria help`" + ` | Show this help message |
 
@@ -220,6 +258,13 @@ Lemuria provides Argo CD pull request automation.
 2. Review diff in PR comment
 3. Comment ` + "`lemuria sync`" + ` to apply
 4. Merge PR when ready
+
+### Application Detection
+
+Lemuria automatically detects:
+- 🆕 **New applications** - Application CRs added in the PR
+- 📝 **Modified applications** - Existing apps with changed manifests
+- 🗑️ **Deleted applications** - Application CRs removed in the PR
 
 ---
 [Documentation](https://github.com/pradithya/lemuria)`
