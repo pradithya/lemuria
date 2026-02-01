@@ -113,3 +113,31 @@ func GetFilePaths(files []models.ChangedFile) []string {
 	}
 	return paths
 }
+
+// GetFileContent retrieves the content of a file at a specific ref (branch, tag, or commit SHA).
+func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref string) ([]byte, error) {
+	client, err := c.GetInstallationClient(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+
+	content, _, _, err := client.Repositories.GetContents(ctx, owner, repo, path, &github.RepositoryContentGetOptions{
+		Ref: ref,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("getting file content for %s: %w", path, err)
+	}
+
+	decoded, err := content.GetContent()
+	if err != nil {
+		return nil, fmt.Errorf("decoding file content: %w", err)
+	}
+
+	return []byte(decoded), nil
+}
+
+// IsYAMLFile checks if a filename has a YAML extension.
+func IsYAMLFile(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	return ext == ".yaml" || ext == ".yml"
+}

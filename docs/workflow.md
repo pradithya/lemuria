@@ -63,6 +63,8 @@ When `autoplan: true` (default):
 2. Identifies affected applications:
    - Matches changed files against `.lemuria.yaml` path patterns
    - Or checks Argo CD applications that reference the repo
+   - Detects new Application CRs added in the PR
+   - Detects Application CRs being deleted in the PR
 3. For each affected application:
    - Attempts to acquire lock
    - Generates diff (target state vs live state)
@@ -132,6 +134,65 @@ When a lock is held by another PR:
 1. Plan shows warning: "Locked by PR #42"
 2. Wait for other PR to sync/unlock/close
 3. Or use `lemuria unlock` on the other PR
+
+---
+
+## Application Detection
+
+Lemuria automatically detects three types of application changes in a PR:
+
+### Existing Applications
+
+Applications that already exist in Argo CD and are affected by manifest changes:
+
+```markdown
+### Application: `my-app`
+
+📋 **Changes:** 1 to create, 2 to update
+
+<details>
+<summary>Diff (3 resources changed)</summary>
+...
+</details>
+
+**Status:** 🔒 Locked by this PR
+```
+
+### New Applications
+
+Application CRs being added in the PR (the Application doesn't exist in Argo CD yet):
+
+```markdown
+### Application: `new-app` 🆕
+
+➕ **New application** - will be created when the Application CR is applied
+
+**Source file:** `apps/new-app.yaml`
+
+ℹ️ Lemuria cannot generate a diff for new applications until they exist in Argo CD.
+```
+
+### Deleted Applications
+
+Application CRs being removed in the PR:
+
+```markdown
+### Application: `old-app` 🗑️
+
+➖ **Application will be deleted** when the Application CR is removed
+
+**Source file:** `apps/old-app.yaml`
+
+⚠️ All resources managed by this application will be orphaned or pruned depending on the deletion policy.
+```
+
+### Detection Logic
+
+Lemuria parses changed YAML files to find Argo CD Application CRs:
+
+1. **Added files**: Parse for new Application CRs
+2. **Removed files**: Parse from base branch to find deleted Applications
+3. **Modified files**: Compare base and head to detect added/removed Applications within the file
 
 ---
 

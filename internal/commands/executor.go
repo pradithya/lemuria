@@ -81,6 +81,10 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 }
 
 // findAffectedApplications determines which applications are affected by a PR.
+// This includes:
+// - Existing applications with changed manifest paths
+// - New applications being created in this PR
+// - Existing applications being deleted in this PR
 func (e *Executor) findAffectedApplications(ctx context.Context, event *models.PREvent) ([]models.Application, error) {
 	// Get changed files
 	files, err := e.github.GetChangedFiles(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
@@ -98,18 +102,65 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	}
 
 	// Get all applications from Argo CD
-	apps, err := e.argocd.ListApplications(ctx)
+	existingApps, err := e.argocd.ListApplications(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing applications: %w", err)
 	}
 
-	// Filter to applications affected by this PR
+	// Build map of existing app names
+	existingByName := make(map[string]bool)
+	for _, app := range existingApps {
+		existingByName[app.Name] = true
+	}
+
+	// Filter to existing applications affected by this PR
 	var affected []models.Application
 	repoURL := fmt.Sprintf("https://github.com/%s", event.Repo.FullName)
 
-	for _, app := range apps {
+	for _, app := range existingApps {
 		if e.isAppAffected(app, repoURL, filePaths, repoConfig) {
+			app.ChangeType = models.ApplicationExisting
 			affected = append(affected, app)
+		}
+	}
+
+	// Detect new and deleted applications from Application CR files
+	parsed, err := e.detectApplicationChanges(ctx, event)
+	if err != nil {
+		e.logger.Warn("failed to detect application changes from files", "error", err)
+	} else {
+		// Verify new apps don't already exist in ArgoCD
+		if err := e.verifyNewAppsExist(ctx, parsed); err != nil {
+			e.logger.Warn("failed to verify new apps", "error", err)
+		}
+
+		// Verify deleted apps actually exist in ArgoCD
+		if err := e.verifyDeletedAppsExist(ctx, parsed); err != nil {
+			e.logger.Warn("failed to verify deleted apps", "error", err)
+		}
+
+		// Add new applications (not yet in ArgoCD)
+		for _, app := range parsed.New {
+			if !containsAppByName(affected, app.Name) {
+				affected = append(affected, app)
+			}
+		}
+
+		// Add deleted applications
+		for _, app := range parsed.Deleted {
+			// Mark existing apps as being deleted if not already in affected list
+			if !containsAppByName(affected, app.Name) {
+				affected = append(affected, app)
+			} else {
+				// Update the existing entry to mark as deleted
+				for i := range affected {
+					if affected[i].Name == app.Name {
+						affected[i].ChangeType = models.ApplicationDeleted
+						affected[i].SourceFile = app.SourceFile
+						break
+					}
+				}
+			}
 		}
 	}
 

@@ -1,21 +1,35 @@
 package models
 
+// ApplicationChangeType indicates whether an application is new, existing, or being deleted.
+type ApplicationChangeType string
+
+const (
+	// ApplicationExisting indicates the app exists in ArgoCD
+	ApplicationExisting ApplicationChangeType = "existing"
+	// ApplicationNew indicates the app is being added in this PR
+	ApplicationNew ApplicationChangeType = "new"
+	// ApplicationDeleted indicates the app is being deleted in this PR
+	ApplicationDeleted ApplicationChangeType = "deleted"
+)
+
 // Application represents an Argo CD application with relevant metadata.
 type Application struct {
-	Name                 string              `json:"name"`
-	Namespace            string              `json:"namespace"`
-	Project              string              `json:"project"`
-	RepoURL              string              `json:"repoURL"`
-	Path                 string              `json:"path"`
-	TargetRevision       string              `json:"targetRevision"`
-	DestinationServer    string              `json:"destinationServer"`
-	DestinationNamespace string              `json:"destinationNamespace"`
-	SyncStatus           SyncStatus          `json:"syncStatus"`
-	HealthStatus         HealthStatus        `json:"healthStatus"`
-	Sources              []ApplicationSource `json:"sources,omitempty"`
-	ApplicationSetName   string              `json:"applicationSetName,omitempty"`
-	Labels               map[string]string   `json:"labels,omitempty"`
-	AutoSyncEnabled      bool                `json:"autoSyncEnabled"`
+	Name                 string                `json:"name"`
+	Namespace            string                `json:"namespace"`
+	Project              string                `json:"project"`
+	RepoURL              string                `json:"repoURL"`
+	Path                 string                `json:"path"`
+	TargetRevision       string                `json:"targetRevision"`
+	DestinationServer    string                `json:"destinationServer"`
+	DestinationNamespace string                `json:"destinationNamespace"`
+	SyncStatus           SyncStatus            `json:"syncStatus"`
+	HealthStatus         HealthStatus          `json:"healthStatus"`
+	Sources              []ApplicationSource   `json:"sources,omitempty"`
+	ApplicationSetName   string                `json:"applicationSetName,omitempty"`
+	Labels               map[string]string     `json:"labels,omitempty"`
+	AutoSyncEnabled      bool                  `json:"autoSyncEnabled"`
+	ChangeType           ApplicationChangeType `json:"changeType,omitempty"`
+	SourceFile           string                `json:"sourceFile,omitempty"` // File path where this app CR is defined
 }
 
 // ApplicationSource represents a source in a multi-source application.
@@ -151,4 +165,19 @@ func (a *Application) GetRepoURLs() []string {
 // HasAutoSync returns true if the application has auto-sync enabled.
 func (a *Application) HasAutoSync() bool {
 	return a.AutoSyncEnabled
+}
+
+// IsNew returns true if this application is being created in the PR.
+func (a *Application) IsNew() bool {
+	return a.ChangeType == ApplicationNew
+}
+
+// IsDeleted returns true if this application is being deleted in the PR.
+func (a *Application) IsDeleted() bool {
+	return a.ChangeType == ApplicationDeleted
+}
+
+// IsExisting returns true if this application already exists in ArgoCD.
+func (a *Application) IsExisting() bool {
+	return a.ChangeType == "" || a.ChangeType == ApplicationExisting
 }
