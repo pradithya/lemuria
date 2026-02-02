@@ -60,8 +60,17 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=backend-builder /lemuria /app/lemuria
 
+# Copy static files from frontend builder
+COPY --from=frontend-builder /app/static /app/static
+
+# Set ownership
+RUN chown -R lemuria:lemuria /app
+
 # Use non-root user
 USER lemuria
+
+# Environment variables
+ENV STATIC_DIR=/app/static
 
 # Expose default port
 EXPOSE 4141

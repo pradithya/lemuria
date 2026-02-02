@@ -1,4 +1,6 @@
-.PHONY: build build-frontend build-backend test test-unit test-e2e e2e-setup e2e-teardown clean docker-build run run-redis run-backend run-frontend stop
+.PHONY: build build-frontend build-backend test test-unit test-e2e e2e-setup e2e-teardown clean docker-build run run-redis run-backend run-frontend stop \
+        k8s-deploy k8s-delete k8s-status k8s-logs k8s-port-forward k8s-restart \
+        k3d-create k3d-delete k3d-build k3d-deploy k3d-all help
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -137,6 +139,73 @@ stop: stop-redis
 	@pkill -f "vite" 2>/dev/null || true
 	@echo "All services stopped"
 
+# ============================================================================
+# Kubernetes Deployment Commands
+# ============================================================================
+
+# Deploy to Kubernetes using Kustomize
+k8s-deploy:
+	kubectl apply -k deploy/kubernetes
+
+# Delete Kubernetes deployment
+k8s-delete:
+	kubectl delete -k deploy/kubernetes --ignore-not-found
+
+# Show Kubernetes status
+k8s-status:
+	@echo "=== Pods ==="
+	kubectl get pods -n lemuria
+	@echo ""
+	@echo "=== Services ==="
+	kubectl get svc -n lemuria
+	@echo ""
+	@echo "=== Deployments ==="
+	kubectl get deployments -n lemuria
+
+# View logs
+k8s-logs:
+	kubectl logs -n lemuria -l app.kubernetes.io/name=lemuria -f
+
+# Port forward for local access
+k8s-port-forward:
+	kubectl port-forward -n lemuria svc/lemuria 4141:80
+
+# Restart deployment
+k8s-restart:
+	kubectl rollout restart deployment/lemuria -n lemuria
+
+# ============================================================================
+# Local K3d Development Cluster
+# ============================================================================
+
+K3D_CLUSTER_NAME ?= lemuria-dev
+
+# Create local k3d cluster
+k3d-create:
+	k3d cluster create $(K3D_CLUSTER_NAME) \
+		--servers 1 \
+		--agents 0 \
+		--port "4141:80@loadbalancer" \
+		--k3s-arg "--disable=traefik@server:0"
+
+# Delete local k3d cluster
+k3d-delete:
+	k3d cluster delete $(K3D_CLUSTER_NAME)
+
+# Build and import image to k3d
+k3d-build:
+	docker build -t lemuria:dev .
+	k3d image import lemuria:dev -c $(K3D_CLUSTER_NAME)
+
+# Deploy to k3d cluster
+k3d-deploy: k3d-build
+	cd deploy/kubernetes && kustomize edit set image lemuria=lemuria:dev
+	kubectl apply -k deploy/kubernetes
+	kubectl rollout status deployment/lemuria -n lemuria --timeout=120s
+
+# Full k3d setup (create + deploy)
+k3d-all: k3d-create k3d-deploy k8s-status
+
 # Show help
 help:
 	@echo "Lemuria Makefile"
@@ -163,6 +232,21 @@ help:
 	@echo "  make e2e-setup      - Setup k3d cluster with Argo CD and Redis"
 	@echo "  make e2e-teardown   - Teardown e2e test infrastructure"
 	@echo "  make e2e            - Setup, run e2e tests (no auto-teardown)"
+	@echo ""
+	@echo "Kubernetes:"
+	@echo "  make k8s-deploy     - Deploy to Kubernetes using Kustomize"
+	@echo "  make k8s-delete     - Delete Kubernetes deployment"
+	@echo "  make k8s-status     - Show deployment status"
+	@echo "  make k8s-logs       - View Lemuria logs"
+	@echo "  make k8s-port-forward - Port forward to localhost:4141"
+	@echo "  make k8s-restart    - Restart Lemuria deployment"
+	@echo ""
+	@echo "Local K3d Cluster:"
+	@echo "  make k3d-create     - Create local k3d cluster"
+	@echo "  make k3d-delete     - Delete local k3d cluster"
+	@echo "  make k3d-build      - Build and import image to k3d"
+	@echo "  make k3d-deploy     - Deploy to k3d cluster"
+	@echo "  make k3d-all        - Full setup (create + deploy)"
 	@echo ""
 	@echo "Other:"
 	@echo "  make clean          - Clean build artifacts"
