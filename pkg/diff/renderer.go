@@ -7,12 +7,6 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
-// Change type constants for rendering
-const (
-	changeTypeNew     = "new"
-	changeTypeDeleted = "deleted"
-)
-
 // PlanResult represents the result of planning a single application.
 type PlanResult struct {
 	Application string

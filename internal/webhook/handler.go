@@ -71,7 +71,9 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	if event == nil {
 		// Event type not handled
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ignored"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ignored"}); err != nil {
+			h.logger.Warn("failed to encode response", "error", err)
+		}
 		return
 	}
 
@@ -79,7 +81,9 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	if !h.config.IsRepoAllowed(event.Repo.FullName) {
 		h.logger.Info("repository not in allowlist", "repo", event.Repo.FullName)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "repo not allowed"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "repo not allowed"}); err != nil {
+			h.logger.Warn("failed to encode response", "error", err)
+		}
 		return
 	}
 
@@ -87,7 +91,9 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	go h.processEvent(context.Background(), event)
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "accepted"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "accepted"}); err != nil {
+		h.logger.Warn("failed to encode response", "error", err)
+	}
 }
 
 // processEvent handles the webhook event based on its type.

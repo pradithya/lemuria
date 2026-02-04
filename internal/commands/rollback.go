@@ -15,7 +15,9 @@ import (
 func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *models.PREvent) error {
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
-		e.github.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes")
+		if err := e.github.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
+			e.logger.Warn("failed to add reaction", "error", err)
+		}
 	}
 
 	// Check requirements before rollback

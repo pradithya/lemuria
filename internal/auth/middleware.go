@@ -199,11 +199,13 @@ func (m *Middleware) respondUnauthorized(w http.ResponseWriter, r *http.Request)
 	if wantsJSON(r) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"error":    "unauthorized",
 			"message":  "Authentication required",
 			"loginUrl": "/auth/providers",
-		})
+		}); err != nil {
+			m.logger.Warn("failed to encode unauthorized response", "error", err)
+		}
 		return
 	}
 
@@ -215,10 +217,12 @@ func (m *Middleware) respondUnauthorized(w http.ResponseWriter, r *http.Request)
 func (m *Middleware) respondForbidden(w http.ResponseWriter, r *http.Request, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"error":   "forbidden",
 		"message": message,
-	})
+	}); err != nil {
+		m.logger.Warn("failed to encode forbidden response", "error", err)
+	}
 }
 
 // wantsJSON returns true if the request expects a JSON response.

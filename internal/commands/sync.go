@@ -13,7 +13,9 @@ import (
 func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.PREvent) error {
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
-		e.github.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes")
+		if err := e.github.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
+			e.logger.Warn("failed to add reaction", "error", err)
+		}
 	}
 
 	// Get locks held by this PR
@@ -145,7 +147,7 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 		return fmt.Errorf("getting PR status: %w", err)
 	}
 
-	if pr.GetMergeable() == false {
+	if !pr.GetMergeable() {
 		return fmt.Errorf("PR has merge conflicts. Please resolve before syncing.")
 	}
 

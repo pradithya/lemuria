@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -70,9 +71,9 @@ func (s *RedisSessionStore) Create(ctx context.Context, user *models.User) (*mod
 		return nil, fmt.Errorf("storing session: %w", err)
 	}
 
-	// Add to sessions index
+	// Add to sessions index (non-fatal if it fails)
 	if err := s.client.SAdd(ctx, sessionsIndexKey, sessionID).Err(); err != nil {
-		// Non-fatal, just log
+		slog.Warn("failed to add session to index", "sessionID", sessionID, "error", err)
 	}
 
 	return session, nil
@@ -97,7 +98,9 @@ func (s *RedisSessionStore) Get(ctx context.Context, sessionID string) (*models.
 	// Check if expired
 	if session.IsExpired() {
 		// Clean up expired session
-		s.Delete(ctx, sessionID)
+		if err := s.Delete(ctx, sessionID); err != nil {
+			slog.Warn("failed to delete expired session", "sessionID", sessionID, "error", err)
+		}
 		return nil, nil
 	}
 
