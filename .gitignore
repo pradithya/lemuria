@@ -1,6 +1,5 @@
 # Binaries
 bin/
-lemuria
 *.exe
 *.exe~
 *.dll
@@ -62,8 +61,6 @@ tmp/
 temp/
 *.tmp
 
-# Vendor directory (if not vendoring)
-# vendor/
 
 # Frontend
 web/node_modules/
