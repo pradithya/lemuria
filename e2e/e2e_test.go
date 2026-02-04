@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -10,12 +11,15 @@ import (
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/lock"
 	"github.com/org/lemuria/internal/models"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 var (
-	argoClient  *argocd.Client
-	lockManager lock.Manager
-	testCtx     context.Context
+	argoClient     *argocd.Client
+	lockManager    lock.Manager
+	testCtx        context.Context
+	redisContainer testcontainers.Container
 )
 
 func TestMain(m *testing.M) {
@@ -38,8 +42,36 @@ func TestMain(m *testing.M) {
 		panic("Failed to create Argo CD client: " + err.Error())
 	}
 
+	// Start Redis container if REDIS_ADDR is not set
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisContainer, err = testcontainers.GenericContainer(testCtx, testcontainers.GenericContainerRequest{
+			ContainerRequest: testcontainers.ContainerRequest{
+				Image:        "redis:7-alpine",
+				ExposedPorts: []string{"6379/tcp"},
+				WaitingFor:   wait.ForLog("Ready to accept connections"),
+			},
+			Started: true,
+		})
+		if err != nil {
+			panic("Failed to start Redis container: " + err.Error())
+		}
+
+		host, err := redisContainer.Host(testCtx)
+		if err != nil {
+			panic("Failed to get Redis container host: " + err.Error())
+		}
+
+		port, err := redisContainer.MappedPort(testCtx, "6379")
+		if err != nil {
+			panic("Failed to get Redis container port: " + err.Error())
+		}
+
+		redisAddr = fmt.Sprintf("%s:%s", host, port.Port())
+	}
+
 	lockManager, err = lock.NewRedisManager(config.RedisConfig{
-		Address: getEnv("REDIS_ADDR", "localhost:6379"),
+		Address: redisAddr,
 	})
 	if err != nil {
 		panic("Failed to create Redis lock manager: " + err.Error())
@@ -50,6 +82,9 @@ func TestMain(m *testing.M) {
 
 	// Cleanup
 	lockManager.Close()
+	if redisContainer != nil {
+		redisContainer.Terminate(testCtx)
+	}
 
 	os.Exit(code)
 }
@@ -108,6 +143,9 @@ func splitFirst(s string, sep byte) []string {
 // =============================================================================
 
 func TestArgoCDVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
 	version, err := argoClient.Version(testCtx)
 	if err != nil {
 		t.Fatalf("Failed to get Argo CD version: %v", err)
@@ -121,6 +159,9 @@ func TestArgoCDVersion(t *testing.T) {
 }
 
 func TestListApplications(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
 	apps, err := argoClient.ListApplications(testCtx)
 	if err != nil {
 		t.Fatalf("Failed to list applications: %v", err)
@@ -139,6 +180,9 @@ func TestListApplications(t *testing.T) {
 }
 
 func TestGetApplication(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
 	// First, list to see what's available
 	apps, err := argoClient.ListApplications(testCtx)
 	if err != nil {
@@ -165,6 +209,9 @@ func TestGetApplication(t *testing.T) {
 }
 
 func TestListApplicationSets(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
 	appSets, err := argoClient.ListApplicationSets(testCtx)
 	if err != nil {
 		t.Fatalf("Failed to list ApplicationSets: %v", err)
@@ -178,6 +225,9 @@ func TestListApplicationSets(t *testing.T) {
 }
 
 func TestGetApplicationsByApplicationSet(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
 	// First check if we have any ApplicationSets
 	appSets, err := argoClient.ListApplicationSets(testCtx)
 	if err != nil {
@@ -201,6 +251,9 @@ func TestGetApplicationsByApplicationSet(t *testing.T) {
 }
 
 func TestGetManifests(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
 	apps, err := argoClient.ListApplications(testCtx)
 	if err != nil {
 		t.Fatalf("Failed to list applications: %v", err)
@@ -224,6 +277,9 @@ func TestGetManifests(t *testing.T) {
 }
 
 func TestGetApplicationDiff(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
 	apps, err := argoClient.ListApplications(testCtx)
 	if err != nil {
 		t.Fatalf("Failed to list applications: %v", err)
@@ -419,6 +475,9 @@ func TestStorePlan(t *testing.T) {
 // =============================================================================
 
 func TestFullPlanWorkflow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD integration test in short mode")
+	}
 	// This test simulates a full plan workflow:
 	// 1. Find an application
 	// 2. Acquire lock
@@ -503,6 +562,9 @@ func TestFullPlanWorkflow(t *testing.T) {
 }
 
 func TestSyncDryRun(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
 	apps, err := argoClient.ListApplications(testCtx)
 	if err != nil {
 		t.Fatalf("Failed to list applications: %v", err)

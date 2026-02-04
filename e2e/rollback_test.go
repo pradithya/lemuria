@@ -41,11 +41,11 @@ func TestRollbackCommandParsing(t *testing.T) {
 			wantDryRun: true,
 		},
 		{
-			name:       "rollback with prune",
-			input:      "lemuria rollback -a my-app --prune",
-			wantCmd:    commands.CommandRollback,
-			wantApp:    "my-app",
-			wantPrune:  true,
+			name:      "rollback with prune",
+			input:     "lemuria rollback -a my-app --prune",
+			wantCmd:   commands.CommandRollback,
+			wantApp:   "my-app",
+			wantPrune: true,
 		},
 		{
 			name:       "rollback with all options",
@@ -174,6 +174,10 @@ func TestRollbackWorkflow(t *testing.T) {
 }
 
 func TestGetApplicationHistory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
+
 	if argoClient == nil {
 		t.Skip("Argo CD client not initialized")
 	}
