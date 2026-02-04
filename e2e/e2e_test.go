@@ -83,7 +83,7 @@ func TestMain(m *testing.M) {
 	// Cleanup
 	lockManager.Close()
 	if redisContainer != nil {
-		redisContainer.Terminate(testCtx)
+		_ = redisContainer.Terminate(testCtx)
 	}
 
 	os.Exit(code)
@@ -410,7 +410,7 @@ func TestLockConflict(t *testing.T) {
 	}
 
 	// Cleanup
-	lockManager.ForceUnlock(testCtx, appName)
+	_ = lockManager.ForceUnlock(testCtx, appName)
 }
 
 func TestListLocksByPR(t *testing.T) {
@@ -444,7 +444,7 @@ func TestListLocksByPR(t *testing.T) {
 
 	// Cleanup
 	for _, app := range apps {
-		lockManager.ForceUnlock(testCtx, app)
+		_ = lockManager.ForceUnlock(testCtx, app)
 	}
 }
 
@@ -519,7 +519,7 @@ func TestFullPlanWorkflow(t *testing.T) {
 
 	defer func() {
 		// Cleanup: release lock
-		lockManager.Unlock(testCtx, app.Name, repo, prNumber)
+		_ = lockManager.Unlock(testCtx, app.Name, repo, prNumber)
 	}()
 
 	t.Log("Lock acquired successfully")

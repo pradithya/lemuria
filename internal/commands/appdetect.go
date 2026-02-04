@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/github"
@@ -231,17 +230,4 @@ func (e *Executor) verifyDeletedAppsExist(ctx context.Context, parsed *argocd.Pa
 	parsed.Deleted = actuallyDeleted
 
 	return nil
-}
-
-// getAppNameFromFile returns a descriptive name based on the file path.
-func getAppNameFromFile(filePath string) string {
-	// Remove extension and use filename
-	name := filePath
-	if idx := strings.LastIndex(name, "/"); idx != -1 {
-		name = name[idx+1:]
-	}
-	if idx := strings.LastIndex(name, "."); idx != -1 {
-		name = name[:idx]
-	}
-	return name
 }
