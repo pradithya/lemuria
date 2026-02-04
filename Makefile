@@ -1,8 +1,9 @@
-.PHONY: build build-frontend build-backend test test-unit test-e2e e2e-setup e2e-teardown clean docker-build run run-redis run-backend run-frontend stop \
+.PHONY: build build-frontend build-backend test test-unit test-e2e test-e2e-short e2e-setup e2e-teardown clean docker-build run run-redis run-backend run-frontend stop \
         k8s-deploy k8s-delete k8s-status k8s-logs k8s-port-forward k8s-restart \
         k3d-create k3d-delete k3d-build k3d-deploy k3d-all \
-        helm-lint helm-template helm-test helm-test-install helm-package helm-deploy helm-delete \
+        helm-lint helm-template helm-template-ci helm-test helm-test-install helm-package helm-deploy helm-delete \
         tools install-tools \
+        deps vet frontend-deps frontend-type-check frontend-build \
         help
 
 # Build variables
@@ -29,6 +30,18 @@ build: build-frontend build-backend
 build-frontend:
 	cd web && $(NPM) install && $(NPM) run build
 
+# Install frontend dependencies (CI-style clean install)
+frontend-deps:
+	cd web && $(NPM) ci
+
+# Run frontend type checking
+frontend-type-check:
+	cd web && $(NPM) run type-check || true
+
+# Build frontend only (assumes deps already installed)
+frontend-build:
+	cd web && $(NPM) run build
+
 # Build the Go binary (requires frontend to be built first)
 build-backend:
 	go build $(LDFLAGS) -o bin/lemuria ./cmd/lemuria
@@ -47,6 +60,10 @@ test-unit:
 # Run e2e tests (requires setup first)
 test-e2e:
 	cd e2e && go test -v -timeout 10m ./...
+
+# Run e2e tests in short mode (unit mode, no infrastructure required)
+test-e2e-short:
+	go test -v -short ./e2e/...
 
 # Setup e2e test infrastructure
 e2e-setup:
@@ -72,6 +89,10 @@ docker-build:
 deps:
 	go mod download
 	go mod tidy
+
+# Run go vet
+vet:
+	go vet ./...
 
 # ============================================================================
 # Development Tools
@@ -257,6 +278,12 @@ helm-template:
 		--namespace $(HELM_NAMESPACE) \
 		--set secrets.existingSecret=lemuria-secrets
 
+# Template Helm chart with CI test values
+helm-template-ci:
+	helm template $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
+		--namespace $(HELM_NAMESPACE) \
+		--values $(HELM_CHART_DIR)/ci/test-values.yaml
+
 # Run Helm unit tests (requires helm-unittest plugin, run 'make tools' first)
 helm-test:
 	helm unittest $(HELM_CHART_DIR)
@@ -314,17 +341,23 @@ help:
 	@echo "  make build-backend  - Build Go binary (requires frontend)"
 	@echo "  make build-go       - Build Go binary only (skip frontend)"
 	@echo "  make docker-build   - Build Docker image"
+	@echo "  make frontend-deps  - Install frontend dependencies (npm ci)"
+	@echo "  make frontend-type-check - Run frontend type checking"
+	@echo "  make frontend-build - Build frontend (assumes deps installed)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test           - Run unit tests"
 	@echo "  make test-e2e       - Run e2e tests (requires e2e-setup)"
+	@echo "  make test-e2e-short - Run e2e tests in short/unit mode"
 	@echo "  make e2e-setup      - Setup k3d cluster with Argo CD and Redis"
 	@echo "  make e2e-teardown   - Teardown e2e test infrastructure"
 	@echo "  make e2e            - Setup, run e2e tests (no auto-teardown)"
+	@echo "  make vet            - Run go vet"
 	@echo ""
 	@echo "Helm Chart:"
 	@echo "  make helm-lint      - Lint Helm chart"
 	@echo "  make helm-template  - Template Helm chart (dry-run)"
+	@echo "  make helm-template-ci - Template Helm chart with CI test values"
 	@echo "  make helm-test      - Run Helm unit tests"
 	@echo "  make helm-test-all  - Run all Helm tests (lint + unit)"
 	@echo "  make helm-package   - Package Helm chart"
