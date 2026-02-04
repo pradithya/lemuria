@@ -122,9 +122,9 @@ func parseIssueCommentEvent(payload []byte) (*models.PREvent, error) {
 			} `json:"pull_request"`
 		} `json:"issue"`
 		Comment struct {
-			ID        int64  `json:"id"`
-			Body      string `json:"body"`
-			User      struct {
+			ID   int64  `json:"id"`
+			Body string `json:"body"`
+			User struct {
 				Login     string `json:"login"`
 				ID        int64  `json:"id"`
 				AvatarURL string `json:"avatar_url"`
@@ -203,12 +203,12 @@ func parsePullRequestReviewEvent(payload []byte) (*models.PREvent, error) {
 			} `json:"user"`
 		} `json:"review"`
 		PullRequest struct {
-			Number  int    `json:"number"`
-			Title   string `json:"title"`
-			State   string `json:"state"`
-			Draft   bool   `json:"draft"`
-			Merged  bool   `json:"merged"`
-			Head    struct {
+			Number int    `json:"number"`
+			Title  string `json:"title"`
+			State  string `json:"state"`
+			Draft  bool   `json:"draft"`
+			Merged bool   `json:"merged"`
+			Head   struct {
 				SHA string `json:"sha"`
 				Ref string `json:"ref"`
 			} `json:"head"`

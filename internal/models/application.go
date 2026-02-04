@@ -34,10 +34,10 @@ type Application struct {
 
 // ApplicationSource represents a source in a multi-source application.
 type ApplicationSource struct {
-	RepoURL        string `json:"repoURL"`
-	Path           string `json:"path,omitempty"`
-	TargetRevision string `json:"targetRevision"`
-	Chart          string `json:"chart,omitempty"`
+	RepoURL        string      `json:"repoURL"`
+	Path           string      `json:"path,omitempty"`
+	TargetRevision string      `json:"targetRevision"`
+	Chart          string      `json:"chart,omitempty"`
 	Helm           *HelmSource `json:"helm,omitempty"`
 }
 
@@ -60,18 +60,18 @@ const (
 type HealthStatus string
 
 const (
-	HealthStatusHealthy   HealthStatus = "Healthy"
-	HealthStatusDegraded  HealthStatus = "Degraded"
+	HealthStatusHealthy     HealthStatus = "Healthy"
+	HealthStatusDegraded    HealthStatus = "Degraded"
 	HealthStatusProgressing HealthStatus = "Progressing"
-	HealthStatusSuspended HealthStatus = "Suspended"
-	HealthStatusMissing   HealthStatus = "Missing"
-	HealthStatusUnknown   HealthStatus = "Unknown"
+	HealthStatusSuspended   HealthStatus = "Suspended"
+	HealthStatusMissing     HealthStatus = "Missing"
+	HealthStatusUnknown     HealthStatus = "Unknown"
 )
 
 // ApplicationSet represents an Argo CD ApplicationSet.
 type ApplicationSet struct {
-	Name      string   `json:"name"`
-	Namespace string   `json:"namespace"`
+	Name      string      `json:"name"`
+	Namespace string      `json:"namespace"`
 	Template  Application `json:"template"`
 }
 
@@ -86,11 +86,11 @@ type Manifest struct {
 
 // ManifestDiff represents the diff between live and target manifests.
 type ManifestDiff struct {
-	Resource   ResourceKey `json:"resource"`
-	LiveState  string      `json:"liveState"`
-	TargetState string     `json:"targetState"`
-	Diff       string      `json:"diff"`
-	Action     DiffAction  `json:"action"`
+	Resource    ResourceKey `json:"resource"`
+	LiveState   string      `json:"liveState"`
+	TargetState string      `json:"targetState"`
+	Diff        string      `json:"diff"`
+	Action      DiffAction  `json:"action"`
 }
 
 // ResourceKey uniquely identifies a Kubernetes resource.
@@ -121,10 +121,10 @@ const (
 
 // SyncResult represents the outcome of a sync operation.
 type SyncResult struct {
-	Application string          `json:"application"`
-	Revision    string          `json:"revision"`
-	Phase       SyncPhase       `json:"phase"`
-	Message     string          `json:"message"`
+	Application string           `json:"application"`
+	Revision    string           `json:"revision"`
+	Phase       SyncPhase        `json:"phase"`
+	Message     string           `json:"message"`
 	Resources   []ResourceResult `json:"resources"`
 }
 

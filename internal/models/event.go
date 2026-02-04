@@ -6,9 +6,9 @@ import "time"
 type EventType string
 
 const (
-	EventTypePullRequest        EventType = "pull_request"
-	EventTypeIssueComment       EventType = "issue_comment"
-	EventTypePullRequestReview  EventType = "pull_request_review"
+	EventTypePullRequest       EventType = "pull_request"
+	EventTypeIssueComment      EventType = "issue_comment"
+	EventTypePullRequestReview EventType = "pull_request_review"
 )
 
 // PREvent represents a parsed pull request webhook event.
