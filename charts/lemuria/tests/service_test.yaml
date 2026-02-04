@@ -1,0 +1,44 @@
+suite: service tests
+templates:
+  - service.yaml
+tests:
+  - it: should create a service with default values
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].port
+          value: 80
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+      - equal:
+          path: spec.ports[0].name
+          value: http
+
+  - it: should use custom service type
+    set:
+      service:
+        type: LoadBalancer
+        port: 8080
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+
+  - it: should have correct selector labels
+    release:
+      name: my-release
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: lemuria
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: my-release

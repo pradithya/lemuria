@@ -1,0 +1,89 @@
+suite: redis tests
+templates:
+  - redis-deployment.yaml
+  - redis-service.yaml
+  - redis-pvc.yaml
+tests:
+  - it: should create redis deployment when enabled
+    template: redis-deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: redis
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: redis:7-alpine
+
+  - it: should not create redis deployment when disabled
+    template: redis-deployment.yaml
+    set:
+      redis:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create redis service when enabled
+    template: redis-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.ports[0].port
+          value: 6379
+
+  - it: should not create redis service when disabled
+    template: redis-service.yaml
+    set:
+      redis:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should not create pvc by default
+    template: redis-pvc.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create pvc when persistence is enabled
+    template: redis-pvc.yaml
+    set:
+      redis:
+        enabled: true
+        persistence:
+          enabled: true
+          size: 5Gi
+    asserts:
+      - isKind:
+          of: PersistentVolumeClaim
+      - equal:
+          path: spec.resources.requests.storage
+          value: 5Gi
+
+  - it: should use custom storage class
+    template: redis-pvc.yaml
+    set:
+      redis:
+        enabled: true
+        persistence:
+          enabled: true
+          storageClass: fast-ssd
+          size: 10Gi
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: fast-ssd
+
+  - it: should set redis security context
+    template: redis-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 999

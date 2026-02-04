@@ -1,0 +1,171 @@
+# Default values for lemuria.
+# This is a YAML-formatted file.
+
+# -- Number of replicas for the lemuria deployment
+replicaCount: 1
+
+image:
+  # -- Container image repository
+  repository: ghcr.io/argo-atlantis/lemuria
+  # -- Image pull policy
+  pullPolicy: Always
+  # -- Overrides the image tag whose default is the chart appVersion
+  tag: ""
+
+# -- Image pull secrets for private registries
+imagePullSecrets: []
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full name
+fullnameOverride: ""
+
+serviceAccount:
+  # -- Specifies whether a service account should be created
+  create: true
+  # -- Annotations to add to the service account
+  annotations: {}
+  # -- The name of the service account to use
+  name: ""
+
+# -- Annotations to add to the pod
+podAnnotations: {}
+
+# -- Labels to add to the pod
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  # -- Service type
+  type: ClusterIP
+  # -- Service port
+  port: 80
+
+ingress:
+  # -- Enable ingress
+  enabled: false
+  # -- Ingress class name
+  className: nginx
+  # -- Ingress annotations
+  annotations: {}
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    # cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  # -- Ingress hosts configuration
+  hosts:
+    - host: lemuria.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- Ingress TLS configuration
+  tls: []
+  #  - secretName: lemuria-tls
+  #    hosts:
+  #      - lemuria.example.com
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# -- Node selector for pod scheduling
+nodeSelector: {}
+
+# -- Tolerations for pod scheduling
+tolerations: []
+
+# -- Affinity rules for pod scheduling
+affinity: {}
+
+# Lemuria configuration
+config:
+  server:
+    port: 4141
+    host: "0.0.0.0"
+  redis:
+    address: "{{ include \"lemuria.fullname\" . }}-redis:6379"
+    db: 0
+  defaults:
+    autoplan: true
+    require_approval: false
+    auto_merge: false
+    merge_method: "squash"
+
+# Secrets configuration
+secrets:
+  # -- Create secrets (set to false to use existing secrets)
+  create: false
+  # -- Name of existing secret to use (if create is false)
+  existingSecret: "lemuria-secrets"
+  # -- GitHub webhook secret
+  githubWebhookSecret: ""
+  # -- GitHub App ID
+  githubAppId: ""
+  # -- GitHub App private key
+  githubAppPrivateKey: ""
+  # -- ArgoCD token
+  argocdToken: ""
+  # -- Redis password
+  redisPassword: ""
+
+# Redis configuration
+redis:
+  # -- Enable Redis deployment
+  enabled: true
+  image:
+    # -- Redis image repository
+    repository: redis
+    # -- Redis image tag
+    tag: 7-alpine
+    # -- Redis image pull policy
+    pullPolicy: IfNotPresent
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  persistence:
+    # -- Enable Redis data persistence
+    enabled: false
+    # -- Storage class for Redis PVC
+    storageClass: ""
+    # -- Size of Redis PVC
+    size: 1Gi
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999

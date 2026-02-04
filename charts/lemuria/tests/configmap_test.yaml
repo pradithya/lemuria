@@ -1,0 +1,39 @@
+suite: configmap tests
+templates:
+  - configmap.yaml
+tests:
+  - it: should create a configmap
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - isNotEmpty:
+          path: data["lemuria.yaml"]
+
+  - it: should contain server configuration
+    asserts:
+      - matchRegex:
+          path: data["lemuria.yaml"]
+          pattern: "port: 4141"
+      - matchRegex:
+          path: data["lemuria.yaml"]
+          pattern: 'host: "0.0.0.0"'
+
+  - it: should contain redis configuration
+    release:
+      name: test-release
+    asserts:
+      - matchRegex:
+          path: data["lemuria.yaml"]
+          pattern: "address: \"test-release-lemuria-redis:6379\""
+
+  - it: should contain defaults configuration
+    asserts:
+      - matchRegex:
+          path: data["lemuria.yaml"]
+          pattern: "autoplan: true"
+      - matchRegex:
+          path: data["lemuria.yaml"]
+          pattern: "require_approval: false"
+      - matchRegex:
+          path: data["lemuria.yaml"]
+          pattern: 'merge_method: "squash"'
