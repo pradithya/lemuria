@@ -1,6 +1,9 @@
 .PHONY: build build-frontend build-backend test test-unit test-e2e e2e-setup e2e-teardown clean docker-build run run-redis run-backend run-frontend stop \
         k8s-deploy k8s-delete k8s-status k8s-logs k8s-port-forward k8s-restart \
-        k3d-create k3d-delete k3d-build k3d-deploy k3d-all help
+        k3d-create k3d-delete k3d-build k3d-deploy k3d-all \
+        helm-lint helm-template helm-test helm-test-install helm-package helm-deploy helm-delete \
+        tools install-tools \
+        help
 
 # Build variables
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -69,6 +72,36 @@ docker-build:
 deps:
 	go mod download
 	go mod tidy
+
+# ============================================================================
+# Development Tools
+# ============================================================================
+
+# Install all development tools
+tools: install-tools
+
+install-tools:
+	@echo "Installing development tools..."
+	@echo ""
+	@echo "Installing Go tools..."
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "  Installing golangci-lint..."; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+	}
+	@command -v goimports >/dev/null 2>&1 || { \
+		echo "  Installing goimports..."; \
+		go install golang.org/x/tools/cmd/goimports@latest; \
+	}
+	@echo ""
+	@echo "Installing Helm plugins..."
+	@if ! helm plugin list 2>/dev/null | grep -q unittest; then \
+		echo "  Installing helm-unittest plugin..."; \
+		helm plugin install https://github.com/helm-unittest/helm-unittest.git; \
+	else \
+		echo "  helm-unittest already installed"; \
+	fi
+	@echo ""
+	@echo "All development tools installed!"
 
 # Lint code
 lint:
@@ -206,6 +239,62 @@ k3d-deploy: k3d-build
 # Full k3d setup (create + deploy)
 k3d-all: k3d-create k3d-deploy k8s-status
 
+# ============================================================================
+# Helm Chart Commands
+# ============================================================================
+
+HELM_CHART_DIR := charts/lemuria
+HELM_RELEASE_NAME ?= lemuria
+HELM_NAMESPACE ?= lemuria
+
+# Lint Helm chart
+helm-lint:
+	helm lint $(HELM_CHART_DIR)
+
+# Template Helm chart (dry-run)
+helm-template:
+	helm template $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
+		--namespace $(HELM_NAMESPACE) \
+		--set secrets.existingSecret=lemuria-secrets
+
+# Run Helm unit tests (requires helm-unittest plugin, run 'make tools' first)
+helm-test:
+	helm unittest $(HELM_CHART_DIR)
+
+# Run all Helm tests (lint + unit tests)
+helm-test-all: helm-lint helm-test
+
+# Package Helm chart
+helm-package:
+	helm package $(HELM_CHART_DIR) --destination .helm-packages
+
+# Deploy using Helm (to current kubectl context)
+helm-deploy:
+	helm upgrade --install $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
+		--namespace $(HELM_NAMESPACE) \
+		--create-namespace \
+		--set secrets.existingSecret=lemuria-secrets \
+		--wait
+
+# Deploy using Helm with custom image
+helm-deploy-dev: docker-build
+	helm upgrade --install $(HELM_RELEASE_NAME) $(HELM_CHART_DIR) \
+		--namespace $(HELM_NAMESPACE) \
+		--create-namespace \
+		--set image.repository=lemuria \
+		--set image.tag=$(VERSION) \
+		--set image.pullPolicy=Never \
+		--set secrets.existingSecret=lemuria-secrets \
+		--wait
+
+# Delete Helm release
+helm-delete:
+	helm uninstall $(HELM_RELEASE_NAME) --namespace $(HELM_NAMESPACE) --ignore-not-found
+
+# Run Helm integration tests (after deployment)
+helm-test-install:
+	helm test $(HELM_RELEASE_NAME) --namespace $(HELM_NAMESPACE)
+
 # Show help
 help:
 	@echo "Lemuria Makefile"
@@ -233,7 +322,18 @@ help:
 	@echo "  make e2e-teardown   - Teardown e2e test infrastructure"
 	@echo "  make e2e            - Setup, run e2e tests (no auto-teardown)"
 	@echo ""
-	@echo "Kubernetes:"
+	@echo "Helm Chart:"
+	@echo "  make helm-lint      - Lint Helm chart"
+	@echo "  make helm-template  - Template Helm chart (dry-run)"
+	@echo "  make helm-test      - Run Helm unit tests"
+	@echo "  make helm-test-all  - Run all Helm tests (lint + unit)"
+	@echo "  make helm-package   - Package Helm chart"
+	@echo "  make helm-deploy    - Deploy using Helm"
+	@echo "  make helm-deploy-dev - Build and deploy local image with Helm"
+	@echo "  make helm-delete    - Delete Helm release"
+	@echo "  make helm-test-install - Run Helm integration tests"
+	@echo ""
+	@echo "Kubernetes:
 	@echo "  make k8s-deploy     - Deploy to Kubernetes using Kustomize"
 	@echo "  make k8s-delete     - Delete Kubernetes deployment"
 	@echo "  make k8s-status     - Show deployment status"
@@ -249,6 +349,7 @@ help:
 	@echo "  make k3d-all        - Full setup (create + deploy)"
 	@echo ""
 	@echo "Other:"
+	@echo "  make tools          - Install all development tools"
 	@echo "  make clean          - Clean build artifacts"
 	@echo "  make deps           - Download and tidy dependencies"
 	@echo "  make lint           - Run linter"
@@ -256,3 +357,5 @@ help:
 	@echo ""
 	@echo "Options:"
 	@echo "  CONFIG=path/to/config.yaml  - Use custom config (default: config/test.yaml)"
+	@echo "  HELM_RELEASE_NAME=name      - Helm release name (default: lemuria)"
+	@echo "  HELM_NAMESPACE=ns           - Helm namespace (default: lemuria)"

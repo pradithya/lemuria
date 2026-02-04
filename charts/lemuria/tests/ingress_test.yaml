@@ -1,0 +1,65 @@
+suite: ingress tests
+templates:
+  - ingress.yaml
+tests:
+  - it: should not create ingress by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should create ingress when enabled
+    set:
+      ingress:
+        enabled: true
+        className: nginx
+        hosts:
+          - host: lemuria.example.com
+            paths:
+              - path: /
+                pathType: Prefix
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].host
+          value: lemuria.example.com
+
+  - it: should configure TLS when specified
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: lemuria.example.com
+            paths:
+              - path: /
+                pathType: Prefix
+        tls:
+          - secretName: lemuria-tls
+            hosts:
+              - lemuria.example.com
+    asserts:
+      - equal:
+          path: spec.tls[0].secretName
+          value: lemuria-tls
+      - equal:
+          path: spec.tls[0].hosts[0]
+          value: lemuria.example.com
+
+  - it: should set annotations
+    set:
+      ingress:
+        enabled: true
+        annotations:
+          nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        hosts:
+          - host: lemuria.example.com
+            paths:
+              - path: /
+                pathType: Prefix
+    asserts:
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/ssl-redirect"]
+          value: "true"
