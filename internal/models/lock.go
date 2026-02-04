@@ -4,13 +4,13 @@ import "time"
 
 // Lock represents an application lock held by a PR.
 type Lock struct {
-	Application   string    `json:"application"`
-	PRNumber      int       `json:"pr_number"`
-	Repo          string    `json:"repo"`
-	User          string    `json:"user"`
-	LockedAt      time.Time `json:"locked_at"`
-	PlanRevision  string    `json:"plan_revision"`
-	PlanOutput    string    `json:"plan_output,omitempty"`
+	Application  string    `json:"application"`
+	PRNumber     int       `json:"pr_number"`
+	Repo         string    `json:"repo"`
+	User         string    `json:"user"`
+	LockedAt     time.Time `json:"locked_at"`
+	PlanRevision string    `json:"plan_revision"`
+	PlanOutput   string    `json:"plan_output,omitempty"`
 }
 
 // LockRequest is used when attempting to acquire a lock.

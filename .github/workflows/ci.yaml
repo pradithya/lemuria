@@ -60,6 +60,9 @@ jobs:
       - name: Run lint
         run: make lint
 
+      - name: Check formatting
+        run: make fmt-check
+
       - name: Run tests with coverage
         run: make test-unit
 

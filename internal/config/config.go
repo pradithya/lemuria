@@ -105,11 +105,11 @@ type RoleAssignment struct {
 
 // RepoConfig represents per-repository configuration (.lemuria.yaml).
 type RepoConfig struct {
-	Version          int                   `yaml:"version"`
-	Autoplan         *bool                 `yaml:"autoplan,omitempty"`
-	RequireApproval  *bool                 `yaml:"require_approval,omitempty"`
-	Applications     []ApplicationMapping  `yaml:"applications"`
-	SyncRequirements []SyncRequirement     `yaml:"sync_requirements"`
+	Version          int                  `yaml:"version"`
+	Autoplan         *bool                `yaml:"autoplan,omitempty"`
+	RequireApproval  *bool                `yaml:"require_approval,omitempty"`
+	Applications     []ApplicationMapping `yaml:"applications"`
+	SyncRequirements []SyncRequirement    `yaml:"sync_requirements"`
 }
 
 // ApplicationMapping maps Argo CD applications to repository paths.

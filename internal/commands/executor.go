@@ -15,22 +15,22 @@ import (
 
 // Executor handles command execution.
 type Executor struct {
-	github  *github.Client
-	argocd  *argocd.Client
-	lock    lock.Manager
-	config  *config.Config
-	logger  *slog.Logger
+	github   *github.Client
+	argocd   *argocd.Client
+	lock     lock.Manager
+	config   *config.Config
+	logger   *slog.Logger
 	renderer *diff.Renderer
 }
 
 // NewExecutor creates a new command executor.
 func NewExecutor(gh *github.Client, argo *argocd.Client, lockMgr lock.Manager, cfg *config.Config, logger *slog.Logger) *Executor {
 	return &Executor{
-		github:  gh,
-		argocd:  argo,
-		lock:    lockMgr,
-		config:  cfg,
-		logger:  logger,
+		github:   gh,
+		argocd:   argo,
+		lock:     lockMgr,
+		config:   cfg,
+		logger:   logger,
 		renderer: diff.NewRenderer(),
 	}
 }

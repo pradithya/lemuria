@@ -11,11 +11,11 @@ import (
 
 func TestParseApplicationsFromYAML(t *testing.T) {
 	tests := []struct {
-		name       string
-		yaml       string
-		wantCount  int
-		wantNames  []string
-		wantRepo   string
+		name      string
+		yaml      string
+		wantCount int
+		wantNames []string
+		wantRepo  string
 	}{
 		{
 			name: "single application",

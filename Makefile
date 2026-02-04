@@ -3,7 +3,7 @@
         k3d-create k3d-delete k3d-build k3d-deploy k3d-all \
         helm-lint helm-template helm-template-ci helm-test helm-test-install helm-package helm-deploy helm-delete \
         tools install-tools \
-        deps vet frontend-deps frontend-type-check frontend-build \
+        deps vet lint fmt fmt-check generate frontend-deps frontend-type-check frontend-build \
         help
 
 # Build variables
@@ -133,6 +133,19 @@ lint:
 fmt:
 	go fmt ./...
 	goimports -w .
+
+# Check code formatting (for CI)
+fmt-check:
+	@echo "Checking code formatting..."
+	@go fmt ./... > /dev/null
+	@goimports -l . | grep -v '^vendor/' | tee /tmp/goimports.out
+	@if [ -s /tmp/goimports.out ]; then \
+		echo "The following files need formatting:"; \
+		cat /tmp/goimports.out; \
+		echo "Run 'make fmt' to fix formatting"; \
+		exit 1; \
+	fi
+	@echo "All files are properly formatted"
 
 # Generate mocks (if needed in future)
 generate:
@@ -388,6 +401,7 @@ help:
 	@echo "  make deps           - Download and tidy dependencies"
 	@echo "  make lint           - Run linter"
 	@echo "  make fmt            - Format code"
+	@echo "  make fmt-check      - Check code formatting (for CI)"
 	@echo ""
 	@echo "Options:"
 	@echo "  CONFIG=path/to/config.yaml  - Use custom config (default: config/test.yaml)"
