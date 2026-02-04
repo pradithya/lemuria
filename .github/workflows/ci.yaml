@@ -49,13 +49,13 @@ jobs:
           cache: true
 
       - name: Download dependencies
-        run: go mod download
+        run: make deps
 
       - name: Run go vet
-        run: go vet ./...
+        run: make vet
 
       - name: Run tests with coverage
-        run: go test -v -race -coverprofile=coverage.out ./internal/... ./pkg/...
+        run: make test-unit
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
@@ -78,16 +78,13 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
-        working-directory: web
+        run: make frontend-deps
 
       - name: Type check
-        run: npm run type-check || true
-        working-directory: web
+        run: make frontend-type-check
 
       - name: Build frontend
-        run: npm run build
-        working-directory: web
+        run: make frontend-build
 
   test-e2e:
     name: E2E Tests
@@ -103,7 +100,7 @@ jobs:
           cache: true
 
       - name: Run E2E tests (unit mode)
-        run: go test -v -short ./e2e/...
+        run: make test-e2e-short
 
   secrets-scan:
     name: Secrets Scan
@@ -135,25 +132,19 @@ jobs:
           version: v3.14.0
 
       - name: Helm Lint
-        run: helm lint charts/lemuria
+        run: make helm-lint
 
       - name: Helm Template
-        run: |
-          helm template test-release charts/lemuria \
-            --namespace lemuria \
-            --set secrets.existingSecret=lemuria-secrets
+        run: make helm-template
 
       - name: Helm Template with Ingress
-        run: |
-          helm template test-release charts/lemuria \
-            --namespace lemuria \
-            --values charts/lemuria/ci/test-values.yaml
+        run: make helm-template-ci
 
       - name: Install helm-unittest plugin
         run: helm plugin install https://github.com/helm-unittest/helm-unittest.git
 
       - name: Run Helm Unit Tests
-        run: helm unittest charts/lemuria
+        run: make helm-test
 
       - name: Set up chart-testing
         uses: helm/chart-testing-action@v2
@@ -279,8 +270,7 @@ jobs:
           sed -i "s/^appVersion:.*/appVersion: \"${{ steps.chart-version.outputs.version }}\"/" charts/lemuria/Chart.yaml
 
       - name: Package Helm chart
-        run: |
-          helm package charts/lemuria --destination .helm-packages
+        run: make helm-package
 
       - name: Push Helm chart to GHCR
         run: |
