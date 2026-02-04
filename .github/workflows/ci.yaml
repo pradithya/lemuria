@@ -51,6 +51,9 @@ jobs:
       - name: Download dependencies
         run: make deps
 
+      - name: Install tools
+        run: make install-tools
+
       - name: Run go vet
         run: make vet
 
@@ -129,10 +132,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
           version: v3.16.0
+
+      - name: Install tools
+        run: make install-tools
 
       - name: Helm Lint
         run: make helm-lint
@@ -142,9 +154,6 @@ jobs:
 
       - name: Helm Template with Ingress
         run: make helm-template-ci
-
-      - name: Install helm-unittest plugin
-        run: helm plugin install https://github.com/helm-unittest/helm-unittest.git --version v0.5.2
 
       - name: Run Helm Unit Tests
         run: make helm-test
