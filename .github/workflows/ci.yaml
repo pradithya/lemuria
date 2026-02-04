@@ -360,6 +360,7 @@ jobs:
             --version ${{ steps.chart-version.outputs.version }} \
             --namespace lemuria \
             --create-namespace \
+            -f local/values.yaml \
             --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
             --set image.tag=${{ steps.image-tag.outputs.tag }} \
             --wait \

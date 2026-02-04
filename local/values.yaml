@@ -1,0 +1,36 @@
+# Local deployment values for Lemuria
+# This file is used by CI for production deployments
+
+replicaCount: 2
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+ingress:
+  enabled: false
+
+config:
+  server:
+    port: 4141
+    host: "0.0.0.0"
+  defaults:
+    autoplan: true
+    require_approval: true
+    auto_merge: true
+    merge_method: "squash"
+
+secrets:
+  create: false
+  existingSecret: "lemuria-secrets"
+
+redis:
+  enabled: true
+  persistence:
+    enabled: true
+    storageClass: "standard"
+    size: 2Gi
