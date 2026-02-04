@@ -98,6 +98,11 @@ vet:
 # Development Tools
 # ============================================================================
 
+# Tool versions (pinned for reproducibility)
+GOLANGCI_LINT_VERSION ?= v1.62.2
+GOIMPORTS_VERSION ?= v0.28.0
+HELM_UNITTEST_VERSION ?= v0.5.2
+
 # Install all development tools
 tools: install-tools
 
@@ -105,22 +110,18 @@ install-tools:
 	@echo "Installing development tools..."
 	@echo ""
 	@echo "Installing Go tools..."
-	@command -v golangci-lint >/dev/null 2>&1 || { \
-		echo "  Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
-	}
-	@command -v goimports >/dev/null 2>&1 || { \
-		echo "  Installing goimports..."; \
-		go install golang.org/x/tools/cmd/goimports@latest; \
-	}
+	@echo "  Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."
+	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@echo "  Installing goimports $(GOIMPORTS_VERSION)..."
+	@go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
 	@echo ""
 	@echo "Installing Helm plugins..."
-	@if ! helm plugin list 2>/dev/null | grep -q unittest; then \
-		echo "  Installing helm-unittest plugin..."; \
-		helm plugin install https://github.com/helm-unittest/helm-unittest.git; \
-	else \
-		echo "  helm-unittest already installed"; \
+	@if helm plugin list 2>/dev/null | grep -q unittest; then \
+		echo "  Removing existing helm-unittest plugin..."; \
+		helm plugin uninstall unittest; \
 	fi
+	@echo "  Installing helm-unittest $(HELM_UNITTEST_VERSION)..."
+	@helm plugin install https://github.com/helm-unittest/helm-unittest.git --version $(HELM_UNITTEST_VERSION)
 	@echo ""
 	@echo "All development tools installed!"
 
