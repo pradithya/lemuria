@@ -2,12 +2,14 @@ package argocd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"sort"
 	"strings"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
+	"gopkg.in/yaml.v3"
 
 	"github.com/org/lemuria/internal/models"
 )
@@ -68,6 +70,7 @@ func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision s
 }
 
 // computeDiff generates a unified diff between two strings.
+// It converts JSON to YAML for better readability.
 func computeDiff(live, target string) string {
 	if live == "" || live == "null" {
 		live = ""
@@ -76,19 +79,46 @@ func computeDiff(live, target string) string {
 		target = ""
 	}
 
-	// Normalize whitespace
-	live = normalizeYAML(live)
-	target = normalizeYAML(target)
+	// Convert JSON to YAML for better readability
+	liveYAML := jsonToYAML(live)
+	targetYAML := jsonToYAML(target)
 
-	if live == target {
+	// Normalize whitespace
+	liveYAML = normalizeYAML(liveYAML)
+	targetYAML = normalizeYAML(targetYAML)
+
+	if liveYAML == targetYAML {
 		return ""
 	}
 
 	dmp := diffmatchpatch.New()
-	_ = dmp.DiffMain(live, target, true) // Used for semantic cleanup if needed
+	_ = dmp.DiffMain(liveYAML, targetYAML, true) // Used for semantic cleanup if needed
 
 	// Convert to unified diff format
-	return formatUnifiedDiff(live, target)
+	return formatUnifiedDiff(liveYAML, targetYAML)
+}
+
+// jsonToYAML converts a JSON string to prettified YAML.
+// If the input is not valid JSON, it returns the original string.
+func jsonToYAML(jsonStr string) string {
+	if jsonStr == "" {
+		return ""
+	}
+
+	// Parse JSON into a generic structure
+	var data interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
+		// Not valid JSON, return as-is
+		return jsonStr
+	}
+
+	// Convert to YAML with proper indentation
+	yamlBytes, err := yaml.Marshal(data)
+	if err != nil {
+		return jsonStr
+	}
+
+	return string(yamlBytes)
 }
 
 // normalizeYAML normalizes YAML for comparison.
