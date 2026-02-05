@@ -25,13 +25,28 @@ config:
     server_url: "https://argocd.utilitytools.app"
     insecure: false
   redis:
-    address: "redis://localhost:6379"
+    address: "lemuria-redis-master:6379"
     db: 0
   defaults:
     autoplan: true
     require_approval: true
     auto_merge: true
     merge_method: "squash"
+  auth:
+    enabled: true
+    session_ttl: "24h"
+    cookie_secure: true
+    default_role: "user"
+    oidc:
+      name: "Google"
+      issuer_url: "https://accounts.google.com"
+      client_id: "440035316190-loflfvahu7nl8eqfvhlgmdopup4fl073.apps.googleusercontent.com"
+      scopes:
+        - openid
+        - email
+        - profile
+      allowed_domains:
+        - "utilitytools.app"
 
 # Sensitive config (stored in Secret, merged on top of config above)
 secrets:
