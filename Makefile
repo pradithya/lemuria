@@ -1,7 +1,7 @@
 .PHONY: build build-frontend build-backend test test-unit test-e2e test-e2e-short e2e-setup e2e-teardown clean docker-build run run-redis run-backend run-frontend stop \
         k8s-deploy k8s-delete k8s-status k8s-logs k8s-port-forward k8s-restart \
         k3d-create k3d-delete k3d-build k3d-deploy k3d-all \
-        helm-lint helm-template helm-template-ci helm-test helm-test-install helm-package helm-deploy helm-delete \
+        helm-lint helm-template helm-template-ci helm-test helm-test-install helm-package helm-deploy helm-delete helm-dep \
         tools install-tools \
         deps vet lint fmt fmt-check generate frontend-deps frontend-type-check frontend-build \
         help
@@ -285,6 +285,9 @@ HELM_NAMESPACE ?= lemuria
 # Lint Helm chart
 helm-lint:
 	helm lint $(HELM_CHART_DIR)
+
+helm-dep:
+	helm dependency build $(HELM_CHART_DIR)
 
 # Template Helm chart (dry-run)
 helm-template:
