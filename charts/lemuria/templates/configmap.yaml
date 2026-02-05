@@ -7,16 +7,4 @@ metadata:
     app.kubernetes.io/component: config
 data:
   lemuria.yaml: |
-    server:
-      port: {{ .Values.config.server.port }}
-      host: {{ .Values.config.server.host | quote }}
-
-    redis:
-      address: "{{ include "lemuria.fullname" . }}-redis:6379"
-      db: {{ .Values.config.redis.db }}
-
-    defaults:
-      autoplan: {{ .Values.config.defaults.autoplan }}
-      require_approval: {{ .Values.config.defaults.require_approval }}
-      auto_merge: {{ .Values.config.defaults.auto_merge }}
-      merge_method: {{ .Values.config.defaults.merge_method | quote }}
+    {{- toYaml .Values.config | nindent 4 }}

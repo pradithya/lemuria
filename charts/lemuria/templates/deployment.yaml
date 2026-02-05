@@ -14,6 +14,9 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.secrets.create }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -39,38 +42,19 @@ spec:
             - name: http
               containerPort: {{ .Values.config.server.port }}
               protocol: TCP
-          env:
-            - name: GITHUB_WEBHOOK_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "lemuria.secretName" . }}
-                  key: GITHUB_WEBHOOK_SECRET
-            - name: GITHUB_APP_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "lemuria.secretName" . }}
-                  key: GITHUB_APP_ID
-            - name: GITHUB_APP_PRIVATE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "lemuria.secretName" . }}
-                  key: GITHUB_APP_PRIVATE_KEY
-            - name: ARGOCD_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "lemuria.secretName" . }}
-                  key: ARGOCD_TOKEN
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "lemuria.secretName" . }}
-                  key: REDIS_PASSWORD
           args:
-            - "-config"
+            # Base config (non-sensitive) from ConfigMap
+            - "--config"
             - "/app/config/lemuria.yaml"
+            # Secrets config (sensitive) from Secret - merged on top of base config
+            - "--config"
+            - "/app/secrets/secrets.yaml"
           volumeMounts:
             - name: config
               mountPath: /app/config
+              readOnly: true
+            - name: secrets
+              mountPath: /app/secrets
               readOnly: true
             - name: tmp
               mountPath: /tmp
@@ -86,6 +70,9 @@ spec:
         - name: config
           configMap:
             name: {{ include "lemuria.fullname" . }}-config
+        - name: secrets
+          secret:
+            secretName: {{ include "lemuria.secretName" . }}
         - name: tmp
           emptyDir: {}
       {{- with .Values.nodeSelector }}
