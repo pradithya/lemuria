@@ -87,14 +87,15 @@ type GitHubOAuthConfig struct {
 
 // OIDCConfig holds generic OIDC provider settings.
 type OIDCConfig struct {
-	Name          string   `koanf:"name"`
-	IssuerURL     string   `koanf:"issuer_url"`
-	ClientID      string   `koanf:"client_id"`
-	ClientSecret  string   `koanf:"client_secret"`
-	Scopes        []string `koanf:"scopes"`
-	UsernameClaim string   `koanf:"username_claim"`
-	EmailClaim    string   `koanf:"email_claim"`
-	GroupsClaim   string   `koanf:"groups_claim"`
+	Name           string   `koanf:"name"`
+	IssuerURL      string   `koanf:"issuer_url"`
+	ClientID       string   `koanf:"client_id"`
+	ClientSecret   string   `koanf:"client_secret"`
+	Scopes         []string `koanf:"scopes"`
+	UsernameClaim  string   `koanf:"username_claim"`
+	EmailClaim     string   `koanf:"email_claim"`
+	GroupsClaim    string   `koanf:"groups_claim"`
+	AllowedDomains []string `koanf:"allowed_domains"`
 }
 
 // RoleAssignment maps patterns to roles.
