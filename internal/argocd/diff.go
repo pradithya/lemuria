@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 
@@ -14,77 +13,100 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
-// ResourceDiff matches ArgoCD's ResourceDiff structure from the managed-resources API.
-// This contains the server-side computed diff information.
-type ResourceDiff struct {
-	Group               string `json:"group,omitempty"`
-	Kind                string `json:"kind,omitempty"`
-	Namespace           string `json:"namespace,omitempty"`
-	Name                string `json:"name,omitempty"`
-	TargetState         string `json:"targetState,omitempty"`
-	LiveState           string `json:"liveState,omitempty"`
-	Diff                string `json:"diff,omitempty"` // Deprecated by ArgoCD, but may still be present
-	Hook                bool   `json:"hook,omitempty"`
-	NormalizedLiveState string `json:"normalizedLiveState,omitempty"`
-	PredictedLiveState  string `json:"predictedLiveState,omitempty"`
-	ResourceVersion     string `json:"resourceVersion,omitempty"`
-	Modified            bool   `json:"modified,omitempty"`
+// resourceKey creates a unique key for a resource.
+func resourceKey(group, kind, namespace, name string) string {
+	if namespace != "" {
+		return fmt.Sprintf("%s/%s/%s/%s", group, kind, namespace, name)
+	}
+	return fmt.Sprintf("%s/%s/%s", group, kind, name)
 }
 
-// GetApplicationDiff computes the diff between live and target manifests.
-// It uses ArgoCD's server-side diff computation via the managed-resources API,
-// which returns NormalizedLiveState and PredictedLiveState - the same diff
-// logic used by `argocd app diff`.
+// GetApplicationDiff computes the diff between current target manifests and target manifests at revision.
+// If revision is empty, returns empty diff (same revision).
+// This compares what would be deployed now vs what would be deployed at the given revision.
 func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision string) ([]models.ManifestDiff, error) {
-	var resp struct {
-		Items []ResourceDiff `json:"items"`
+	// Get current target manifests (at app's configured targetRevision)
+	currentManifests, _, err := c.GetManifests(ctx, name, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getting current manifests: %w", err)
 	}
 
-	query := url.Values{}
+	// Get target manifests at the specified revision
+	var targetManifests []models.Manifest
 	if revision != "" {
-		query.Set("revision", revision)
+		targetManifests, _, err = c.GetManifests(ctx, name, &GetManifestsParams{Revision: revision})
+		if err != nil {
+			return nil, fmt.Errorf("getting manifests at revision %s: %w", revision, err)
+		}
+	} else {
+		// No revision specified - compare against itself (no diff)
+		targetManifests = currentManifests
 	}
 
-	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/managed-resources", query, &resp); err != nil {
-		return nil, fmt.Errorf("getting managed resources for %s: %w", name, err)
-	}
+	// Build maps keyed by group/kind/namespace/name
+	currentMap := buildManifestMap(currentManifests)
+	targetMap := buildManifestMap(targetManifests)
 
 	var diffs []models.ManifestDiff
-	for _, item := range resp.Items {
-		// Skip hooks (same as argocd app diff)
-		if item.Hook {
+
+	// Check resources in target (creates and updates)
+	for key, targetManifest := range targetMap {
+		resource := parseResourceKey(key)
+
+		// Skip secrets
+		if resource.Kind == "Secret" && (resource.APIVersion == "" || resource.APIVersion == "v1") {
 			continue
 		}
 
-		// Skip secrets - ArgoCD doesn't have access to k8s secret data
-		if item.Kind == "Secret" && (item.Group == "" || item.Group == "v1") {
-			continue
-		}
+		currentManifest, exists := currentMap[key]
 
-		// Use ArgoCD's server-side computed diff when available
-		diffStr := computeDiffFromArgoCD(item)
-
-		resource := models.ResourceKey{
-			APIVersion: item.Group,
-			Kind:       item.Kind,
-			Name:       item.Name,
-			Namespace:  item.Namespace,
-		}
-
-		action := determineDiffAction(item)
-
-		if action != models.DiffActionNone {
+		if !exists {
+			// Resource will be created (exists in target revision but not current)
 			diffs = append(diffs, models.ManifestDiff{
 				Resource:    resource,
-				LiveState:   item.LiveState,
-				TargetState: item.TargetState,
-				Diff:        diffStr,
-				Action:      action,
+				LiveState:   "",
+				TargetState: targetManifest.Raw,
+				Diff:        formatCreateDiff(targetManifest.Raw),
+				Action:      models.DiffActionCreate,
 			})
+		} else {
+			// Resource exists in both - check for updates
+			diffStr := computeDiff(currentManifest.Raw, targetManifest.Raw)
+			if diffStr != "" {
+				diffs = append(diffs, models.ManifestDiff{
+					Resource:    resource,
+					LiveState:   currentManifest.Raw,
+					TargetState: targetManifest.Raw,
+					Diff:        diffStr,
+					Action:      models.DiffActionUpdate,
+				})
+			}
 		}
 	}
 
-	// Sort diffs by resource for consistent output
+	// Check for resources that exist in current but not in target (deletes)
+	for key, currentManifest := range currentMap {
+		if _, exists := targetMap[key]; exists {
+			continue
+		}
+
+		resource := parseResourceKey(key)
+
+		// Skip secrets
+		if resource.Kind == "Secret" && (resource.APIVersion == "" || resource.APIVersion == "v1") {
+			continue
+		}
+
+		diffs = append(diffs, models.ManifestDiff{
+			Resource:    resource,
+			LiveState:   currentManifest.Raw,
+			TargetState: "",
+			Diff:        formatDeleteDiff(currentManifest.Raw),
+			Action:      models.DiffActionDelete,
+		})
+	}
+
+	// Sort for consistent output
 	sort.Slice(diffs, func(i, j int) bool {
 		return diffs[i].Resource.String() < diffs[j].Resource.String()
 	})
@@ -92,50 +114,83 @@ func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision s
 	return diffs, nil
 }
 
-// computeDiffFromArgoCD generates a unified diff using ArgoCD's server-side
-// normalized states. This uses NormalizedLiveState and PredictedLiveState
-// which are computed by ArgoCD using the same logic as `argocd app diff`.
-func computeDiffFromArgoCD(item ResourceDiff) string {
-	// If ArgoCD says it's not modified and both states exist, no diff needed
-	if !item.Modified && item.NormalizedLiveState != "" && item.PredictedLiveState != "" {
+// buildManifestMap creates a map of manifests keyed by group/kind/namespace/name.
+func buildManifestMap(manifests []models.Manifest) map[string]models.Manifest {
+	m := make(map[string]models.Manifest)
+	for _, manifest := range manifests {
+		group := extractGroup(manifest.APIVersion)
+		key := resourceKey(group, manifest.Kind, manifest.Namespace, manifest.Name)
+		m[key] = manifest
+	}
+	return m
+}
+
+// parseResourceKey parses a resource key back into a ResourceKey struct.
+func parseResourceKey(key string) models.ResourceKey {
+	parts := strings.SplitN(key, "/", 4)
+	var group, kind, namespace, name string
+	if len(parts) == 4 {
+		group, kind, namespace, name = parts[0], parts[1], parts[2], parts[3]
+	} else if len(parts) == 3 {
+		group, kind, name = parts[0], parts[1], parts[2]
+	}
+	return models.ResourceKey{
+		APIVersion: group,
+		Kind:       kind,
+		Name:       name,
+		Namespace:  namespace,
+	}
+}
+
+// extractGroup extracts the API group from an apiVersion (e.g., "apps/v1" -> "apps", "v1" -> "").
+func extractGroup(apiVersion string) string {
+	if idx := strings.Index(apiVersion, "/"); idx != -1 {
+		return apiVersion[:idx]
+	}
+	return ""
+}
+
+// computeDiff generates a unified diff between current and target states.
+func computeDiff(currentJSON, targetJSON string) string {
+	currentYAML := jsonToYAML(currentJSON)
+	targetYAML := jsonToYAML(targetJSON)
+
+	if currentYAML == targetYAML {
 		return ""
 	}
 
-	// Use ArgoCD's normalized states if available (preferred - this is what argocd diff uses)
-	liveState := item.NormalizedLiveState
-	targetState := item.PredictedLiveState
+	return generateUnifiedDiff(currentYAML, targetYAML, "current", "target")
+}
 
-	// Fallback to raw states if normalized not available
-	if liveState == "" {
-		liveState = item.LiveState
-	}
-	if targetState == "" {
-		targetState = item.TargetState
-	}
-
-	// Handle empty states
-	if (liveState == "" || liveState == "null") && (targetState == "" || targetState == "null") {
+// formatCreateDiff formats a diff for a new resource.
+func formatCreateDiff(targetJSON string) string {
+	targetYAML := jsonToYAML(targetJSON)
+	if targetYAML == "" {
 		return ""
 	}
+	return generateUnifiedDiff("", targetYAML, "current", "target")
+}
 
-	// Convert to YAML for human-readable diff output
-	liveYAML := jsonToYAML(liveState)
-	targetYAML := jsonToYAML(targetState)
-
-	if liveYAML == targetYAML {
+// formatDeleteDiff formats a diff for a deleted resource.
+func formatDeleteDiff(currentJSON string) string {
+	currentYAML := jsonToYAML(currentJSON)
+	if currentYAML == "" {
 		return ""
 	}
+	return generateUnifiedDiff(currentYAML, "", "current", "target")
+}
 
-	// Generate unified diff
-	unifiedDiff := difflib.UnifiedDiff{
-		A:        difflib.SplitLines(liveYAML),
-		B:        difflib.SplitLines(targetYAML),
-		FromFile: "live",
-		ToFile:   "target",
+// generateUnifiedDiff creates a unified diff string.
+func generateUnifiedDiff(a, b, fromFile, toFile string) string {
+	diff := difflib.UnifiedDiff{
+		A:        difflib.SplitLines(a),
+		B:        difflib.SplitLines(b),
+		FromFile: fromFile,
+		ToFile:   toFile,
 		Context:  3,
 	}
 
-	result, err := difflib.GetUnifiedDiffString(unifiedDiff)
+	result, err := difflib.GetUnifiedDiffString(diff)
 	if err != nil {
 		return ""
 	}
@@ -143,8 +198,7 @@ func computeDiffFromArgoCD(item ResourceDiff) string {
 	return result
 }
 
-// jsonToYAML converts a JSON string to YAML for more readable diffs.
-// This matches ArgoCD's diff output format.
+// jsonToYAML converts a JSON string to YAML for human-readable diffs.
 func jsonToYAML(jsonStr string) string {
 	jsonStr = strings.TrimSpace(jsonStr)
 	if jsonStr == "" || jsonStr == "null" {
@@ -153,13 +207,14 @@ func jsonToYAML(jsonStr string) string {
 
 	var data map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
-		// If it's not valid JSON, return as-is
 		return jsonStr
 	}
 
+	// Remove fields that cause noisy diffs
+	cleanForDiff(data)
+
 	yamlBytes, err := yaml.Marshal(data)
 	if err != nil {
-		// Fallback to prettified JSON
 		pretty, _ := json.MarshalIndent(data, "", "  ")
 		return string(pretty)
 	}
@@ -167,29 +222,25 @@ func jsonToYAML(jsonStr string) string {
 	return string(yamlBytes)
 }
 
-// determineDiffAction determines what will happen to the resource during sync,
-// using ArgoCD's server-side computed state.
-func determineDiffAction(item ResourceDiff) models.DiffAction {
-	liveEmpty := item.LiveState == "" || item.LiveState == "null"
-	targetEmpty := item.TargetState == "" || item.TargetState == "null"
-
-	if liveEmpty && !targetEmpty {
-		return models.DiffActionCreate
-	}
-	if !liveEmpty && targetEmpty {
-		return models.DiffActionDelete
-	}
-	// Use ArgoCD's Modified flag when available
-	if item.Modified {
-		return models.DiffActionUpdate
-	}
-	// Fallback: check if normalized states differ
-	if item.NormalizedLiveState != "" && item.PredictedLiveState != "" {
-		if item.NormalizedLiveState != item.PredictedLiveState {
-			return models.DiffActionUpdate
+// cleanForDiff removes fields that cause noisy diffs.
+func cleanForDiff(data map[string]any) {
+	// Remove metadata fields that change frequently
+	if metadata, ok := data["metadata"].(map[string]any); ok {
+		delete(metadata, "managedFields")
+		delete(metadata, "resourceVersion")
+		delete(metadata, "uid")
+		delete(metadata, "creationTimestamp")
+		delete(metadata, "generation")
+		// Clean up annotations
+		if annotations, ok := metadata["annotations"].(map[string]any); ok {
+			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+			if len(annotations) == 0 {
+				delete(metadata, "annotations")
+			}
 		}
 	}
-	return models.DiffActionNone
+	// Remove status - we only care about spec
+	delete(data, "status")
 }
 
 // DiffSummary provides a summary of changes.
