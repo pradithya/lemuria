@@ -281,6 +281,39 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 
 // isAppAffected checks if an application is affected by the changed files.
 func (e *Executor) isAppAffected(app models.Application, repoURL string, files []string, repoConfig *config.RepoConfig) bool {
+	// First, check if there's an explicit path mapping in .lemuria.yaml
+	// If there is, use it regardless of whether the app's source references this repo
+	// (e.g., Helm chart apps where the Application CR is in this repo but the chart is external)
+	if repoConfig != nil {
+		for _, mapping := range repoConfig.Applications {
+			nameMatches := matchAppName(mapping.Name, app.Name)
+			e.logger.Debug("checking repo config mapping",
+				"app", app.Name,
+				"mapping_name", mapping.Name,
+				"mapping_paths", mapping.Paths,
+				"name_matches", nameMatches,
+			)
+			if nameMatches {
+				matched := github.FilterFilesByPatterns(
+					filesToChangedFiles(files),
+					mapping.Paths,
+				)
+				e.logger.Debug("path pattern matching result",
+					"app", app.Name,
+					"patterns", mapping.Paths,
+					"matched_files", matched,
+					"matched_count", len(matched),
+				)
+				if len(matched) > 0 {
+					e.logger.Debug("application affected via explicit .lemuria.yaml mapping",
+						"app", app.Name,
+					)
+					return true
+				}
+			}
+		}
+	}
+
 	// Check if app references this repo
 	appRepos := app.GetRepoURLs()
 	repoMatch := false
@@ -312,34 +345,6 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 	e.logger.Debug("application references target repo",
 		"app", app.Name,
 	)
-
-	// If we have repo config, use path mappings
-	if repoConfig != nil {
-		for _, mapping := range repoConfig.Applications {
-			nameMatches := matchAppName(mapping.Name, app.Name)
-			e.logger.Debug("checking repo config mapping",
-				"app", app.Name,
-				"mapping_name", mapping.Name,
-				"mapping_paths", mapping.Paths,
-				"name_matches", nameMatches,
-			)
-			if nameMatches {
-				matched := github.FilterFilesByPatterns(
-					filesToChangedFiles(files),
-					mapping.Paths,
-				)
-				e.logger.Debug("path pattern matching result",
-					"app", app.Name,
-					"patterns", mapping.Paths,
-					"matched_files", matched,
-					"matched_count", len(matched),
-				)
-				if len(matched) > 0 {
-					return true
-				}
-			}
-		}
-	}
 
 	// Default: check if any changed file is in the app's path
 	if app.Path != "" {
