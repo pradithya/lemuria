@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -14,13 +15,14 @@ import (
 
 // OIDCProvider implements authentication via a generic OIDC provider.
 type OIDCProvider struct {
-	name          string
-	provider      *oidc.Provider
-	config        *oauth2.Config
-	verifier      *oidc.IDTokenVerifier
-	usernameClaim string
-	emailClaim    string
-	groupsClaim   string
+	name           string
+	provider       *oidc.Provider
+	config         *oauth2.Config
+	verifier       *oidc.IDTokenVerifier
+	usernameClaim  string
+	emailClaim     string
+	groupsClaim    string
+	allowedDomains []string
 }
 
 // NewOIDCProvider creates a new OIDC provider.
@@ -68,13 +70,14 @@ func NewOIDCProvider(ctx context.Context, cfg *config.OIDCConfig, baseURL string
 	}
 
 	return &OIDCProvider{
-		name:          name,
-		provider:      provider,
-		config:        oauth2Config,
-		verifier:      verifier,
-		usernameClaim: usernameClaim,
-		emailClaim:    emailClaim,
-		groupsClaim:   cfg.GroupsClaim,
+		name:           name,
+		provider:       provider,
+		config:         oauth2Config,
+		verifier:       verifier,
+		usernameClaim:  usernameClaim,
+		emailClaim:     emailClaim,
+		groupsClaim:    cfg.GroupsClaim,
+		allowedDomains: cfg.AllowedDomains,
 	}, nil
 }
 
@@ -122,7 +125,33 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code string) (*models.User,
 	// Build user from claims
 	user := p.buildUser(idToken.Subject, claims)
 
+	// Validate email domain if restrictions are configured
+	if len(p.allowedDomains) > 0 {
+		if user.Email == "" {
+			return nil, fmt.Errorf("email is required but not provided by identity provider")
+		}
+		if !p.isEmailDomainAllowed(user.Email) {
+			return nil, fmt.Errorf("email domain not allowed: %s", user.Email)
+		}
+	}
+
 	return user, nil
+}
+
+// isEmailDomainAllowed checks if the email domain is in the allowed list.
+func (p *OIDCProvider) isEmailDomainAllowed(email string) bool {
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return false
+	}
+	domain := strings.ToLower(parts[1])
+
+	for _, allowed := range p.allowedDomains {
+		if strings.ToLower(allowed) == domain {
+			return true
+		}
+	}
+	return false
 }
 
 // buildUser creates a User from OIDC claims.
