@@ -14,8 +14,9 @@ import (
 
 // Client wraps the GitHub API client with Lemuria-specific functionality.
 type Client struct {
-	client *github.Client
-	appID  int64
+	client     *github.Client
+	appID      int64
+	privateKey []byte
 }
 
 // NewClient creates a new GitHub client using GitHub App authentication.
@@ -36,8 +37,9 @@ func NewClient(cfg config.GitHubConfig) (*Client, error) {
 	appClient := github.NewClient(&http.Client{Transport: appTransport})
 
 	return &Client{
-		client: appClient,
-		appID:  cfg.AppID,
+		client:     appClient,
+		appID:      cfg.AppID,
+		privateKey: privateKey,
 	}, nil
 }
 
@@ -73,8 +75,7 @@ func (c *Client) GetInstallationClient(ctx context.Context, owner string) (*gith
 	}
 
 	// Create installation transport
-	privateKey, _ := loadPrivateKey(os.Getenv("GITHUB_APP_PRIVATE_KEY"))
-	itr, err := ghinstallation.New(http.DefaultTransport, c.appID, installationID, privateKey)
+	itr, err := ghinstallation.New(http.DefaultTransport, c.appID, installationID, c.privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("creating installation transport: %w", err)
 	}
