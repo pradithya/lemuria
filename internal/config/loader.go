@@ -2,29 +2,51 @@ package config
 
 import (
 	"fmt"
-	"os"
-	"regexp"
 	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/env"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/providers/rawbytes"
+	"github.com/knadh/koanf/v2"
 )
 
-// envVarPattern matches ${VAR_NAME} patterns for environment variable substitution.
-var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
-
-// Load reads and parses the configuration file at the given path.
-func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading config file: %w", err)
+// Load reads and parses configuration files at the given paths.
+// Multiple files are merged in order - later files override earlier ones.
+// Environment variables override config values using double underscore (__) for hierarchy.
+// Example: ARGOCD__TOKEN overrides argocd.token
+func Load(paths ...string) (*Config, error) {
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("at least one config path is required")
 	}
 
-	// Substitute environment variables
-	content := substituteEnvVars(string(data))
+	k := koanf.New(".")
 
+	// Load YAML config files in order (later files override earlier ones)
+	for _, path := range paths {
+		if err := k.Load(file.Provider(path), yaml.Parser()); err != nil {
+			return nil, fmt.Errorf("reading config file %s: %w", path, err)
+		}
+	}
+
+	// Overlay environment variables
+	// Uses double underscore (__) for hierarchy, single underscore preserved in keys
+	// Examples:
+	//   ARGOCD__TOKEN       -> argocd.token
+	//   ARGOCD__SERVER_URL  -> argocd.server_url
+	//   GITHUB__WEBHOOK_SECRET -> github.webhook_secret
+	if err := k.Load(env.Provider("", ".", func(s string) string {
+		key := strings.ToLower(s)
+		key = strings.ReplaceAll(key, "__", ".")
+		return key
+	}), nil); err != nil {
+		return nil, fmt.Errorf("loading env vars: %w", err)
+	}
+
+	// Unmarshal into default config (preserves defaults for unset fields)
 	cfg := DefaultConfig()
-	if err := yaml.Unmarshal([]byte(content), cfg); err != nil {
-		return nil, fmt.Errorf("parsing config file: %w", err)
+	if err := k.Unmarshal("", cfg); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
 	}
 
 	if err := validate(cfg); err != nil {
@@ -36,11 +58,15 @@ func Load(path string) (*Config, error) {
 
 // LoadRepoConfig reads and parses a repository's .lemuria.yaml file.
 func LoadRepoConfig(data []byte) (*RepoConfig, error) {
-	content := substituteEnvVars(string(data))
+	k := koanf.New(".")
+
+	if err := k.Load(rawbytes.Provider(data), yaml.Parser()); err != nil {
+		return nil, fmt.Errorf("parsing repo config: %w", err)
+	}
 
 	var cfg RepoConfig
-	if err := yaml.Unmarshal([]byte(content), &cfg); err != nil {
-		return nil, fmt.Errorf("parsing repo config: %w", err)
+	if err := k.Unmarshal("", &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshaling repo config: %w", err)
 	}
 
 	if cfg.Version == 0 {
@@ -48,26 +74,6 @@ func LoadRepoConfig(data []byte) (*RepoConfig, error) {
 	}
 
 	return &cfg, nil
-}
-
-// substituteEnvVars replaces ${VAR_NAME} patterns with environment variable values.
-func substituteEnvVars(content string) string {
-	return envVarPattern.ReplaceAllStringFunc(content, func(match string) string {
-		// Extract variable name from ${VAR_NAME}
-		varName := match[2 : len(match)-1]
-
-		// Check for default value syntax: ${VAR_NAME:-default}
-		if idx := strings.Index(varName, ":-"); idx != -1 {
-			name := varName[:idx]
-			defaultVal := varName[idx+2:]
-			if val := os.Getenv(name); val != "" {
-				return val
-			}
-			return defaultVal
-		}
-
-		return os.Getenv(varName)
-	})
 }
 
 // validate checks that required configuration fields are set.

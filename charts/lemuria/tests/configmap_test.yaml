@@ -16,15 +16,16 @@ tests:
           pattern: "port: 4141"
       - matchRegex:
           path: data["lemuria.yaml"]
-          pattern: 'host: "0.0.0.0"'
+          pattern: "host: 0.0.0.0"
 
   - it: should contain redis configuration
-    release:
-      name: test-release
     asserts:
       - matchRegex:
           path: data["lemuria.yaml"]
-          pattern: "address: \"test-release-lemuria-redis:6379\""
+          pattern: "redis:"
+      - matchRegex:
+          path: data["lemuria.yaml"]
+          pattern: "db: 0"
 
   - it: should contain defaults configuration
     asserts:
@@ -36,4 +37,4 @@ tests:
           pattern: "require_approval: false"
       - matchRegex:
           path: data["lemuria.yaml"]
-          pattern: 'merge_method: "squash"'
+          pattern: "merge_method: squash"

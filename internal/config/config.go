@@ -4,134 +4,136 @@ import "time"
 
 // Config represents the main Lemuria server configuration.
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	GitHub   GitHubConfig   `yaml:"github"`
-	ArgoCD   ArgoCDConfig   `yaml:"argocd"`
-	Redis    RedisConfig    `yaml:"redis"`
-	Defaults DefaultsConfig `yaml:"defaults"`
-	Auth     AuthConfig     `yaml:"auth"`
+	Server   ServerConfig   `koanf:"server"`
+	GitHub   GitHubConfig   `koanf:"github"`
+	ArgoCD   ArgoCDConfig   `koanf:"argocd"`
+	Redis    RedisConfig    `koanf:"redis"`
+	Defaults DefaultsConfig `koanf:"defaults"`
+	Auth     AuthConfig     `koanf:"auth"`
 }
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port    int    `yaml:"port"`
-	Host    string `yaml:"host"`
-	BaseURL string `yaml:"base_url"`
+	Port     int    `koanf:"port"`
+	Host     string `koanf:"host"`
+	BaseURL  string `koanf:"base_url"`
+	LogLevel string `koanf:"log_level"`
 }
 
 // GitHubConfig holds GitHub App authentication settings.
 type GitHubConfig struct {
-	WebhookSecret string `yaml:"webhook_secret"`
-	AppID         int64  `yaml:"app_id"`
-	AppPrivateKey string `yaml:"app_private_key"`
+	WebhookSecret string `koanf:"webhook_secret"`
+	AppID         int64  `koanf:"app_id"`
+	AppPrivateKey string `koanf:"app_private_key"`
 }
 
 // ArgoCDConfig holds Argo CD connection settings.
 type ArgoCDConfig struct {
-	ServerURL string `yaml:"server_url"`
-	Token     string `yaml:"token"`
-	Insecure  bool   `yaml:"insecure"`
+	ServerURL string `koanf:"server_url"`
+	Token     string `koanf:"token"`
+	Insecure  bool   `koanf:"insecure"`
 }
 
 // RedisConfig holds Redis connection settings.
 type RedisConfig struct {
-	Address  string `yaml:"address"`
-	Password string `yaml:"password"`
-	DB       int    `yaml:"db"`
+	Address  string `koanf:"address"`
+	Password string `koanf:"password"`
+	DB       int    `koanf:"db"`
 }
 
 // DefaultsConfig holds default behavior settings.
 type DefaultsConfig struct {
-	Autoplan           bool     `yaml:"autoplan"`
-	RequireApproval    bool     `yaml:"require_approval"`
-	DeleteSourceBranch bool     `yaml:"delete_source_branch"`
-	AllowedRepos       []string `yaml:"allowed_repos"`
-	AutoMerge          bool     `yaml:"auto_merge"`
-	MergeMethod        string   `yaml:"merge_method"`
+	Autoplan           bool     `koanf:"autoplan"`
+	RequireApproval    bool     `koanf:"require_approval"`
+	DeleteSourceBranch bool     `koanf:"delete_source_branch"`
+	AllowedRepos       []string `koanf:"allowed_repos"`
+	AutoMerge          bool     `koanf:"auto_merge"`
+	MergeMethod        string   `koanf:"merge_method"`
 }
 
 // AuthConfig holds authentication settings.
 type AuthConfig struct {
-	Enabled         bool               `yaml:"enabled"`
-	SessionSecret   string             `yaml:"session_secret"`
-	SessionTTL      time.Duration      `yaml:"session_ttl"`
-	CookieDomain    string             `yaml:"cookie_domain"`
-	CookieSecure    bool               `yaml:"cookie_secure"`
-	DefaultRole     string             `yaml:"default_role"`
-	GitHub          *GitHubOAuthConfig `yaml:"github,omitempty"`
-	OIDC            *OIDCConfig        `yaml:"oidc,omitempty"`
-	Basic           *BasicAuthConfig   `yaml:"basic,omitempty"`
-	RoleAssignments []RoleAssignment   `yaml:"role_assignments"`
+	Enabled         bool               `koanf:"enabled"`
+	SessionSecret   string             `koanf:"session_secret"`
+	SessionTTL      time.Duration      `koanf:"session_ttl"`
+	CookieDomain    string             `koanf:"cookie_domain"`
+	CookieSecure    bool               `koanf:"cookie_secure"`
+	DefaultRole     string             `koanf:"default_role"`
+	GitHub          *GitHubOAuthConfig `koanf:"github"`
+	OIDC            *OIDCConfig        `koanf:"oidc"`
+	Basic           *BasicAuthConfig   `koanf:"basic"`
+	RoleAssignments []RoleAssignment   `koanf:"role_assignments"`
 }
 
 // BasicAuthConfig holds basic auth settings for local development.
 type BasicAuthConfig struct {
-	Users []BasicAuthUser `yaml:"users"`
+	Users []BasicAuthUser `koanf:"users"`
 }
 
 // BasicAuthUser represents a basic auth user.
 type BasicAuthUser struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-	Role     string `yaml:"role"`
+	Username string `koanf:"username"`
+	Password string `koanf:"password"`
+	Role     string `koanf:"role"`
 }
 
 // GitHubOAuthConfig holds GitHub OAuth settings (separate from GitHub App).
 type GitHubOAuthConfig struct {
-	ClientID     string   `yaml:"client_id"`
-	ClientSecret string   `yaml:"client_secret"`
-	AllowedOrgs  []string `yaml:"allowed_orgs,omitempty"`
-	AllowedTeams []string `yaml:"allowed_teams,omitempty"`
+	ClientID     string   `koanf:"client_id"`
+	ClientSecret string   `koanf:"client_secret"`
+	AllowedOrgs  []string `koanf:"allowed_orgs"`
+	AllowedTeams []string `koanf:"allowed_teams"`
 }
 
 // OIDCConfig holds generic OIDC provider settings.
 type OIDCConfig struct {
-	Name          string   `yaml:"name"`
-	IssuerURL     string   `yaml:"issuer_url"`
-	ClientID      string   `yaml:"client_id"`
-	ClientSecret  string   `yaml:"client_secret"`
-	Scopes        []string `yaml:"scopes"`
-	UsernameClaim string   `yaml:"username_claim"`
-	EmailClaim    string   `yaml:"email_claim"`
-	GroupsClaim   string   `yaml:"groups_claim,omitempty"`
+	Name          string   `koanf:"name"`
+	IssuerURL     string   `koanf:"issuer_url"`
+	ClientID      string   `koanf:"client_id"`
+	ClientSecret  string   `koanf:"client_secret"`
+	Scopes        []string `koanf:"scopes"`
+	UsernameClaim string   `koanf:"username_claim"`
+	EmailClaim    string   `koanf:"email_claim"`
+	GroupsClaim   string   `koanf:"groups_claim"`
 }
 
 // RoleAssignment maps patterns to roles.
 type RoleAssignment struct {
-	Pattern  string `yaml:"pattern"`
-	Role     string `yaml:"role"`
-	Provider string `yaml:"provider,omitempty"`
+	Pattern  string `koanf:"pattern"`
+	Role     string `koanf:"role"`
+	Provider string `koanf:"provider"`
 }
 
 // RepoConfig represents per-repository configuration (.lemuria.yaml).
 type RepoConfig struct {
-	Version          int                  `yaml:"version"`
-	Autoplan         *bool                `yaml:"autoplan,omitempty"`
-	RequireApproval  *bool                `yaml:"require_approval,omitempty"`
-	Applications     []ApplicationMapping `yaml:"applications"`
-	SyncRequirements []SyncRequirement    `yaml:"sync_requirements"`
+	Version          int                  `koanf:"version"`
+	Autoplan         *bool                `koanf:"autoplan"`
+	RequireApproval  *bool                `koanf:"require_approval"`
+	Applications     []ApplicationMapping `koanf:"applications"`
+	SyncRequirements []SyncRequirement    `koanf:"sync_requirements"`
 }
 
 // ApplicationMapping maps Argo CD applications to repository paths.
 type ApplicationMapping struct {
-	Name           string   `yaml:"name"`
-	Paths          []string `yaml:"paths"`
-	ApplicationSet string   `yaml:"applicationset,omitempty"`
+	Name           string   `koanf:"name"`
+	Paths          []string `koanf:"paths"`
+	ApplicationSet string   `koanf:"applicationset"`
 }
 
 // SyncRequirement defines sync permissions for applications.
 type SyncRequirement struct {
-	Name            string   `yaml:"name"`
-	RequireApproval bool     `yaml:"require_approval"`
-	AllowedUsers    []string `yaml:"allowed_users"`
+	Name            string   `koanf:"name"`
+	RequireApproval bool     `koanf:"require_approval"`
+	AllowedUsers    []string `koanf:"allowed_users"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port: 4141,
-			Host: "0.0.0.0",
+			Port:     4141,
+			Host:     "0.0.0.0",
+			LogLevel: "info",
 		},
 		Redis: RedisConfig{
 			Address: "localhost:6379",
