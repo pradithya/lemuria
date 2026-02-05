@@ -1,7 +1,7 @@
 # Local deployment values for Lemuria
-# This file is used by CI for production deployments
+# This file is used for local development
 
-replicaCount: 2
+replicaCount: 1
 
 resources:
   limits:
@@ -14,22 +14,39 @@ resources:
 ingress:
   enabled: false
 
+# Non-sensitive config (stored in ConfigMap)
 config:
   server:
     port: 4141
     host: "0.0.0.0"
+    base_url: "http://localhost:4141"
+    log_level: "debug"
+  argocd:
+    server_url: "https://argocd.local"
+    insecure: true
+  redis:
+    db: 0
   defaults:
     autoplan: true
-    require_approval: true
-    auto_merge: true
+    require_approval: false
+    auto_merge: false
     merge_method: "squash"
 
+# Sensitive config (stored in Secret, merged on top of config above)
 secrets:
-  create: false
-  existingSecret: "lemuria-secrets"
+  create: true
+  existingSecret: ""
+  config:
+    github:
+      webhook_secret: "local-webhook-secret"
+      app_id: 12345
+      app_private_key: "-----BEGIN RSA PRIVATE KEY-----\nPLACEHOLDER\n-----END RSA PRIVATE KEY-----"
+    argocd:
+      token: "local-argocd-token"
+    redis:
+      password: ""
 
 redis:
   enabled: true
   persistence:
-    enabled: true
-    size: 2Gi
+    enabled: false

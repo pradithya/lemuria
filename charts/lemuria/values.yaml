@@ -108,36 +108,55 @@ tolerations: []
 # -- Affinity rules for pod scheduling
 affinity: {}
 
-# Lemuria configuration
+# Lemuria configuration (non-sensitive values stored in ConfigMap)
+# Sensitive values are stored in Secret and injected via environment variables
 config:
   server:
+    # -- Server port
     port: 4141
+    # -- Server host
     host: "0.0.0.0"
+    # -- Base URL for OAuth callbacks
+    base_url: ""
+    # -- Log level (debug, info, warn, error)
+    log_level: "info"
+  argocd:
+    # -- ArgoCD server URL (non-sensitive, can be in ConfigMap)
+    server_url: ""
+    # -- Skip TLS verification
+    insecure: false
   redis:
-    address: "{{ include \"lemuria.fullname\" . }}-redis:6379"
+    # -- Redis database number
     db: 0
   defaults:
+    # -- Enable autoplan on PR
     autoplan: true
+    # -- Require approval before sync
     require_approval: false
+    # -- Auto merge PR after successful sync
     auto_merge: false
+    # -- Merge method (squash, merge, rebase)
     merge_method: "squash"
+    # -- Allowed repositories (empty allows all)
+    allowed_repos: []
 
-# Secrets configuration
+# Secrets configuration (sensitive values stored in Secret)
+# This config is merged on top of the base config above
 secrets:
   # -- Create secrets (set to false to use existing secrets)
   create: false
   # -- Name of existing secret to use (if create is false)
   existingSecret: "lemuria-secrets"
-  # -- GitHub webhook secret
-  githubWebhookSecret: ""
-  # -- GitHub App ID
-  githubAppId: ""
-  # -- GitHub App private key
-  githubAppPrivateKey: ""
-  # -- ArgoCD token
-  argocdToken: ""
-  # -- Redis password
-  redisPassword: ""
+  # -- Sensitive config values (rendered as YAML in the secret)
+  config:
+    github:
+      webhook_secret: ""
+      app_id: 0
+      app_private_key: ""
+    argocd:
+      token: ""
+    redis:
+      password: ""
 
 # Redis configuration
 redis:
