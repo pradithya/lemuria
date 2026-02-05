@@ -170,7 +170,7 @@ redis:
   image:
     # -- Use official Redis image instead of Bitnami
     repository: redis
-    tag: 7-alpine
+    tag: "7"
   auth:
     # -- Enable Redis authentication
     enabled: false
