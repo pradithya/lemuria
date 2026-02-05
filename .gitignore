@@ -65,3 +65,7 @@ temp/
 # Frontend
 web/node_modules/
 static/
+
+# Helm chart dependencies
+charts/*/charts/
+charts/*/*.lock

@@ -158,33 +158,32 @@ secrets:
     redis:
       password: ""
 
-# Redis configuration
+# Redis subchart configuration (Bitnami Redis)
+# See https://github.com/bitnami/charts/tree/main/bitnami/redis for all options
 redis:
   # -- Enable Redis deployment
   enabled: true
+  # -- Redis architecture (standalone or replication)
+  architecture: standalone
   image:
-    # -- Redis image repository
+    # -- Use official Redis image instead of Bitnami
     repository: redis
-    # -- Redis image tag
     tag: 7-alpine
-    # -- Redis image pull policy
-    pullPolicy: IfNotPresent
-  resources:
-    limits:
-      cpu: 200m
-      memory: 128Mi
-    requests:
-      cpu: 50m
-      memory: 64Mi
-  persistence:
-    # -- Enable Redis data persistence
+  auth:
+    # -- Enable Redis authentication
     enabled: false
-    # -- Storage class for Redis PVC
-    storageClass: ""
-    # -- Size of Redis PVC
-    size: 1Gi
-  securityContext:
-    runAsNonRoot: true
-    runAsUser: 999
-    runAsGroup: 999
-    fsGroup: 999
+  master:
+    persistence:
+      # -- Enable Redis data persistence
+      enabled: false
+      # -- Storage class for Redis PVC
+      storageClass: ""
+      # -- Size of Redis PVC
+      size: 1Gi
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi

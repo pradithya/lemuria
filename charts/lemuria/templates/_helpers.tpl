@@ -73,22 +73,8 @@ Create the secret name
 {{- end }}
 
 {{/*
-Redis labels
+Redis host (Bitnami Redis subchart service name)
 */}}
-{{- define "lemuria.redis.labels" -}}
-helm.sh/chart: {{ include "lemuria.chart" . }}
-{{ include "lemuria.redis.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- end }}
-
-{{/*
-Redis selector labels
-*/}}
-{{- define "lemuria.redis.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "lemuria.fullname" . }}-redis
-app.kubernetes.io/instance: {{ .Release.Name }}
-app.kubernetes.io/component: cache
+{{- define "lemuria.redis.host" -}}
+{{- printf "%s-redis-master" .Release.Name }}
 {{- end }}
