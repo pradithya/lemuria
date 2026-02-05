@@ -6,228 +6,311 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
-func TestComputeDiffFromArgoCD(t *testing.T) {
+func TestResourceKey(t *testing.T) {
 	tests := []struct {
-		name     string
-		item     ResourceDiff
-		wantDiff bool // true if we expect a non-empty diff
+		name      string
+		group     string
+		kind      string
+		namespace string
+		resName   string
+		want      string
 	}{
 		{
-			name: "modified resource with normalized states",
-			item: ResourceDiff{
-				Kind:                "Deployment",
-				Name:                "my-app",
-				Modified:            true,
-				NormalizedLiveState: `{"replicas": 2}`,
-				PredictedLiveState:  `{"replicas": 3}`,
-			},
-			wantDiff: true,
+			name:      "with namespace",
+			group:     "apps",
+			kind:      "Deployment",
+			namespace: "default",
+			resName:   "my-app",
+			want:      "apps/Deployment/default/my-app",
 		},
 		{
-			name: "unmodified resource returns empty",
-			item: ResourceDiff{
-				Kind:                "Deployment",
-				Name:                "my-app",
-				Modified:            false,
-				NormalizedLiveState: `{"replicas": 2}`,
-				PredictedLiveState:  `{"replicas": 2}`,
-			},
-			wantDiff: false,
+			name:      "without namespace",
+			group:     "",
+			kind:      "Namespace",
+			namespace: "",
+			resName:   "my-ns",
+			want:      "/Namespace/my-ns",
 		},
 		{
-			name: "new resource with only target state",
-			item: ResourceDiff{
-				Kind:        "ConfigMap",
-				Name:        "my-config",
-				Modified:    true,
-				LiveState:   "null",
-				TargetState: `{"data": {"key": "value"}}`,
-			},
-			wantDiff: true,
-		},
-		{
-			name: "resource being deleted",
-			item: ResourceDiff{
-				Kind:        "ConfigMap",
-				Name:        "old-config",
-				Modified:    true,
-				LiveState:   `{"data": {"key": "value"}}`,
-				TargetState: "null",
-			},
-			wantDiff: true,
-		},
-		{
-			name: "empty states returns empty diff",
-			item: ResourceDiff{
-				Kind:        "ConfigMap",
-				Name:        "empty",
-				LiveState:   "",
-				TargetState: "",
-			},
-			wantDiff: false,
-		},
-		{
-			name: "null states returns empty diff",
-			item: ResourceDiff{
-				Kind:        "ConfigMap",
-				Name:        "null",
-				LiveState:   "null",
-				TargetState: "null",
-			},
-			wantDiff: false,
-		},
-		{
-			name: "fallback to raw states when normalized not available",
-			item: ResourceDiff{
-				Kind:        "Service",
-				Name:        "my-service",
-				Modified:    true,
-				LiveState:   `{"spec": {"type": "ClusterIP"}}`,
-				TargetState: `{"spec": {"type": "LoadBalancer"}}`,
-			},
-			wantDiff: true,
+			name:      "core api group",
+			group:     "",
+			kind:      "ConfigMap",
+			namespace: "kube-system",
+			resName:   "my-cm",
+			want:      "/ConfigMap/kube-system/my-cm",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			diff := computeDiffFromArgoCD(tt.item)
-			hasDiff := diff != ""
-			if hasDiff != tt.wantDiff {
-				t.Errorf("computeDiffFromArgoCD() hasDiff = %v, want %v; diff = %q", hasDiff, tt.wantDiff, diff)
+			got := resourceKey(tt.group, tt.kind, tt.namespace, tt.resName)
+			if got != tt.want {
+				t.Errorf("resourceKey() = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestDetermineDiffAction(t *testing.T) {
+func TestParseResourceKey(t *testing.T) {
 	tests := []struct {
-		name string
-		item ResourceDiff
-		want models.DiffAction
+		key  string
+		want models.ResourceKey
 	}{
 		{
-			name: "new resource (live empty)",
-			item: ResourceDiff{
-				Kind:        "Deployment",
-				Name:        "new-app",
-				LiveState:   "",
-				TargetState: `{"kind": "Deployment"}`,
+			key: "apps/Deployment/default/my-app",
+			want: models.ResourceKey{
+				APIVersion: "apps",
+				Kind:       "Deployment",
+				Namespace:  "default",
+				Name:       "my-app",
 			},
-			want: models.DiffActionCreate,
 		},
 		{
-			name: "new resource (live null)",
-			item: ResourceDiff{
-				Kind:        "Deployment",
-				Name:        "new-app",
-				LiveState:   "null",
-				TargetState: `{"kind": "Deployment"}`,
+			key: "/Namespace/my-ns",
+			want: models.ResourceKey{
+				APIVersion: "",
+				Kind:       "Namespace",
+				Namespace:  "",
+				Name:       "my-ns",
 			},
-			want: models.DiffActionCreate,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			got := parseResourceKey(tt.key)
+			if got != tt.want {
+				t.Errorf("parseResourceKey(%q) = %v, want %v", tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractGroup(t *testing.T) {
+	tests := []struct {
+		apiVersion string
+		want       string
+	}{
+		{"apps/v1", "apps"},
+		{"v1", ""},
+		{"networking.k8s.io/v1", "networking.k8s.io"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.apiVersion, func(t *testing.T) {
+			got := extractGroup(tt.apiVersion)
+			if got != tt.want {
+				t.Errorf("extractGroup(%q) = %v, want %v", tt.apiVersion, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestComputeDiff(t *testing.T) {
+	tests := []struct {
+		name        string
+		currentJSON string
+		targetJSON  string
+		wantDiff    bool
+	}{
+		{
+			name:        "different values produces diff",
+			currentJSON: `{"spec": {"replicas": 2}}`,
+			targetJSON:  `{"spec": {"replicas": 3}}`,
+			wantDiff:    true,
 		},
 		{
-			name: "deleted resource (target empty)",
-			item: ResourceDiff{
-				Kind:        "Deployment",
-				Name:        "deleted-app",
-				LiveState:   `{"kind": "Deployment"}`,
-				TargetState: "",
-			},
-			want: models.DiffActionDelete,
+			name:        "same values no diff",
+			currentJSON: `{"spec": {"replicas": 2}}`,
+			targetJSON:  `{"spec": {"replicas": 2}}`,
+			wantDiff:    false,
 		},
 		{
-			name: "deleted resource (target null)",
-			item: ResourceDiff{
-				Kind:        "Deployment",
-				Name:        "deleted-app",
-				LiveState:   `{"kind": "Deployment"}`,
-				TargetState: "null",
-			},
-			want: models.DiffActionDelete,
+			name:        "empty current produces diff (additions)",
+			currentJSON: "",
+			targetJSON:  `{"spec": {"replicas": 3}}`,
+			wantDiff:    true,
 		},
 		{
-			name: "modified resource",
-			item: ResourceDiff{
-				Kind:        "Deployment",
-				Name:        "my-app",
-				Modified:    true,
-				LiveState:   `{"replicas": 2}`,
-				TargetState: `{"replicas": 3}`,
-			},
-			want: models.DiffActionUpdate,
-		},
-		{
-			name: "unchanged resource (Modified=false)",
-			item: ResourceDiff{
-				Kind:        "Deployment",
-				Name:        "my-app",
-				Modified:    false,
-				LiveState:   `{"replicas": 2}`,
-				TargetState: `{"replicas": 2}`,
-			},
-			want: models.DiffActionNone,
-		},
-		{
-			name: "fallback to normalized states diff",
-			item: ResourceDiff{
-				Kind:                "Deployment",
-				Name:                "my-app",
-				Modified:            false,
-				LiveState:           `{"replicas": 2}`,
-				TargetState:         `{"replicas": 2}`,
-				NormalizedLiveState: `{"replicas": 2}`,
-				PredictedLiveState:  `{"replicas": 3}`, // different
-			},
-			want: models.DiffActionUpdate,
+			name:        "empty target produces diff (deletions)",
+			currentJSON: `{"spec": {"replicas": 2}}`,
+			targetJSON:  "",
+			wantDiff:    true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := determineDiffAction(tt.item)
-			if got != tt.want {
-				t.Errorf("determineDiffAction() = %v, want %v", got, tt.want)
+			diff := computeDiff(tt.currentJSON, tt.targetJSON)
+			hasDiff := diff != ""
+			if hasDiff != tt.wantDiff {
+				t.Errorf("computeDiff() hasDiff = %v, want %v; diff = %q", hasDiff, tt.wantDiff, diff)
 			}
 		})
+	}
+}
+
+func TestBuildManifestMap(t *testing.T) {
+	manifests := []models.Manifest{
+		{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Name:       "my-app",
+			Namespace:  "default",
+			Raw:        `{"kind": "Deployment"}`,
+		},
+		{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Name:       "my-config",
+			Namespace:  "default",
+			Raw:        `{"kind": "ConfigMap"}`,
+		},
+	}
+
+	m := buildManifestMap(manifests)
+
+	if len(m) != 2 {
+		t.Errorf("Expected 2 entries, got %d", len(m))
+	}
+
+	if _, ok := m["apps/Deployment/default/my-app"]; !ok {
+		t.Error("Expected to find Deployment in map")
+	}
+
+	if _, ok := m["/ConfigMap/default/my-config"]; !ok {
+		t.Error("Expected to find ConfigMap in map")
+	}
+}
+
+func TestFormatCreateDiff(t *testing.T) {
+	targetJSON := `{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "test"}}`
+	diff := formatCreateDiff(targetJSON)
+
+	if diff == "" {
+		t.Error("Expected non-empty diff for create")
+	}
+
+	// Should contain + lines (additions)
+	if !contains(diff, "+") {
+		t.Error("Expected diff to contain additions")
+	}
+}
+
+func TestFormatDeleteDiff(t *testing.T) {
+	currentJSON := `{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "test"}}`
+	diff := formatDeleteDiff(currentJSON)
+
+	if diff == "" {
+		t.Error("Expected non-empty diff for delete")
+	}
+
+	// Should contain - lines (deletions)
+	if !contains(diff, "-") {
+		t.Error("Expected diff to contain deletions")
 	}
 }
 
 func TestJSONToYAML(t *testing.T) {
 	tests := []struct {
-		name    string
-		json    string
-		wantErr bool
+		name string
+		json string
+		want string
 	}{
-		{
-			name: "valid JSON object",
-			json: `{"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "test"}}`,
-		},
 		{
 			name: "empty string",
 			json: "",
+			want: "",
 		},
 		{
 			name: "null",
 			json: "null",
+			want: "",
 		},
 		{
-			name:    "invalid JSON returns as-is",
-			json:    "not valid json",
-			wantErr: false, // returns as-is
+			name: "invalid JSON returns as-is",
+			json: "not valid json",
+			want: "not valid json",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := jsonToYAML(tt.json)
-			// Just verify it doesn't panic
-			if tt.json == "" || tt.json == "null" {
-				if result != "" {
-					t.Errorf("Expected empty result for empty/null input, got %q", result)
-				}
+			got := jsonToYAML(tt.json)
+			if got != tt.want {
+				t.Errorf("jsonToYAML(%q) = %q, want %q", tt.json, got, tt.want)
 			}
 		})
+	}
+
+	// Test valid JSON converts to YAML
+	t.Run("valid JSON converts", func(t *testing.T) {
+		json := `{"apiVersion": "v1", "kind": "ConfigMap"}`
+		result := jsonToYAML(json)
+		if result == "" {
+			t.Error("Expected non-empty result for valid JSON")
+		}
+		// YAML should not have JSON syntax
+		if contains(result, "{") || contains(result, "}") {
+			t.Error("Expected YAML format, not JSON")
+		}
+	})
+}
+
+func TestCleanForDiff(t *testing.T) {
+	data := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":              "test",
+			"managedFields":     []any{},
+			"resourceVersion":   "12345",
+			"uid":               "abc-123",
+			"creationTimestamp": "2024-01-01T00:00:00Z",
+			"generation":        1,
+			"annotations": map[string]any{
+				"kubectl.kubernetes.io/last-applied-configuration": "{}",
+			},
+		},
+		"status": map[string]any{
+			"ready": true,
+		},
+		"data": map[string]any{
+			"key": "value",
+		},
+	}
+
+	cleanForDiff(data)
+
+	metadata := data["metadata"].(map[string]any)
+
+	if _, ok := metadata["managedFields"]; ok {
+		t.Error("managedFields should be removed")
+	}
+	if _, ok := metadata["resourceVersion"]; ok {
+		t.Error("resourceVersion should be removed")
+	}
+	if _, ok := metadata["uid"]; ok {
+		t.Error("uid should be removed")
+	}
+	if _, ok := metadata["creationTimestamp"]; ok {
+		t.Error("creationTimestamp should be removed")
+	}
+	if _, ok := metadata["generation"]; ok {
+		t.Error("generation should be removed")
+	}
+	if _, ok := metadata["annotations"]; ok {
+		t.Error("empty annotations should be removed")
+	}
+	if _, ok := data["status"]; ok {
+		t.Error("status should be removed")
+	}
+	if metadata["name"] != "test" {
+		t.Error("name should be preserved")
+	}
+	if data["data"] == nil {
+		t.Error("data should be preserved")
 	}
 }
 
@@ -257,4 +340,13 @@ func TestSummarizeDiffs(t *testing.T) {
 	if summary.Unchanged != 1 {
 		t.Errorf("Unchanged = %d, want 1", summary.Unchanged)
 	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
