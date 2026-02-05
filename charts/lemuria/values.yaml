@@ -126,6 +126,8 @@ config:
     # -- Skip TLS verification
     insecure: false
   redis:
+    # -- Redis address
+    address: "localhost:6379"
     # -- Redis database number
     db: 0
   defaults:
