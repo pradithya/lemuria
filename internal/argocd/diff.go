@@ -8,8 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sergi/go-diff/diffmatchpatch"
-	"gopkg.in/yaml.v3"
+	"github.com/pmezard/go-difflib/difflib"
 
 	"github.com/org/lemuria/internal/models"
 )
@@ -69,8 +68,8 @@ func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision s
 	return diffs, nil
 }
 
-// computeDiff generates a unified diff between two strings.
-// It converts JSON to YAML for better readability.
+// computeDiff generates a context diff between two JSON strings.
+// It prettifies JSON for better readability in the diff output.
 func computeDiff(live, target string) string {
 	if live == "" || live == "null" {
 		live = ""
@@ -79,125 +78,51 @@ func computeDiff(live, target string) string {
 		target = ""
 	}
 
-	// Convert JSON to YAML for better readability
-	liveYAML := jsonToYAML(live)
-	targetYAML := jsonToYAML(target)
+	// Prettify JSON for better readability
+	livePretty := prettifyJSON(live)
+	targetPretty := prettifyJSON(target)
 
-	// Normalize whitespace
-	liveYAML = normalizeYAML(liveYAML)
-	targetYAML = normalizeYAML(targetYAML)
-
-	if liveYAML == targetYAML {
+	if livePretty == targetPretty {
 		return ""
 	}
 
-	dmp := diffmatchpatch.New()
-	_ = dmp.DiffMain(liveYAML, targetYAML, true) // Used for semantic cleanup if needed
+	// Generate unified diff using go-difflib
+	diff := difflib.UnifiedDiff{
+		A:        difflib.SplitLines(livePretty),
+		B:        difflib.SplitLines(targetPretty),
+		FromFile: "live",
+		ToFile:   "target",
+		Context:  3,
+	}
 
-	// Convert to unified diff format
-	return formatUnifiedDiff(liveYAML, targetYAML)
+	result, err := difflib.GetUnifiedDiffString(diff)
+	if err != nil {
+		return ""
+	}
+
+	return result
 }
 
-// jsonToYAML converts a JSON string to prettified YAML.
-// If the input is not valid JSON, it returns the original string.
-func jsonToYAML(jsonStr string) string {
+// prettifyJSON formats JSON with indentation for readable diffs.
+// If the input is not valid JSON, it returns the original string trimmed.
+func prettifyJSON(jsonStr string) string {
+	jsonStr = strings.TrimSpace(jsonStr)
 	if jsonStr == "" {
 		return ""
 	}
 
-	// Parse JSON into a generic structure
-	var data interface{}
+	// Parse and re-marshal with indentation
+	var data any
 	if err := json.Unmarshal([]byte(jsonStr), &data); err != nil {
-		// Not valid JSON, return as-is
 		return jsonStr
 	}
 
-	// Convert to YAML with proper indentation
-	yamlBytes, err := yaml.Marshal(data)
+	pretty, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return jsonStr
 	}
 
-	return string(yamlBytes)
-}
-
-// normalizeYAML normalizes YAML for comparison.
-func normalizeYAML(s string) string {
-	// Trim whitespace
-	s = strings.TrimSpace(s)
-
-	// Normalize line endings
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-
-	return s
-}
-
-// formatUnifiedDiff creates a unified diff format output.
-func formatUnifiedDiff(a, b string) string {
-	linesA := strings.Split(a, "\n")
-	linesB := strings.Split(b, "\n")
-
-	var result strings.Builder
-	result.WriteString("--- live\n")
-	result.WriteString("+++ target\n")
-
-	// Simple line-by-line diff
-	maxLines := len(linesA)
-	if len(linesB) > maxLines {
-		maxLines = len(linesB)
-	}
-
-	inHunk := false
-	hunkStart := 0
-	var hunkLines []string
-
-	flushHunk := func() {
-		if len(hunkLines) > 0 {
-			result.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", hunkStart+1, len(linesA), hunkStart+1, len(linesB)))
-			for _, line := range hunkLines {
-				result.WriteString(line)
-				result.WriteString("\n")
-			}
-			hunkLines = nil
-		}
-	}
-
-	for i := 0; i < maxLines; i++ {
-		var lineA, lineB string
-		if i < len(linesA) {
-			lineA = linesA[i]
-		}
-		if i < len(linesB) {
-			lineB = linesB[i]
-		}
-
-		if lineA == lineB {
-			if inHunk {
-				hunkLines = append(hunkLines, " "+lineA)
-			}
-		} else {
-			if !inHunk {
-				inHunk = true
-				hunkStart = i
-				// Add context before
-				for j := max(0, i-3); j < i; j++ {
-					if j < len(linesA) {
-						hunkLines = append(hunkLines, " "+linesA[j])
-					}
-				}
-			}
-
-			if i < len(linesA) && lineA != "" {
-				hunkLines = append(hunkLines, "-"+lineA)
-			}
-			if i < len(linesB) && lineB != "" {
-				hunkLines = append(hunkLines, "+"+lineB)
-			}
-		}
-	}
-
-	flushHunk()
-	return result.String()
+	return string(pretty)
 }
 
 // determineDiffAction determines what will happen to the resource during sync.
@@ -246,11 +171,4 @@ func SummarizeDiffs(diffs []models.ManifestDiff) DiffSummary {
 	}
 
 	return summary
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
