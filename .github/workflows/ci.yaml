@@ -148,6 +148,9 @@ jobs:
 
       - name: Install tools
         run: make install-tools
+      
+      - name: Helm Dependency Build
+        run: make helm-dep
 
       - name: Helm Lint
         run: make helm-lint
@@ -283,6 +286,9 @@ jobs:
         run: |
           sed -i "s/^version:.*/version: ${{ steps.chart-version.outputs.version }}/" charts/lemuria/Chart.yaml
           sed -i "s/^appVersion:.*/appVersion: \"${{ steps.chart-version.outputs.version }}\"/" charts/lemuria/Chart.yaml
+      
+      - name: Helm Dependency Build
+        run: make helm-dep
 
       - name: Package Helm chart
         run: make helm-package
