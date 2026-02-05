@@ -66,7 +66,7 @@ Create the secret name
 */}}
 {{- define "lemuria.secretName" -}}
 {{- if .Values.secrets.create }}
-{{- include "lemuria.fullname" . }}
+{{- printf "%s-secrets" (include "lemuria.fullname" .) }}
 {{- else }}
 {{- .Values.secrets.existingSecret }}
 {{- end }}

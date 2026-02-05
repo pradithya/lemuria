@@ -1,13 +1,14 @@
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/server"
+	"github.com/urfave/cli/v3"
 )
 
 var (
@@ -16,38 +17,52 @@ var (
 )
 
 func main() {
-	// Parse command line flags
-	configPath := flag.String("config", "lemuria.yaml", "Path to configuration file")
-	showVersion := flag.Bool("version", false, "Show version information")
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Printf("Lemuria %s (commit: %s)\n", version, commit)
-		os.Exit(0)
+	cmd := &cli.Command{
+		Name:    "lemuria",
+		Usage:   "GitOps automation for Argo CD",
+		Version: fmt.Sprintf("%s (commit: %s)", version, commit),
+		Flags: []cli.Flag{
+			&cli.StringSliceFlag{
+				Name:    "config",
+				Aliases: []string{"c"},
+				Usage:   "Path to configuration file (can be specified multiple times, files are merged in order)",
+				Value:   []string{"lemuria.yaml"},
+			},
+		},
+		Action: runServer,
 	}
 
-	// Setup logger
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runServer(ctx context.Context, cmd *cli.Command) error {
+	configPaths := cmd.StringSlice("config")
+
+	// Load configuration (multiple files are merged in order)
+	cfg, err := config.Load(configPaths...)
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	// Setup logger with configured log level
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: parseLogLevel(cfg.Server.LogLevel),
 	}))
 
 	logger.Info("starting lemuria",
 		"version", version,
 		"commit", commit,
+		"config_files", configPaths,
+		"log_level", cfg.Server.LogLevel,
 	)
-
-	// Load configuration
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		logger.Error("failed to load configuration", "error", err)
-		os.Exit(1)
-	}
 
 	// Create and run server
 	srv, err := server.New(cfg, logger)
 	if err != nil {
-		logger.Error("failed to create server", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to create server: %w", err)
 	}
 
 	defer func() {
@@ -57,7 +72,23 @@ func main() {
 	}()
 
 	if err := srv.Run(); err != nil {
-		logger.Error("server error", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("server error: %w", err)
+	}
+
+	return nil
+}
+
+func parseLogLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
