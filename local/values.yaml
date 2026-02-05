@@ -19,34 +19,36 @@ config:
   server:
     port: 4141
     host: "0.0.0.0"
-    base_url: "http://localhost:4141"
+    base_url: "https://lemuria.utilitytools.app"
     log_level: "debug"
   argocd:
-    server_url: "https://argocd.local"
-    insecure: true
+    server_url: "https://argocd.utilitytools.app"
+    insecure: false
   redis:
+    address: "redis://localhost:6379"
     db: 0
   defaults:
     autoplan: true
-    require_approval: false
-    auto_merge: false
+    require_approval: true
+    auto_merge: true
     merge_method: "squash"
 
 # Sensitive config (stored in Secret, merged on top of config above)
 secrets:
-  create: true
-  existingSecret: ""
-  config:
-    github:
-      webhook_secret: "local-webhook-secret"
-      app_id: 12345
-      app_private_key: "-----BEGIN RSA PRIVATE KEY-----\nPLACEHOLDER\n-----END RSA PRIVATE KEY-----"
-    argocd:
-      token: "local-argocd-token"
-    redis:
-      password: ""
+  create: false
+  existingSecret: "lemuria-secrets"
 
 redis:
-  enabled: true
-  persistence:
-    enabled: false
+  master:
+    persistence:
+      # -- Enable Redis data persistence
+      enabled: true
+      # -- Size of Redis PVC
+      size: 2Gi
+    resources:
+      limits:
+        cpu: 1
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
