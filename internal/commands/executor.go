@@ -409,3 +409,12 @@ func filesToChangedFiles(paths []string) []models.ChangedFile {
 func NormalizeRepoURL(url string) string {
 	return argocd.NormalizeRepoURL(url)
 }
+
+// InvalidatePlanComments marks all existing plan comments on a PR as stale.
+func (e *Executor) InvalidatePlanComments(ctx context.Context, event *models.PREvent) error {
+	e.logger.Debug("invalidating old plan comments",
+		"repo", event.Repo.FullName,
+		"pr", event.PR.Number,
+	)
+	return e.github.InvalidatePlanComments(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+}

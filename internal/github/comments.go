@@ -13,6 +13,12 @@ const (
 	CommentMarker = "<!-- lemuria -->"
 	// AppCommentMarker identifies comments for a specific application.
 	AppCommentMarker = "<!-- lemuria:app:%s -->"
+	// PlanCommentMarker identifies comments containing plan/diff results.
+	PlanCommentMarker = "<!-- lemuria:plan -->"
+	// StaleMarker indicates the comment is outdated.
+	StaleMarker = "<!-- lemuria:stale -->"
+	// StaleNotice is prepended to invalidated comments.
+	StaleNotice = "> ⚠️ **This plan is outdated.** New changes have been pushed to this PR.\n\n"
 )
 
 // CreateComment posts a new comment on a PR.
@@ -133,6 +139,66 @@ func (c *Client) AddReaction(ctx context.Context, owner, repo string, commentID 
 	_, _, err = client.Reactions.CreateIssueCommentReaction(ctx, owner, repo, commentID, reaction)
 	if err != nil {
 		return fmt.Errorf("adding reaction: %w", err)
+	}
+
+	return nil
+}
+
+// PostComment creates a new comment on a PR (never updates existing).
+func (c *Client) PostComment(ctx context.Context, owner, repo string, number int, body string, isPlan bool) (*github.IssueComment, error) {
+	// Add markers to body
+	markers := CommentMarker
+	if isPlan {
+		markers = CommentMarker + "\n" + PlanCommentMarker
+	}
+	markedBody := markers + "\n" + body
+
+	return c.CreateComment(ctx, owner, repo, number, markedBody)
+}
+
+// InvalidatePlanComments marks all existing plan comments on a PR as stale.
+func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string, number int) error {
+	client, err := c.GetInstallationClient(ctx, owner)
+	if err != nil {
+		return err
+	}
+
+	opts := &github.IssueListCommentsOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
+	}
+
+	for {
+		comments, resp, err := client.Issues.ListComments(ctx, owner, repo, number, opts)
+		if err != nil {
+			return fmt.Errorf("listing comments: %w", err)
+		}
+
+		for _, comment := range comments {
+			body := comment.GetBody()
+			// Only invalidate plan comments that aren't already stale
+			if strings.Contains(body, PlanCommentMarker) && !strings.Contains(body, StaleMarker) {
+				// Add stale marker and notice
+				newBody := strings.Replace(body, PlanCommentMarker, PlanCommentMarker+"\n"+StaleMarker, 1)
+				// Find the end of markers and insert stale notice
+				markerEnd := strings.Index(newBody, "\n## ")
+				if markerEnd == -1 {
+					markerEnd = strings.Index(newBody, "\n#")
+				}
+				if markerEnd != -1 {
+					newBody = newBody[:markerEnd+1] + StaleNotice + newBody[markerEnd+1:]
+				}
+
+				_, err := c.UpdateComment(ctx, owner, repo, comment.GetID(), newBody)
+				if err != nil {
+					return fmt.Errorf("invalidating comment %d: %w", comment.GetID(), err)
+				}
+			}
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
 	}
 
 	return nil

@@ -25,6 +25,11 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 		}
 	}
 
+	// Invalidate old plan comments before generating new ones
+	if err := e.github.InvalidatePlanComments(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number); err != nil {
+		e.logger.Warn("failed to invalidate old plan comments", "error", err)
+	}
+
 	// Find affected applications
 	var apps []models.Application
 	var err error
@@ -95,7 +100,7 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 
 	// Render and post results
 	output := e.renderPlanResults(results, event)
-	return e.postComment(ctx, event, "", output)
+	return e.postPlanComment(ctx, event, output)
 }
 
 // appPlanResult holds the result of planning a single application.
@@ -249,9 +254,15 @@ func convertToRenderResults(results []appPlanResult) []diff.PlanResult {
 	return rendered
 }
 
-// postComment creates or updates a Lemuria comment on the PR.
+// postComment creates a new Lemuria comment on the PR.
 func (e *Executor) postComment(ctx context.Context, event *models.PREvent, appName, body string) error {
-	_, err := e.github.UpsertComment(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number, appName, body)
+	_, err := e.github.PostComment(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number, body, false)
+	return err
+}
+
+// postPlanComment creates a new plan comment on the PR (can be invalidated on new changes).
+func (e *Executor) postPlanComment(ctx context.Context, event *models.PREvent, body string) error {
+	_, err := e.github.PostComment(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number, body, true)
 	return err
 }
 
