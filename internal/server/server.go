@@ -187,6 +187,12 @@ func (s *Server) setupMiddleware() {
 // requestLogger is a middleware that logs HTTP requests.
 func (s *Server) requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip logging for health check endpoints
+		if r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/ready" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		start := time.Now()
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 
