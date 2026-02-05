@@ -11,6 +11,13 @@ import (
 
 // executePlan runs the plan command.
 func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.PREvent) error {
+	e.logger.Debug("executing plan command",
+		"repo", event.Repo.FullName,
+		"pr", event.PR.Number,
+		"specific_app", cmd.Application,
+		"all_apps", cmd.All,
+	)
+
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
 		if err := e.github.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
@@ -24,36 +31,67 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 
 	if cmd.Application != "" {
 		// Specific application requested
+		e.logger.Debug("fetching specific application",
+			"app", cmd.Application,
+		)
 		app, err := e.argocd.GetApplication(ctx, cmd.Application)
 		if err != nil {
+			e.logger.Debug("application not found",
+				"app", cmd.Application,
+				"error", err,
+			)
 			return e.postError(ctx, event, fmt.Errorf("application %s not found: %w", cmd.Application, err))
 		}
 		apps = []models.Application{*app}
 	} else if cmd.All {
 		// All applications for this repo
 		repoURL := fmt.Sprintf("https://github.com/%s", event.Repo.FullName)
+		e.logger.Debug("finding all applications for repo",
+			"repo_url", repoURL,
+		)
 		apps, err = e.argocd.FindApplicationsByRepo(ctx, repoURL)
 		if err != nil {
+			e.logger.Debug("failed to find applications by repo",
+				"repo_url", repoURL,
+				"error", err,
+			)
 			return e.postError(ctx, event, fmt.Errorf("listing applications: %w", err))
 		}
 	} else {
 		// Auto-detect affected applications
+		e.logger.Debug("auto-detecting affected applications")
 		apps, err = e.findAffectedApplications(ctx, event)
 		if err != nil {
+			e.logger.Debug("failed to find affected applications",
+				"error", err,
+			)
 			return e.postError(ctx, event, err)
 		}
 	}
 
+	e.logger.Debug("found applications to plan",
+		"count", len(apps),
+	)
+
 	if len(apps) == 0 {
+		e.logger.Debug("no applications affected by PR")
 		return e.postComment(ctx, event, "", "## Lemuria Plan\n\nNo applications affected by this PR.")
 	}
 
 	// Process each application
 	var results []appPlanResult
 	for _, app := range apps {
+		e.logger.Debug("planning application",
+			"app", app.Name,
+			"change_type", app.ChangeType,
+		)
 		result := e.planApplication(ctx, app, event)
 		results = append(results, result)
 	}
+
+	e.logger.Debug("completed planning all applications",
+		"results_count", len(results),
+	)
 
 	// Render and post results
 	output := e.renderPlanResults(results, event)
@@ -74,6 +112,13 @@ type appPlanResult struct {
 
 // planApplication generates a diff for a single application.
 func (e *Executor) planApplication(ctx context.Context, app models.Application, event *models.PREvent) appPlanResult {
+	e.logger.Debug("starting plan for application",
+		"app", app.Name,
+		"change_type", app.ChangeType,
+		"source_file", app.SourceFile,
+		"path", app.Path,
+	)
+
 	result := appPlanResult{
 		Application: app.Name,
 		ChangeType:  app.ChangeType,
@@ -82,12 +127,18 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 
 	// Handle new applications (not yet in ArgoCD)
 	if app.IsNew() {
+		e.logger.Debug("application is new (not yet in ArgoCD)",
+			"app", app.Name,
+		)
 		result.LockStatus = "New application"
 		return result
 	}
 
 	// Handle deleted applications
 	if app.IsDeleted() {
+		e.logger.Debug("application will be deleted",
+			"app", app.Name,
+		)
 		result.LockStatus = "Will be deleted"
 		result.Warning = "This application will be removed after the PR is merged."
 		return result
@@ -95,10 +146,19 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 
 	// Check if auto-sync is enabled
 	if app.HasAutoSync() {
+		e.logger.Debug("application has auto-sync enabled",
+			"app", app.Name,
+		)
 		result.Warning = "Auto-sync is enabled. Disable auto-sync before using Lemuria to prevent conflicts."
 	}
 
 	// Try to acquire lock
+	e.logger.Debug("attempting to acquire lock",
+		"app", app.Name,
+		"pr", event.PR.Number,
+		"repo", event.Repo.FullName,
+		"user", event.Sender.Login,
+	)
 	lockResult, err := e.lock.Lock(ctx, models.LockRequest{
 		Application: app.Name,
 		PRNumber:    event.PR.Number,
@@ -106,26 +166,55 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		User:        event.Sender.Login,
 	})
 	if err != nil {
+		e.logger.Debug("failed to acquire lock",
+			"app", app.Name,
+			"error", err,
+		)
 		result.Error = fmt.Errorf("failed to acquire lock: %w", err)
 		return result
 	}
 
 	if !lockResult.Acquired {
+		e.logger.Debug("lock held by another PR",
+			"app", app.Name,
+			"held_by_pr", lockResult.HeldBy.PRNumber,
+			"held_by_user", lockResult.HeldBy.User,
+		)
 		result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
 		return result
 	}
 
+	e.logger.Debug("lock acquired",
+		"app", app.Name,
+		"pr", event.PR.Number,
+	)
 	result.LockStatus = "Locked by this PR"
 
 	// Get diff
+	e.logger.Debug("getting application diff",
+		"app", app.Name,
+		"revision", event.PR.HeadSHA,
+	)
 	diffs, err := e.argocd.GetApplicationDiff(ctx, app.Name, event.PR.HeadSHA)
 	if err != nil {
+		e.logger.Debug("failed to generate diff",
+			"app", app.Name,
+			"error", err,
+		)
 		result.Error = fmt.Errorf("failed to generate diff: %w", err)
 		return result
 	}
 
 	result.Diffs = diffs
 	result.Summary = argocd.SummarizeDiffs(diffs)
+
+	e.logger.Debug("diff generated successfully",
+		"app", app.Name,
+		"diffs_count", len(diffs),
+		"created", result.Summary.Created,
+		"updated", result.Summary.Updated,
+		"deleted", result.Summary.Deleted,
+	)
 
 	// Store plan output for later sync verification
 	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA); err != nil {
