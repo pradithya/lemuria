@@ -243,6 +243,17 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 			}
 		}
 
+		// Propagate SourceFile from modified apps to affected list
+		// This ensures planApplication knows which apps have Application CR files
+		for _, modApp := range parsed.Modified {
+			for i := range affected {
+				if affected[i].Name == modApp.Name && affected[i].SourceFile == "" {
+					affected[i].SourceFile = modApp.SourceFile
+					break
+				}
+			}
+		}
+
 		// Add deleted applications
 		for _, app := range parsed.Deleted {
 			e.logger.Debug("processing deleted application",

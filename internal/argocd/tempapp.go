@@ -31,11 +31,12 @@ func NewTempAppManager(client *Client) *TempAppManager {
 
 // TempAppConfig configures a temporary application.
 type TempAppConfig struct {
-	OriginalAppName string // Name of the original application
-	TargetBranch    string // Branch to point to (e.g., "main" or "feature/xyz")
-	PRNumber        int    // For naming and labeling
-	PRRepo          string // Repository (e.g., "owner/repo") to identify which sources to update
-	Suffix          string // "base" or "head"
+	OriginalAppName string                 // Name of the original application
+	TargetBranch    string                 // Branch to point to (e.g., "main" or "feature/xyz")
+	PRNumber        int                    // For naming and labeling
+	PRRepo          string                 // Repository (e.g., "owner/repo") to identify which sources to update
+	Suffix          string                 // "base" or "head"
+	AppSpecOverride map[string]any // If set, use this spec instead of fetching from live ArgoCD
 }
 
 // CreateTempApp creates a temporary application configured for diff rendering.
@@ -45,10 +46,18 @@ type TempAppConfig struct {
 // - Has syncPolicy.automated removed (no auto-sync)
 // - Is labeled for cleanup identification
 func (m *TempAppManager) CreateTempApp(ctx context.Context, cfg TempAppConfig) (string, error) {
-	// Get the original application spec
-	originalApp, err := m.client.GetApplicationRaw(ctx, cfg.OriginalAppName)
-	if err != nil {
-		return "", fmt.Errorf("getting original application: %w", err)
+	var originalApp map[string]interface{}
+
+	if cfg.AppSpecOverride != nil {
+		// Use the git-sourced spec instead of fetching from live ArgoCD
+		originalApp = cfg.AppSpecOverride
+	} else {
+		// Get the original application spec from live ArgoCD
+		var err error
+		originalApp, err = m.client.GetApplicationRaw(ctx, cfg.OriginalAppName)
+		if err != nil {
+			return "", fmt.Errorf("getting original application: %w", err)
+		}
 	}
 
 	tempName := generateTempAppName(cfg.OriginalAppName, cfg.PRNumber, cfg.Suffix)
