@@ -6,57 +6,10 @@ import (
 	"net/url"
 	"strings"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+
 	"github.com/org/lemuria/internal/models"
 )
-
-// applicationResponse represents the Argo CD application API response.
-type applicationResponse struct {
-	Metadata struct {
-		Name            string            `json:"name"`
-		Namespace       string            `json:"namespace"`
-		Labels          map[string]string `json:"labels"`
-		OwnerReferences []struct {
-			Kind string `json:"kind"`
-			Name string `json:"name"`
-		} `json:"ownerReferences"`
-	} `json:"metadata"`
-	Spec struct {
-		Project string `json:"project"`
-		Source  *struct {
-			RepoURL        string `json:"repoURL"`
-			Path           string `json:"path"`
-			TargetRevision string `json:"targetRevision"`
-		} `json:"source,omitempty"`
-		Sources []struct {
-			RepoURL        string `json:"repoURL"`
-			Path           string `json:"path"`
-			TargetRevision string `json:"targetRevision"`
-			Chart          string `json:"chart"`
-			Helm           *struct {
-				ValueFiles []string `json:"valueFiles"`
-				Values     string   `json:"values"`
-			} `json:"helm"`
-		} `json:"sources,omitempty"`
-		Destination struct {
-			Server    string `json:"server"`
-			Namespace string `json:"namespace"`
-		} `json:"destination"`
-		SyncPolicy *struct {
-			Automated *struct {
-				Prune    bool `json:"prune"`
-				SelfHeal bool `json:"selfHeal"`
-			} `json:"automated,omitempty"`
-		} `json:"syncPolicy,omitempty"`
-	} `json:"spec"`
-	Status struct {
-		Sync struct {
-			Status string `json:"status"`
-		} `json:"sync"`
-		Health struct {
-			Status string `json:"status"`
-		} `json:"health"`
-	} `json:"status"`
-}
 
 // ListApplications returns all applications from Argo CD.
 func (c *Client) ListApplications(ctx context.Context) ([]models.Application, error) {
@@ -70,17 +23,14 @@ func (c *Client) ListApplicationsWithSelector(ctx context.Context, selector stri
 		query.Set("selector", selector)
 	}
 
-	var resp struct {
-		Items []applicationResponse `json:"items"`
-	}
-
+	var resp v1alpha1.ApplicationList
 	if err := c.get(ctx, "/api/v1/applications", query, &resp); err != nil {
 		return nil, fmt.Errorf("listing applications: %w", err)
 	}
 
 	apps := make([]models.Application, 0, len(resp.Items))
 	for _, item := range resp.Items {
-		apps = append(apps, convertApplication(item))
+		apps = append(apps, convertV1alpha1Application(item, ""))
 	}
 
 	return apps, nil
@@ -88,48 +38,58 @@ func (c *Client) ListApplicationsWithSelector(ctx context.Context, selector stri
 
 // GetApplication returns a specific application by name.
 func (c *Client) GetApplication(ctx context.Context, name string) (*models.Application, error) {
-	var resp applicationResponse
+	var resp v1alpha1.Application
 	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
 		return nil, fmt.Errorf("getting application %s: %w", name, err)
 	}
 
-	app := convertApplication(resp)
+	app := convertV1alpha1Application(resp, "")
 	return &app, nil
 }
 
-// convertApplication converts the API response to our model.
-func convertApplication(resp applicationResponse) models.Application {
-	app := models.Application{
-		Name:                 resp.Metadata.Name,
-		Namespace:            resp.Metadata.Namespace,
-		Project:              resp.Spec.Project,
-		DestinationServer:    resp.Spec.Destination.Server,
-		DestinationNamespace: resp.Spec.Destination.Namespace,
-		SyncStatus:           models.SyncStatus(resp.Status.Sync.Status),
-		HealthStatus:         models.HealthStatus(resp.Status.Health.Status),
-		Labels:               resp.Metadata.Labels,
-		AutoSyncEnabled:      resp.Spec.SyncPolicy != nil && resp.Spec.SyncPolicy.Automated != nil,
+// convertV1alpha1Application converts a v1alpha1.Application to our domain model.
+// sourceFile is the git file path where this app CR is defined (empty for API-sourced apps).
+func convertV1alpha1Application(app v1alpha1.Application, sourceFile string) models.Application {
+	result := models.Application{
+		Name:                 app.Name,
+		Namespace:            app.Namespace,
+		Project:              app.Spec.Project,
+		DestinationServer:    app.Spec.Destination.Server,
+		DestinationNamespace: app.Spec.Destination.Namespace,
+		SyncStatus:           models.SyncStatus(app.Status.Sync.Status),
+		HealthStatus:         models.HealthStatus(app.Status.Health.Status),
+		Labels:               app.Labels,
+		AutoSyncEnabled:      app.Spec.SyncPolicy != nil && app.Spec.SyncPolicy.Automated != nil,
+		SourceFile:           sourceFile,
+	}
+
+	if result.Namespace == "" {
+		result.Namespace = "argocd"
+	}
+
+	if result.Project == "" {
+		result.Project = "default"
 	}
 
 	// Single source
-	if resp.Spec.Source != nil {
-		app.RepoURL = resp.Spec.Source.RepoURL
-		app.Path = resp.Spec.Source.Path
-		app.TargetRevision = resp.Spec.Source.TargetRevision
+	if app.Spec.Source != nil {
+		result.RepoURL = app.Spec.Source.RepoURL
+		result.Path = app.Spec.Source.Path
+		result.TargetRevision = app.Spec.Source.TargetRevision
 	}
 
 	// Multi-source
-	if len(resp.Spec.Sources) > 0 {
-		app.Sources = make([]models.ApplicationSource, len(resp.Spec.Sources))
-		for i, src := range resp.Spec.Sources {
-			app.Sources[i] = models.ApplicationSource{
+	if len(app.Spec.Sources) > 0 {
+		result.Sources = make([]models.ApplicationSource, len(app.Spec.Sources))
+		for i, src := range app.Spec.Sources {
+			result.Sources[i] = models.ApplicationSource{
 				RepoURL:        src.RepoURL,
 				Path:           src.Path,
 				TargetRevision: src.TargetRevision,
 				Chart:          src.Chart,
 			}
 			if src.Helm != nil {
-				app.Sources[i].Helm = &models.HelmSource{
+				result.Sources[i].Helm = &models.HelmSource{
 					ValueFiles: src.Helm.ValueFiles,
 					Values:     src.Helm.Values,
 				}
@@ -138,19 +98,18 @@ func convertApplication(resp applicationResponse) models.Application {
 	}
 
 	// ApplicationSet name from label or ownerReferences
-	if appSetName, ok := resp.Metadata.Labels["argocd.argoproj.io/application-set-name"]; ok {
-		app.ApplicationSetName = appSetName
+	if appSetName, ok := app.Labels["argocd.argoproj.io/application-set-name"]; ok {
+		result.ApplicationSetName = appSetName
 	} else {
-		// Check ownerReferences for ApplicationSet
-		for _, owner := range resp.Metadata.OwnerReferences {
+		for _, owner := range app.OwnerReferences {
 			if owner.Kind == "ApplicationSet" {
-				app.ApplicationSetName = owner.Name
+				result.ApplicationSetName = owner.Name
 				break
 			}
 		}
 	}
 
-	return app
+	return result
 }
 
 // SyncApplication triggers a sync for the specified application.
@@ -242,26 +201,9 @@ func NormalizeRepoURL(u string) string {
 	return u
 }
 
-// ApplicationHistoryEntry represents a deployment history entry.
-type ApplicationHistoryEntry struct {
-	ID         int64  `json:"id"`
-	Revision   string `json:"revision"`
-	DeployedAt string `json:"deployedAt"`
-	Source     struct {
-		RepoURL        string `json:"repoURL"`
-		Path           string `json:"path"`
-		TargetRevision string `json:"targetRevision"`
-	} `json:"source"`
-}
-
 // GetApplicationHistory returns the deployment history for an application.
-func (c *Client) GetApplicationHistory(ctx context.Context, name string) ([]ApplicationHistoryEntry, error) {
-	var resp struct {
-		Status struct {
-			History []ApplicationHistoryEntry `json:"history"`
-		} `json:"status"`
-	}
-
+func (c *Client) GetApplicationHistory(ctx context.Context, name string) ([]v1alpha1.RevisionHistory, error) {
+	var resp v1alpha1.Application
 	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
 		return nil, fmt.Errorf("getting application history for %s: %w", name, err)
 	}
@@ -314,7 +256,7 @@ func (c *Client) RollbackApplication(ctx context.Context, name string, opts *Rol
 }
 
 // CreateApplication creates a new application in ArgoCD.
-func (c *Client) CreateApplication(ctx context.Context, app map[string]interface{}) error {
+func (c *Client) CreateApplication(ctx context.Context, app *v1alpha1.Application) error {
 	if err := c.post(ctx, "/api/v1/applications", nil, app, nil); err != nil {
 		return fmt.Errorf("creating application: %w", err)
 	}
@@ -336,11 +278,11 @@ func (c *Client) DeleteApplication(ctx context.Context, name string, cascade boo
 	return nil
 }
 
-// GetApplicationRaw returns the raw application spec as a map for modification.
-func (c *Client) GetApplicationRaw(ctx context.Context, name string) (map[string]interface{}, error) {
-	var resp map[string]interface{}
+// GetApplicationRaw returns the application as a typed v1alpha1.Application.
+func (c *Client) GetApplicationRaw(ctx context.Context, name string) (*v1alpha1.Application, error) {
+	var resp v1alpha1.Application
 	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
 		return nil, fmt.Errorf("getting application %s: %w", name, err)
 	}
-	return resp, nil
+	return &resp, nil
 }

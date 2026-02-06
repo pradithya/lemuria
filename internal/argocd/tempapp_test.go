@@ -2,42 +2,46 @@ package argocd
 
 import (
 	"testing"
+
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestBuildTempAppSpec_WithGitSourcedOverride(t *testing.T) {
 	// Simulate a raw Application spec as read from a git YAML file
-	// (no status, no managedFields - just what's in the YAML file)
-	original := map[string]any{
-		"apiVersion": "argoproj.io/v1alpha1",
-		"kind":       "Application",
-		"metadata": map[string]any{
-			"name":      "my-app",
-			"namespace": "argocd",
+	original := &v1alpha1.Application{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "argoproj.io/v1alpha1",
+			Kind:       "Application",
 		},
-		"spec": map[string]any{
-			"sources": []any{
-				map[string]any{
-					"repoURL":        "https://github.com/org/repo",
-					"path":           "manifests",
-					"targetRevision": "main",
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-app",
+			Namespace: "argocd",
+		},
+		Spec: v1alpha1.ApplicationSpec{
+			Sources: v1alpha1.ApplicationSources{
+				{
+					RepoURL:        "https://github.com/org/repo",
+					Path:           "manifests",
+					TargetRevision: "main",
 				},
-				map[string]any{
-					"repoURL":        "https://charts.example.com",
-					"chart":          "nginx",
-					"targetRevision": "1.0.0",
-					"helm": map[string]any{
-						"values": "cpu: 76m\nmemory: 128Mi\n",
+				{
+					RepoURL:        "https://charts.example.com",
+					Chart:          "nginx",
+					TargetRevision: "1.0.0",
+					Helm: &v1alpha1.ApplicationSourceHelm{
+						Values: "cpu: 76m\nmemory: 128Mi\n",
 					},
 				},
 			},
-			"destination": map[string]any{
-				"server":    "https://kubernetes.default.svc",
-				"namespace": "default",
+			Destination: v1alpha1.ApplicationDestination{
+				Server:    "https://kubernetes.default.svc",
+				Namespace: "default",
 			},
-			"syncPolicy": map[string]any{
-				"automated": map[string]any{
-					"prune":    true,
-					"selfHeal": true,
+			SyncPolicy: &v1alpha1.SyncPolicy{
+				Automated: &v1alpha1.SyncPolicyAutomated{
+					Prune:    true,
+					SelfHeal: true,
 				},
 			},
 		},
@@ -54,85 +58,84 @@ func TestBuildTempAppSpec_WithGitSourcedOverride(t *testing.T) {
 	tempApp := buildTempAppSpec(original, "my-app-lemuria-pr42-head", cfg)
 
 	// Verify name is changed
-	metadata := tempApp["metadata"].(map[string]any)
-	if metadata["name"] != "my-app-lemuria-pr42-head" {
-		t.Errorf("expected temp app name, got %v", metadata["name"])
+	if tempApp.Name != "my-app-lemuria-pr42-head" {
+		t.Errorf("expected temp app name, got %v", tempApp.Name)
 	}
 
 	// Verify labels are set
-	labels := metadata["labels"].(map[string]any)
-	if labels[labelTempApp] != "true" {
+	if tempApp.Labels[labelTempApp] != "true" {
 		t.Error("expected temp app label")
 	}
-	if labels[labelOriginalApp] != "my-app" {
-		t.Errorf("expected original app label, got %v", labels[labelOriginalApp])
+	if tempApp.Labels[labelOriginalApp] != "my-app" {
+		t.Errorf("expected original app label, got %v", tempApp.Labels[labelOriginalApp])
 	}
 
 	// Verify automated sync policy is removed
-	spec := tempApp["spec"].(map[string]any)
-	syncPolicy := spec["syncPolicy"].(map[string]any)
-	if _, ok := syncPolicy["automated"]; ok {
+	if tempApp.Spec.SyncPolicy == nil {
+		t.Fatal("expected syncPolicy to be non-nil")
+	}
+	if tempApp.Spec.SyncPolicy.Automated != nil {
 		t.Error("expected automated sync policy to be removed")
 	}
 
-	// Verify status is removed
-	if _, ok := tempApp["status"]; ok {
-		t.Error("expected status to be removed")
+	// Verify status is cleared
+	if len(tempApp.Status.Resources) > 0 || tempApp.Status.Sync.Status != "" {
+		t.Error("expected status to be cleared")
 	}
 
 	// Verify helm values are preserved (the key use case for this feature)
-	sources := spec["sources"].([]any)
-	if len(sources) != 2 {
-		t.Fatalf("expected 2 sources, got %d", len(sources))
+	if len(tempApp.Spec.Sources) != 2 {
+		t.Fatalf("expected 2 sources, got %d", len(tempApp.Spec.Sources))
 	}
 
-	helmSource := sources[1].(map[string]any)
-	helm := helmSource["helm"].(map[string]any)
-	values := helm["values"].(string)
-	if values != "cpu: 76m\nmemory: 128Mi\n" {
-		t.Errorf("expected helm values preserved, got %q", values)
+	helmSource := tempApp.Spec.Sources[1]
+	if helmSource.Helm == nil {
+		t.Fatal("expected helm to be non-nil")
+	}
+	if helmSource.Helm.Values != "cpu: 76m\nmemory: 128Mi\n" {
+		t.Errorf("expected helm values preserved, got %q", helmSource.Helm.Values)
 	}
 
 	// Verify the matching source's targetRevision is updated
-	gitSource := sources[0].(map[string]any)
-	if gitSource["targetRevision"] != "feature/update-values" {
-		t.Errorf("expected git source targetRevision to be updated, got %v", gitSource["targetRevision"])
+	if tempApp.Spec.Sources[0].TargetRevision != "feature/update-values" {
+		t.Errorf("expected git source targetRevision to be updated, got %v", tempApp.Spec.Sources[0].TargetRevision)
 	}
 
 	// Verify the external chart source's targetRevision is NOT updated
-	if helmSource["targetRevision"] != "1.0.0" {
-		t.Errorf("expected chart source targetRevision to be unchanged, got %v", helmSource["targetRevision"])
+	if helmSource.TargetRevision != "1.0.0" {
+		t.Errorf("expected chart source targetRevision to be unchanged, got %v", helmSource.TargetRevision)
 	}
 }
 
 func TestBuildTempAppSpec_WithLiveSpec(t *testing.T) {
 	// Simulate a spec from live ArgoCD (has status, managedFields, etc.)
-	original := map[string]any{
-		"apiVersion": "argoproj.io/v1alpha1",
-		"kind":       "Application",
-		"metadata": map[string]any{
-			"name":              "my-app",
-			"namespace":         "argocd",
-			"resourceVersion":   "12345",
-			"uid":               "abc-123",
-			"creationTimestamp":  "2024-01-01T00:00:00Z",
-			"generation":        3,
-			"managedFields":     []any{},
+	original := &v1alpha1.Application{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "argoproj.io/v1alpha1",
+			Kind:       "Application",
 		},
-		"spec": map[string]any{
-			"source": map[string]any{
-				"repoURL":        "https://github.com/org/repo",
-				"path":           "manifests",
-				"targetRevision": "main",
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "my-app",
+			Namespace:         "argocd",
+			ResourceVersion:   "12345",
+			UID:               "abc-123",
+			Generation:        3,
+			ManagedFields:     []metav1.ManagedFieldsEntry{},
+		},
+		Spec: v1alpha1.ApplicationSpec{
+			Source: &v1alpha1.ApplicationSource{
+				RepoURL:        "https://github.com/org/repo",
+				Path:           "manifests",
+				TargetRevision: "main",
 			},
-			"destination": map[string]any{
-				"server":    "https://kubernetes.default.svc",
-				"namespace": "default",
+			Destination: v1alpha1.ApplicationDestination{
+				Server:    "https://kubernetes.default.svc",
+				Namespace: "default",
 			},
 		},
-		"status": map[string]any{
-			"health": map[string]any{
-				"status": "Healthy",
+		Status: v1alpha1.ApplicationStatus{
+			Health: v1alpha1.AppHealthStatus{
+				Status: "Healthy",
 			},
 		},
 	}
@@ -147,28 +150,26 @@ func TestBuildTempAppSpec_WithLiveSpec(t *testing.T) {
 
 	tempApp := buildTempAppSpec(original, "my-app-lemuria-pr10-base", cfg)
 
-	metadata := tempApp["metadata"].(map[string]any)
-
 	// Verify live metadata fields are stripped
-	if _, ok := metadata["resourceVersion"]; ok {
+	if tempApp.ResourceVersion != "" {
 		t.Error("expected resourceVersion to be removed")
 	}
-	if _, ok := metadata["uid"]; ok {
+	if tempApp.UID != "" {
 		t.Error("expected uid to be removed")
 	}
-	if _, ok := metadata["creationTimestamp"]; ok {
+	if !tempApp.CreationTimestamp.IsZero() {
 		t.Error("expected creationTimestamp to be removed")
 	}
-	if _, ok := metadata["generation"]; ok {
+	if tempApp.Generation != 0 {
 		t.Error("expected generation to be removed")
 	}
-	if _, ok := metadata["managedFields"]; ok {
+	if tempApp.ManagedFields != nil {
 		t.Error("expected managedFields to be removed")
 	}
 
-	// Verify status is removed
-	if _, ok := tempApp["status"]; ok {
-		t.Error("expected status to be removed")
+	// Verify status is cleared
+	if tempApp.Status.Health.Status != "" {
+		t.Error("expected status to be cleared")
 	}
 }
 

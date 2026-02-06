@@ -5,47 +5,14 @@ import (
 	"fmt"
 	"net/url"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+
 	"github.com/org/lemuria/internal/models"
 )
 
-// applicationSetResponse represents the Argo CD ApplicationSet API response.
-type applicationSetResponse struct {
-	Metadata struct {
-		Name      string `json:"name"`
-		Namespace string `json:"namespace"`
-	} `json:"metadata"`
-	Spec struct {
-		Template struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Spec struct {
-				Project string `json:"project"`
-				Source  *struct {
-					RepoURL        string `json:"repoURL"`
-					Path           string `json:"path"`
-					TargetRevision string `json:"targetRevision"`
-				} `json:"source,omitempty"`
-				Sources []struct {
-					RepoURL        string `json:"repoURL"`
-					Path           string `json:"path"`
-					TargetRevision string `json:"targetRevision"`
-				} `json:"sources,omitempty"`
-				Destination struct {
-					Server    string `json:"server"`
-					Namespace string `json:"namespace"`
-				} `json:"destination"`
-			} `json:"spec"`
-		} `json:"template"`
-	} `json:"spec"`
-}
-
 // ListApplicationSets returns all ApplicationSets from Argo CD.
 func (c *Client) ListApplicationSets(ctx context.Context) ([]models.ApplicationSet, error) {
-	var resp struct {
-		Items []applicationSetResponse `json:"items"`
-	}
-
+	var resp v1alpha1.ApplicationSetList
 	if err := c.get(ctx, "/api/v1/applicationsets", nil, &resp); err != nil {
 		return nil, fmt.Errorf("listing applicationsets: %w", err)
 	}
@@ -60,7 +27,7 @@ func (c *Client) ListApplicationSets(ctx context.Context) ([]models.ApplicationS
 
 // GetApplicationSet returns a specific ApplicationSet by name.
 func (c *Client) GetApplicationSet(ctx context.Context, name string) (*models.ApplicationSet, error) {
-	var resp applicationSetResponse
+	var resp v1alpha1.ApplicationSet
 	if err := c.get(ctx, "/api/v1/applicationsets/"+url.PathEscape(name), nil, &resp); err != nil {
 		return nil, fmt.Errorf("getting applicationset %s: %w", name, err)
 	}
@@ -69,30 +36,30 @@ func (c *Client) GetApplicationSet(ctx context.Context, name string) (*models.Ap
 	return &appSet, nil
 }
 
-// convertApplicationSet converts the API response to our model.
-func convertApplicationSet(resp applicationSetResponse) models.ApplicationSet {
-	appSet := models.ApplicationSet{
-		Name:      resp.Metadata.Name,
-		Namespace: resp.Metadata.Namespace,
+// convertApplicationSet converts a v1alpha1.ApplicationSet to our domain model.
+func convertApplicationSet(appSet v1alpha1.ApplicationSet) models.ApplicationSet {
+	result := models.ApplicationSet{
+		Name:      appSet.Name,
+		Namespace: appSet.Namespace,
 	}
 
-	// Template application
+	tmpl := appSet.Spec.Template
 	template := models.Application{
-		Name:                 resp.Spec.Template.Metadata.Name,
-		Project:              resp.Spec.Template.Spec.Project,
-		DestinationServer:    resp.Spec.Template.Spec.Destination.Server,
-		DestinationNamespace: resp.Spec.Template.Spec.Destination.Namespace,
+		Name:                 tmpl.Name,
+		Project:              tmpl.Spec.Project,
+		DestinationServer:    tmpl.Spec.Destination.Server,
+		DestinationNamespace: tmpl.Spec.Destination.Namespace,
 	}
 
-	if resp.Spec.Template.Spec.Source != nil {
-		template.RepoURL = resp.Spec.Template.Spec.Source.RepoURL
-		template.Path = resp.Spec.Template.Spec.Source.Path
-		template.TargetRevision = resp.Spec.Template.Spec.Source.TargetRevision
+	if tmpl.Spec.Source != nil {
+		template.RepoURL = tmpl.Spec.Source.RepoURL
+		template.Path = tmpl.Spec.Source.Path
+		template.TargetRevision = tmpl.Spec.Source.TargetRevision
 	}
 
-	if len(resp.Spec.Template.Spec.Sources) > 0 {
-		template.Sources = make([]models.ApplicationSource, len(resp.Spec.Template.Spec.Sources))
-		for i, src := range resp.Spec.Template.Spec.Sources {
+	if len(tmpl.Spec.Sources) > 0 {
+		template.Sources = make([]models.ApplicationSource, len(tmpl.Spec.Sources))
+		for i, src := range tmpl.Spec.Sources {
 			template.Sources[i] = models.ApplicationSource{
 				RepoURL:        src.RepoURL,
 				Path:           src.Path,
@@ -101,8 +68,8 @@ func convertApplicationSet(resp applicationSetResponse) models.ApplicationSet {
 		}
 	}
 
-	appSet.Template = template
-	return appSet
+	result.Template = template
+	return result
 }
 
 // GetApplicationsByApplicationSet returns all applications created by an ApplicationSet.
