@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
-import { useLocks } from '../hooks/useLocks';
+import { LockList } from '../components/Locks/LockList';
 
 interface StatusResponse {
   status: string;
@@ -13,8 +13,6 @@ export function Dashboard() {
     queryFn: () => api.get<StatusResponse>('/api/v1/status'),
   });
 
-  const { data: locksData } = useLocks();
-
   return (
     <div className="space-y-6">
       <div>
@@ -22,7 +20,7 @@ export function Dashboard() {
         <p className="text-gray-500">Argo CD PR automation overview</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white rounded-lg border border-gray-200 p-6">
           <div className="text-sm font-medium text-gray-500">Server Status</div>
           <div className="mt-2 flex items-center">
@@ -41,18 +39,6 @@ export function Dashboard() {
         </div>
 
         <div className="bg-white rounded-lg border border-gray-200 p-6">
-          <div className="text-sm font-medium text-gray-500">Active Locks</div>
-          <div className="mt-2 text-3xl font-bold text-gray-900">
-            {locksData?.count ?? '-'}
-          </div>
-          <div className="mt-1 text-sm text-gray-500">
-            <a href="/locks" className="text-primary-600 hover:underline">
-              View all locks
-            </a>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
           <div className="text-sm font-medium text-gray-500">Quick Actions</div>
           <div className="mt-3 space-y-2">
             <a
@@ -61,16 +47,13 @@ export function Dashboard() {
             >
               Manage application locks
             </a>
-            <a
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-sm text-primary-600 hover:underline"
-            >
-              View GitHub PRs
-            </a>
           </div>
         </div>
+      </div>
+
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Active Locks</h2>
+        <LockList />
       </div>
 
       <div className="bg-white rounded-lg border border-gray-200 p-6">
