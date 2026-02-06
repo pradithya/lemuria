@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useAuth } from '../../hooks';
 import { useUnlockApp } from '../../hooks/useLocks';
 import type { Lock } from '../../types';
 
@@ -8,11 +7,9 @@ interface LockCardProps {
 }
 
 export function LockCard({ lock }: LockCardProps) {
-  const { user } = useAuth();
   const unlockMutation = useUnlockApp();
   const [confirming, setConfirming] = useState(false);
 
-  const isAdmin = user?.role === 'admin';
   const lockedAt = new Date(lock.locked_at);
   const timeAgo = getTimeAgo(lockedAt);
 
@@ -39,23 +36,21 @@ export function LockCard({ lock }: LockCardProps) {
             Locked by <span className="font-medium">{lock.user}</span>
           </p>
         </div>
-        {isAdmin && (
-          <button
-            onClick={handleUnlock}
-            disabled={unlockMutation.isPending}
-            className={`px-3 py-1 text-sm rounded ${
-              confirming
-                ? 'bg-red-600 text-white hover:bg-red-700'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            } disabled:opacity-50`}
-          >
-            {unlockMutation.isPending
-              ? 'Unlocking...'
-              : confirming
-              ? 'Confirm Unlock'
-              : 'Unlock'}
-          </button>
-        )}
+        <button
+          onClick={handleUnlock}
+          disabled={unlockMutation.isPending}
+          className={`px-3 py-1 text-sm rounded ${
+            confirming
+              ? 'bg-red-600 text-white hover:bg-red-700'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+          } disabled:opacity-50`}
+        >
+          {unlockMutation.isPending
+            ? 'Unlocking...'
+            : confirming
+            ? 'Confirm Unlock'
+            : 'Unlock'}
+        </button>
       </div>
 
       <div className="mt-3 flex items-center space-x-4 text-sm text-gray-500">
