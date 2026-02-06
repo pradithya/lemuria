@@ -176,8 +176,9 @@ EOF
 create_test_apps() {
     echo "Creating test applications..."
 
-    # Create test namespace
+    # Create test namespaces
     kubectl create namespace test-apps --dry-run=client -o yaml | kubectl apply -f -
+    kubectl create namespace e2e-test-apps --dry-run=client -o yaml | kubectl apply -f -
 
     # Apply test application manifests
     kubectl apply -f "$E2E_DIR/manifests/"
