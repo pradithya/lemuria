@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/models"
@@ -195,13 +196,33 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	)
 	result.LockStatus = "Locked by this PR"
 
-	// Get diff between live cluster state and PR revision
-	// This mimics `argocd app diff --revision <sha>` behavior
+	// Get diff using temporary applications
+	// This properly handles multi-source apps with external Helm charts
+	diffMode := argocd.DiffMode(e.config.ArgoCD.DiffMode)
+	if diffMode == "" {
+		diffMode = argocd.DiffModeBranch // Default to branch mode
+	}
+
+	timeout := e.config.ArgoCD.TempAppTimeout
+	if timeout == 0 {
+		timeout = 2 * time.Minute
+	}
+
 	e.logger.Debug("getting application diff",
 		"app", app.Name,
-		"revision", event.PR.HeadSHA,
+		"mode", diffMode,
+		"base_branch", event.PR.BaseRef,
+		"target_branch", event.PR.HeadRef,
 	)
-	diffs, err := e.argocd.GetApplicationDiff(ctx, app.Name, event.PR.HeadSHA)
+
+	diffs, err := e.argocd.GetApplicationDiff(ctx, app.Name, argocd.DiffOptions{
+		Mode:         diffMode,
+		BaseBranch:   event.PR.BaseRef,
+		TargetBranch: event.PR.HeadRef,
+		PRNumber:     event.PR.Number,
+		PRRepo:       event.Repo.FullName,
+		Timeout:      timeout,
+	})
 	if err != nil {
 		e.logger.Debug("failed to generate diff",
 			"app", app.Name,

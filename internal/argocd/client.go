@@ -120,6 +120,22 @@ func (c *Client) post(ctx context.Context, path string, query url.Values, payloa
 	return nil
 }
 
+// delete performs a DELETE request.
+func (c *Client) delete(ctx context.Context, path string, query url.Values) error {
+	resp, err := c.request(ctx, http.MethodDelete, path, query, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
 // Version returns the Argo CD server version.
 func (c *Client) Version(ctx context.Context) (string, error) {
 	var resp struct {

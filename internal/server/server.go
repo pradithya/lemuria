@@ -212,6 +212,9 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 
 // Run starts the server and blocks until shutdown.
 func (s *Server) Run() error {
+	// Cleanup any orphaned temporary applications from previous runs
+	s.cleanupStaleTempApps()
+
 	// Channel to receive shutdown signals
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
@@ -264,4 +267,20 @@ func (s *Server) Close() error {
 		}
 	}
 	return nil
+}
+
+// cleanupStaleTempApps removes any orphaned temporary applications from previous runs.
+func (s *Server) cleanupStaleTempApps() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tempMgr := argocd.NewTempAppManager(s.argoClient)
+	deleted, err := tempMgr.CleanupStaleApps(ctx, 1*time.Hour)
+	if err != nil {
+		s.logger.Warn("failed to cleanup stale temp apps", "error", err)
+		return
+	}
+	if deleted > 0 {
+		s.logger.Info("cleaned up stale temp apps", "count", deleted)
+	}
 }

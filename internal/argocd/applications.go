@@ -312,3 +312,35 @@ func (c *Client) RollbackApplication(ctx context.Context, name string, opts *Rol
 		Message:     resp.Status.OperationState.Message,
 	}, nil
 }
+
+// CreateApplication creates a new application in ArgoCD.
+func (c *Client) CreateApplication(ctx context.Context, app map[string]interface{}) error {
+	if err := c.post(ctx, "/api/v1/applications", nil, app, nil); err != nil {
+		return fmt.Errorf("creating application: %w", err)
+	}
+	return nil
+}
+
+// DeleteApplication deletes an application from ArgoCD.
+func (c *Client) DeleteApplication(ctx context.Context, name string, cascade bool) error {
+	query := url.Values{}
+	if cascade {
+		query.Set("cascade", "true")
+	} else {
+		query.Set("cascade", "false")
+	}
+
+	if err := c.delete(ctx, "/api/v1/applications/"+url.PathEscape(name), query); err != nil {
+		return fmt.Errorf("deleting application %s: %w", name, err)
+	}
+	return nil
+}
+
+// GetApplicationRaw returns the raw application spec as a map for modification.
+func (c *Client) GetApplicationRaw(ctx context.Context, name string) (map[string]interface{}, error) {
+	var resp map[string]interface{}
+	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
+		return nil, fmt.Errorf("getting application %s: %w", name, err)
+	}
+	return resp, nil
+}

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pmezard/go-difflib/difflib"
 	"gopkg.in/yaml.v3"
@@ -33,30 +34,222 @@ func resourceKey(group, kind, namespace, name string) string {
 	return fmt.Sprintf("%s/%s/%s", group, kind, name)
 }
 
-// GetApplicationDiff computes the diff between live cluster state and target revision.
-// This mimics `argocd app diff --revision <revision>` behavior.
+// DiffMode specifies how to compute diffs.
+type DiffMode string
+
+const (
+	// DiffModeBranch compares base branch vs target branch (what the PR changes).
+	DiffModeBranch DiffMode = "branch"
+	// DiffModeLive compares live cluster vs target branch (what would change if synced).
+	DiffModeLive DiffMode = "live"
+	// DiffModeBoth performs a 3-way diff: base branch, target branch, and live cluster.
+	// Shows both what the PR changes and what would be synced to the cluster.
+	DiffModeBoth DiffMode = "both"
+)
+
+// DiffOptions configures diff generation.
+type DiffOptions struct {
+	Mode         DiffMode      // "branch", "live", or "both"
+	BaseBranch   string        // Required for DiffModeBranch/DiffModeBoth (e.g., "main")
+	TargetBranch string        // Target branch (e.g., "feature/my-change")
+	PRNumber     int           // PR number for temp app naming
+	PRRepo       string        // Repository (e.g., "owner/repo")
+	Timeout      time.Duration // Timeout for manifest rendering
+}
+
+// GetApplicationDiff computes diff using temporary applications.
+// This handles multi-source apps with external Helm charts correctly.
 //
-// revision: the git revision to compare against live state. Required.
-//
-// Returns what changes would be applied to the cluster if synced to this revision.
-func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision string) ([]models.ManifestDiff, error) {
-	if revision == "" {
-		return nil, fmt.Errorf("revision is required")
+// For DiffModeBranch: creates temp apps for base and target branches, compares their manifests.
+// For DiffModeLive: compares live cluster state against temp app for target branch.
+// For DiffModeBoth: 3-way comparison of base branch, target branch, and live cluster.
+func (c *Client) GetApplicationDiff(ctx context.Context, appName string, opts DiffOptions) ([]models.ManifestDiff, error) {
+	if opts.Timeout == 0 {
+		opts.Timeout = 2 * time.Minute
 	}
 
-	// Get live state from cluster via managed-resources API
-	liveResources, err := c.getManagedResources(ctx, name)
+	tempMgr := NewTempAppManager(c)
+
+	switch opts.Mode {
+	case DiffModeBranch:
+		return c.diffBranchMode(ctx, tempMgr, appName, opts)
+	case DiffModeLive:
+		return c.diffLiveMode(ctx, tempMgr, appName, opts)
+	case DiffModeBoth:
+		return c.diffBothMode(ctx, tempMgr, appName, opts)
+	default:
+		// Default to branch mode
+		return c.diffBranchMode(ctx, tempMgr, appName, opts)
+	}
+}
+
+// diffBranchMode compares base branch vs target branch.
+func (c *Client) diffBranchMode(ctx context.Context, tempMgr *TempAppManager, appName string, opts DiffOptions) ([]models.ManifestDiff, error) {
+	if opts.BaseBranch == "" {
+		return nil, fmt.Errorf("base branch is required for branch diff mode")
+	}
+	if opts.TargetBranch == "" {
+		return nil, fmt.Errorf("target branch is required for branch diff mode")
+	}
+
+	var baseAppName, targetAppName string
+	var cleanupFuncs []func()
+
+	defer func() {
+		// Cleanup temp apps in reverse order
+		for i := len(cleanupFuncs) - 1; i >= 0; i-- {
+			cleanupFuncs[i]()
+		}
+	}()
+
+	// Create temp app for base branch
+	var err error
+	baseAppName, err = tempMgr.CreateTempApp(ctx, TempAppConfig{
+		OriginalAppName: appName,
+		TargetBranch:    opts.BaseBranch,
+		PRNumber:        opts.PRNumber,
+		PRRepo:          opts.PRRepo,
+		Suffix:          "base",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating base temp app: %w", err)
+	}
+	cleanupFuncs = append(cleanupFuncs, func() {
+		_ = tempMgr.DeleteTempApp(context.Background(), baseAppName)
+	})
+
+	// Create temp app for target branch
+	targetAppName, err = tempMgr.CreateTempApp(ctx, TempAppConfig{
+		OriginalAppName: appName,
+		TargetBranch:    opts.TargetBranch,
+		PRNumber:        opts.PRNumber,
+		PRRepo:          opts.PRRepo,
+		Suffix:          "head",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating target temp app: %w", err)
+	}
+	cleanupFuncs = append(cleanupFuncs, func() {
+		_ = tempMgr.DeleteTempApp(context.Background(), targetAppName)
+	})
+
+	// Wait for manifests from both apps
+	baseManifests, err := tempMgr.WaitForManifests(ctx, baseAppName, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for base manifests: %w", err)
+	}
+
+	targetManifests, err := tempMgr.WaitForManifests(ctx, targetAppName, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for target manifests: %w", err)
+	}
+
+	// Compute diff between base and target
+	return computeManifestsDiff(baseManifests, targetManifests), nil
+}
+
+// diffLiveMode compares live cluster state vs target branch.
+func (c *Client) diffLiveMode(ctx context.Context, tempMgr *TempAppManager, appName string, opts DiffOptions) ([]models.ManifestDiff, error) {
+	if opts.TargetBranch == "" {
+		return nil, fmt.Errorf("target branch is required for live diff mode")
+	}
+
+	// Get live state from cluster
+	liveResources, err := c.getManagedResources(ctx, appName)
 	if err != nil {
 		return nil, fmt.Errorf("getting live resources: %w", err)
 	}
 
-	// Get target manifests at the specified revision
-	targetManifests, _, err := c.GetManifests(ctx, name, &GetManifestsParams{Revision: revision})
+	// Create temp app for target branch
+	targetAppName, err := tempMgr.CreateTempApp(ctx, TempAppConfig{
+		OriginalAppName: appName,
+		TargetBranch:    opts.TargetBranch,
+		PRNumber:        opts.PRNumber,
+		PRRepo:          opts.PRRepo,
+		Suffix:          "head",
+	})
 	if err != nil {
-		return nil, fmt.Errorf("getting manifests at revision %s: %w", revision, err)
+		return nil, fmt.Errorf("creating target temp app: %w", err)
+	}
+	defer func() {
+		_ = tempMgr.DeleteTempApp(context.Background(), targetAppName)
+	}()
+
+	// Wait for manifests
+	targetManifests, err := tempMgr.WaitForManifests(ctx, targetAppName, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for target manifests: %w", err)
 	}
 
+	// Compute diff between live and target
 	return computeLiveVsTargetDiff(liveResources, targetManifests), nil
+}
+
+// diffBothMode performs a 3-way diff: base branch vs target branch vs live cluster.
+func (c *Client) diffBothMode(ctx context.Context, tempMgr *TempAppManager, appName string, opts DiffOptions) ([]models.ManifestDiff, error) {
+	if opts.BaseBranch == "" {
+		return nil, fmt.Errorf("base branch is required for both diff mode")
+	}
+	if opts.TargetBranch == "" {
+		return nil, fmt.Errorf("target branch is required for both diff mode")
+	}
+
+	var cleanupFuncs []func()
+	defer func() {
+		for i := len(cleanupFuncs) - 1; i >= 0; i-- {
+			cleanupFuncs[i]()
+		}
+	}()
+
+	// Get live state from cluster
+	liveResources, err := c.getManagedResources(ctx, appName)
+	if err != nil {
+		return nil, fmt.Errorf("getting live resources: %w", err)
+	}
+
+	// Create temp app for base branch
+	baseAppName, err := tempMgr.CreateTempApp(ctx, TempAppConfig{
+		OriginalAppName: appName,
+		TargetBranch:    opts.BaseBranch,
+		PRNumber:        opts.PRNumber,
+		PRRepo:          opts.PRRepo,
+		Suffix:          "base",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating base temp app: %w", err)
+	}
+	cleanupFuncs = append(cleanupFuncs, func() {
+		_ = tempMgr.DeleteTempApp(context.Background(), baseAppName)
+	})
+
+	// Create temp app for target branch
+	targetAppName, err := tempMgr.CreateTempApp(ctx, TempAppConfig{
+		OriginalAppName: appName,
+		TargetBranch:    opts.TargetBranch,
+		PRNumber:        opts.PRNumber,
+		PRRepo:          opts.PRRepo,
+		Suffix:          "head",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating target temp app: %w", err)
+	}
+	cleanupFuncs = append(cleanupFuncs, func() {
+		_ = tempMgr.DeleteTempApp(context.Background(), targetAppName)
+	})
+
+	// Wait for manifests from both apps
+	baseManifests, err := tempMgr.WaitForManifests(ctx, baseAppName, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for base manifests: %w", err)
+	}
+
+	targetManifests, err := tempMgr.WaitForManifests(ctx, targetAppName, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for target manifests: %w", err)
+	}
+
+	// Compute 3-way diff
+	return computeThreeWayDiff(baseManifests, targetManifests, liveResources), nil
 }
 
 // getManagedResources fetches the live state of resources from the cluster.
@@ -230,6 +423,125 @@ func computeManifestsDiff(current, target []models.Manifest) []models.ManifestDi
 			Diff:        formatDeleteDiff(currentManifest.Raw),
 			Action:      models.DiffActionDelete,
 		})
+	}
+
+	sort.Slice(diffs, func(i, j int) bool {
+		return diffs[i].Resource.String() < diffs[j].Resource.String()
+	})
+
+	return diffs
+}
+
+// computeThreeWayDiff compares base branch, target branch, and live cluster state.
+// Returns diffs with both BranchDiff (base→target) and LiveDiff (live→target).
+func computeThreeWayDiff(baseManifests, targetManifests []models.Manifest, liveResources []ManagedResource) []models.ManifestDiff {
+	baseMap := buildManifestMap(baseManifests)
+	targetMap := buildManifestMap(targetManifests)
+
+	// Build live map
+	liveMap := make(map[string]ManagedResource)
+	for _, res := range liveResources {
+		if res.Hook {
+			continue
+		}
+		if res.Kind == "Secret" && (res.Group == "" || res.Group == "v1") {
+			continue
+		}
+		key := resourceKey(res.Group, res.Kind, res.Namespace, res.Name)
+		liveMap[key] = res
+	}
+
+	// Collect all unique keys
+	allKeys := make(map[string]bool)
+	for key := range baseMap {
+		allKeys[key] = true
+	}
+	for key := range targetMap {
+		allKeys[key] = true
+	}
+	for key := range liveMap {
+		allKeys[key] = true
+	}
+
+	var diffs []models.ManifestDiff
+
+	for key := range allKeys {
+		resource := parseResourceKey(key)
+
+		// Skip secrets
+		if resource.Kind == "Secret" && (resource.APIVersion == "" || resource.APIVersion == "v1") {
+			continue
+		}
+
+		baseManifest, baseExists := baseMap[key]
+		targetManifest, targetExists := targetMap[key]
+		liveRes, liveExists := liveMap[key]
+
+		// Get state strings
+		var baseState, targetState, liveState string
+		if baseExists {
+			baseState = baseManifest.Raw
+		}
+		if targetExists {
+			targetState = targetManifest.Raw
+		}
+		if liveExists {
+			liveState = liveRes.NormalizedLiveState
+			if liveState == "" {
+				liveState = liveRes.LiveState
+			}
+		}
+
+		// Compute branch diff (base → target)
+		var branchDiff string
+		var branchAction models.DiffAction
+		if !baseExists && targetExists {
+			branchDiff = formatCreateDiff(targetState)
+			branchAction = models.DiffActionCreate
+		} else if baseExists && !targetExists {
+			branchDiff = formatDeleteDiff(baseState)
+			branchAction = models.DiffActionDelete
+		} else if baseExists && targetExists {
+			branchDiff = computeDiff(baseState, targetState)
+			if branchDiff != "" {
+				branchAction = models.DiffActionUpdate
+			} else {
+				branchAction = models.DiffActionNone
+			}
+		}
+
+		// Compute live diff (live → target)
+		var liveDiff string
+		var liveAction models.DiffAction
+		if !liveExists && targetExists {
+			liveDiff = formatCreateDiff(targetState)
+			liveAction = models.DiffActionCreate
+		} else if liveExists && !targetExists {
+			liveDiff = formatDeleteDiff(liveState)
+			liveAction = models.DiffActionDelete
+		} else if liveExists && targetExists {
+			liveDiff = computeDiff(liveState, targetState)
+			if liveDiff != "" {
+				liveAction = models.DiffActionUpdate
+			} else {
+				liveAction = models.DiffActionNone
+			}
+		}
+
+		// Only include if there's at least one diff
+		if branchDiff != "" || liveDiff != "" {
+			diffs = append(diffs, models.ManifestDiff{
+				Resource:    resource,
+				BaseState:   baseState,
+				LiveState:   liveState,
+				TargetState: targetState,
+				Diff:        branchDiff, // Primary diff is the branch diff
+				BranchDiff:  branchDiff,
+				LiveDiff:    liveDiff,
+				Action:      branchAction, // Primary action is the branch action
+				LiveAction:  liveAction,
+			})
+		}
 	}
 
 	sort.Slice(diffs, func(i, j int) bool {
