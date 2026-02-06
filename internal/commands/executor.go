@@ -15,7 +15,7 @@ import (
 
 // Executor handles command execution.
 type Executor struct {
-	github   *github.Client
+	github   GitHubClient
 	argocd   *argocd.Client
 	lock     lock.Manager
 	config   *config.Config
@@ -24,7 +24,7 @@ type Executor struct {
 }
 
 // NewExecutor creates a new command executor.
-func NewExecutor(gh *github.Client, argo *argocd.Client, lockMgr lock.Manager, cfg *config.Config, logger *slog.Logger) *Executor {
+func NewExecutor(gh GitHubClient, argo *argocd.Client, lockMgr lock.Manager, cfg *config.Config, logger *slog.Logger) *Executor {
 	return &Executor{
 		github:   gh,
 		argocd:   argo,
