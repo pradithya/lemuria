@@ -290,7 +290,8 @@ func TestGetApplicationDiff(t *testing.T) {
 	}
 
 	appName := apps[0].Name
-	diffs, err := argoClient.GetApplicationDiff(testCtx, appName, "")
+	// Compare live state vs HEAD revision (mimics `argocd app diff --revision HEAD`)
+	diffs, err := argoClient.GetApplicationDiff(testCtx, appName, "HEAD")
 	if err != nil {
 		t.Fatalf("Failed to get diff for %s: %v", appName, err)
 	}
@@ -524,21 +525,21 @@ func TestFullPlanWorkflow(t *testing.T) {
 
 	t.Log("Lock acquired successfully")
 
-	// Step 2: Get diff
-	diffs, err := argoClient.GetApplicationDiff(testCtx, app.Name, "")
-	if err != nil {
-		t.Fatalf("Failed to get diff: %v", err)
-	}
-
-	t.Logf("Got %d diffs", len(diffs))
-
-	// Step 3: Get manifests to determine revision
+	// Step 2: Get manifests to determine revision
 	_, revision, err := argoClient.GetManifests(testCtx, app.Name, nil)
 	if err != nil {
 		t.Fatalf("Failed to get manifests: %v", err)
 	}
 
 	t.Logf("Target revision: %s", revision)
+
+	// Step 3: Get diff (compare live state vs target revision)
+	diffs, err := argoClient.GetApplicationDiff(testCtx, app.Name, revision)
+	if err != nil {
+		t.Fatalf("Failed to get diff: %v", err)
+	}
+
+	t.Logf("Got %d diffs", len(diffs))
 
 	// Step 4: Store plan
 	err = lockManager.StorePlan(testCtx, app.Name, prNumber, revision)
