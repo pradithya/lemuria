@@ -88,14 +88,14 @@ type Manifest struct {
 // Supports 2-way (branch or live) and 3-way (both) comparisons.
 type ManifestDiff struct {
 	Resource    ResourceKey `json:"resource"`
-	BaseState   string      `json:"baseState,omitempty"`   // State from base branch (for branch/both modes)
-	LiveState   string      `json:"liveState,omitempty"`   // State from live cluster (for live/both modes)
-	TargetState string      `json:"targetState"`           // State from target branch
-	Diff        string      `json:"diff"`                  // Primary diff (branch diff for branch/both, live diff for live mode)
-	BranchDiff  string      `json:"branchDiff,omitempty"`  // Base → Target diff (for both mode)
-	LiveDiff    string      `json:"liveDiff,omitempty"`    // Live → Target diff (for both mode)
-	Action      DiffAction  `json:"action"`                // Action based on primary comparison
-	LiveAction  DiffAction  `json:"liveAction,omitempty"`  // Action for live comparison (for both mode)
+	BaseState   string      `json:"baseState,omitempty"`  // State from base branch (for branch/both modes)
+	LiveState   string      `json:"liveState,omitempty"`  // State from live cluster (for live/both modes)
+	TargetState string      `json:"targetState"`          // State from target branch
+	Diff        string      `json:"diff"`                 // Primary diff (branch diff for branch/both, live diff for live mode)
+	BranchDiff  string      `json:"branchDiff,omitempty"` // Base → Target diff (for both mode)
+	LiveDiff    string      `json:"liveDiff,omitempty"`   // Live → Target diff (for both mode)
+	Action      DiffAction  `json:"action"`               // Action based on primary comparison
+	LiveAction  DiffAction  `json:"liveAction,omitempty"` // Action for live comparison (for both mode)
 }
 
 // ResourceKey uniquely identifies a Kubernetes resource.

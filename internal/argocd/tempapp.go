@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/org/lemuria/internal/models"
@@ -190,9 +191,7 @@ func buildTempAppSpec(original map[string]interface{}, tempName string, cfg Temp
 	labels[labelTempApp] = "true"
 	labels[labelOriginalApp] = cfg.OriginalAppName
 	labels[labelPRNumber] = strconv.Itoa(cfg.PRNumber)
-	labels[labelPRRepo] = cfg.PRRepo
-	labels[labelCreatedAt] = time.Now().UTC().Format(time.RFC3339)
-
+	labels[labelPRRepo] = sanitizeLabelValue(cfg.PRRepo)
 	// Get spec
 	spec, ok := tempApp["spec"].(map[string]interface{})
 	if !ok {
@@ -271,4 +270,24 @@ func deepCopySlice(s []interface{}) []interface{} {
 		}
 	}
 	return result
+}
+
+// sanitizeLabelValue ensures a string is valid for use as a Kubernetes label value.
+// Label values must be empty or consist of alphanumeric characters, '-', '_', or '.',
+// and must start and end with an alphanumeric character.
+func sanitizeLabelValue(s string) string {
+	// Replace common invalid characters
+	s = strings.ReplaceAll(s, "/", "-")
+	s = strings.ReplaceAll(s, ":", "-")
+
+	// Ensure it starts and ends with alphanumeric
+	s = strings.Trim(s, "-_.")
+
+	// Truncate to max label value length (63 characters)
+	if len(s) > 63 {
+		s = s[:63]
+		s = strings.TrimRight(s, "-_.")
+	}
+
+	return s
 }
