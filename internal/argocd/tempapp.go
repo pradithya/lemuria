@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+
 	"github.com/org/lemuria/internal/models"
 )
 
@@ -36,7 +38,7 @@ type TempAppConfig struct {
 	PRNumber        int                    // For naming and labeling
 	PRRepo          string                 // Repository (e.g., "owner/repo") to identify which sources to update
 	Suffix          string                 // "base" or "head"
-	AppSpecOverride map[string]any // If set, use this spec instead of fetching from live ArgoCD
+	AppSpecOverride *v1alpha1.Application  // If set, use this spec instead of fetching from live ArgoCD
 }
 
 // CreateTempApp creates a temporary application configured for diff rendering.
@@ -46,7 +48,7 @@ type TempAppConfig struct {
 // - Has syncPolicy.automated removed (no auto-sync)
 // - Is labeled for cleanup identification
 func (m *TempAppManager) CreateTempApp(ctx context.Context, cfg TempAppConfig) (string, error) {
-	var originalApp map[string]interface{}
+	var originalApp *v1alpha1.Application
 
 	if cfg.AppSpecOverride != nil {
 		// Use the git-sourced spec instead of fetching from live ArgoCD
@@ -170,115 +172,55 @@ func generateTempAppName(baseName string, prNumber int, suffix string) string {
 }
 
 // buildTempAppSpec creates a modified application spec for diff rendering.
-func buildTempAppSpec(original map[string]interface{}, tempName string, cfg TempAppConfig) map[string]interface{} {
+func buildTempAppSpec(original *v1alpha1.Application, tempName string, cfg TempAppConfig) *v1alpha1.Application {
 	// Deep copy the original
-	tempApp := deepCopyMap(original)
-
-	// Get or create metadata
-	metadata, ok := tempApp["metadata"].(map[string]interface{})
-	if !ok {
-		metadata = make(map[string]interface{})
-		tempApp["metadata"] = metadata
-	}
+	tempApp := original.DeepCopy()
 
 	// Set new name
-	metadata["name"] = tempName
+	tempApp.Name = tempName
 
-	// Remove resourceVersion (required for creation)
-	delete(metadata, "resourceVersion")
-	delete(metadata, "uid")
-	delete(metadata, "creationTimestamp")
-	delete(metadata, "generation")
-	delete(metadata, "managedFields")
+	// Remove resourceVersion and other server-set metadata (required for creation)
+	tempApp.ResourceVersion = ""
+	tempApp.UID = ""
+	tempApp.CreationTimestamp.Reset()
+	tempApp.Generation = 0
+	tempApp.ManagedFields = nil
 
 	// Add identifying labels
-	labels, ok := metadata["labels"].(map[string]interface{})
-	if !ok {
-		labels = make(map[string]interface{})
-		metadata["labels"] = labels
+	if tempApp.Labels == nil {
+		tempApp.Labels = make(map[string]string)
 	}
-	labels[labelTempApp] = "true"
-	labels[labelOriginalApp] = cfg.OriginalAppName
-	labels[labelPRNumber] = strconv.Itoa(cfg.PRNumber)
-	labels[labelPRRepo] = sanitizeLabelValue(cfg.PRRepo)
-	// Get spec
-	spec, ok := tempApp["spec"].(map[string]interface{})
-	if !ok {
-		return tempApp
-	}
+	tempApp.Labels[labelTempApp] = "true"
+	tempApp.Labels[labelOriginalApp] = cfg.OriginalAppName
+	tempApp.Labels[labelPRNumber] = strconv.Itoa(cfg.PRNumber)
+	tempApp.Labels[labelPRRepo] = sanitizeLabelValue(cfg.PRRepo)
 
 	// Remove automated sync policy to prevent actual syncing
-	if syncPolicy, ok := spec["syncPolicy"].(map[string]interface{}); ok {
-		delete(syncPolicy, "automated")
+	if tempApp.Spec.SyncPolicy != nil {
+		tempApp.Spec.SyncPolicy.Automated = nil
 	}
 
 	// Update source(s) to point to target branch
 	prRepoNormalized := NormalizeRepoURL("https://github.com/" + cfg.PRRepo)
 
 	// Handle single source
-	if source, ok := spec["source"].(map[string]interface{}); ok {
-		updateSourceTargetRevision(source, prRepoNormalized, cfg.TargetBranch)
+	if tempApp.Spec.Source != nil {
+		if NormalizeRepoURL(tempApp.Spec.Source.RepoURL) == prRepoNormalized {
+			tempApp.Spec.Source.TargetRevision = cfg.TargetBranch
+		}
 	}
 
 	// Handle multi-source
-	if sources, ok := spec["sources"].([]interface{}); ok {
-		for _, src := range sources {
-			if source, ok := src.(map[string]interface{}); ok {
-				updateSourceTargetRevision(source, prRepoNormalized, cfg.TargetBranch)
-			}
+	for i := range tempApp.Spec.Sources {
+		if NormalizeRepoURL(tempApp.Spec.Sources[i].RepoURL) == prRepoNormalized {
+			tempApp.Spec.Sources[i].TargetRevision = cfg.TargetBranch
 		}
 	}
 
 	// Remove status (not needed for creation)
-	delete(tempApp, "status")
+	tempApp.Status = v1alpha1.ApplicationStatus{}
 
 	return tempApp
-}
-
-// updateSourceTargetRevision updates the targetRevision for sources matching the PR repo.
-func updateSourceTargetRevision(source map[string]interface{}, prRepoNormalized, targetBranch string) {
-	repoURL, ok := source["repoURL"].(string)
-	if !ok {
-		return
-	}
-
-	// Only update sources that match the PR repository
-	if NormalizeRepoURL(repoURL) == prRepoNormalized {
-		source["targetRevision"] = targetBranch
-	}
-	// External sources (Helm charts, other repos) keep their original targetRevision
-}
-
-// deepCopyMap creates a deep copy of a map.
-func deepCopyMap(m map[string]interface{}) map[string]interface{} {
-	result := make(map[string]interface{})
-	for k, v := range m {
-		switch val := v.(type) {
-		case map[string]interface{}:
-			result[k] = deepCopyMap(val)
-		case []interface{}:
-			result[k] = deepCopySlice(val)
-		default:
-			result[k] = v
-		}
-	}
-	return result
-}
-
-// deepCopySlice creates a deep copy of a slice.
-func deepCopySlice(s []interface{}) []interface{} {
-	result := make([]interface{}, len(s))
-	for i, v := range s {
-		switch val := v.(type) {
-		case map[string]interface{}:
-			result[i] = deepCopyMap(val)
-		case []interface{}:
-			result[i] = deepCopySlice(val)
-		default:
-			result[i] = v
-		}
-	}
-	return result
 }
 
 // sanitizeLabelValue ensures a string is valid for use as a Kubernetes label value.

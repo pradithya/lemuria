@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/models"
 	"github.com/org/lemuria/pkg/diff"
@@ -210,7 +212,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 
 	// If the Application CR file was modified, read specs from git branches
 	// so the diff reflects inline changes (e.g., Helm values in the Application CR)
-	var baseAppSpec, headAppSpec map[string]any
+	var baseAppSpec, headAppSpec *v1alpha1.Application
 	if app.SourceFile != "" {
 		e.logger.Debug("reading application spec from git branches",
 			"app", app.Name,

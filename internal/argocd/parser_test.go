@@ -21,28 +21,25 @@ spec:
     namespace: default
 `)
 
-		raw, err := ParseRawApplicationFromYAML(yaml, "my-app")
+		app, err := ParseRawApplicationFromYAML(yaml, "my-app")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if raw == nil {
+		if app == nil {
 			t.Fatal("expected non-nil result")
 		}
 
-		metadata, ok := raw["metadata"].(map[string]any)
-		if !ok {
-			t.Fatal("expected metadata to be a map")
+		if app.Name != "my-app" {
+			t.Errorf("expected name 'my-app', got %v", app.Name)
 		}
-		if metadata["name"] != "my-app" {
-			t.Errorf("expected name 'my-app', got %v", metadata["name"])
+		if app.Namespace != "argocd" {
+			t.Errorf("expected namespace 'argocd', got %v", app.Namespace)
 		}
-
-		spec, ok := raw["spec"].(map[string]any)
-		if !ok {
-			t.Fatal("expected spec to be a map")
+		if app.Spec.Source == nil {
+			t.Fatal("expected source to be non-nil")
 		}
-		if spec == nil {
-			t.Fatal("expected spec to be non-nil")
+		if app.Spec.Source.RepoURL != "https://github.com/org/repo" {
+			t.Errorf("expected repoURL, got %v", app.Spec.Source.RepoURL)
 		}
 	})
 
@@ -85,37 +82,26 @@ spec:
     server: https://kubernetes.default.svc
 `)
 
-		raw, err := ParseRawApplicationFromYAML(yaml, "app-two")
+		app, err := ParseRawApplicationFromYAML(yaml, "app-two")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		metadata := raw["metadata"].(map[string]any)
-		if metadata["name"] != "app-two" {
-			t.Errorf("expected name 'app-two', got %v", metadata["name"])
+		if app.Name != "app-two" {
+			t.Errorf("expected name 'app-two', got %v", app.Name)
 		}
 
 		// Verify the full structure is preserved (sources with helm values)
-		spec := raw["spec"].(map[string]any)
-		sources, ok := spec["sources"].([]interface{})
-		if !ok {
-			t.Fatal("expected sources to be a slice")
-		}
-		if len(sources) != 2 {
-			t.Fatalf("expected 2 sources, got %d", len(sources))
+		if len(app.Spec.Sources) != 2 {
+			t.Fatalf("expected 2 sources, got %d", len(app.Spec.Sources))
 		}
 
-		helmSource := sources[1].(map[string]any)
-		helm, ok := helmSource["helm"].(map[string]any)
-		if !ok {
-			t.Fatal("expected helm to be a map")
+		helmSource := app.Spec.Sources[1]
+		if helmSource.Helm == nil {
+			t.Fatal("expected helm to be non-nil")
 		}
-		values, ok := helm["values"].(string)
-		if !ok {
-			t.Fatal("expected helm values to be a string")
-		}
-		if values != "cpu: 52m\n" {
-			t.Errorf("expected helm values 'cpu: 52m\\n', got %q", values)
+		if helmSource.Helm.Values != "cpu: 52m\n" {
+			t.Errorf("expected helm values 'cpu: 52m\\n', got %q", helmSource.Helm.Values)
 		}
 	})
 

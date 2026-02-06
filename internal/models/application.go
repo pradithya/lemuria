@@ -1,5 +1,11 @@
 package models
 
+import (
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	"github.com/argoproj/gitops-engine/pkg/health"
+	synccommon "github.com/argoproj/gitops-engine/pkg/sync/common"
+)
+
 // ApplicationChangeType indicates whether an application is new, existing, or being deleted.
 type ApplicationChangeType string
 
@@ -48,24 +54,24 @@ type HelmSource struct {
 }
 
 // SyncStatus represents the sync state of an application.
-type SyncStatus string
+type SyncStatus = v1alpha1.SyncStatusCode
 
 const (
-	SyncStatusSynced    SyncStatus = "Synced"
-	SyncStatusOutOfSync SyncStatus = "OutOfSync"
-	SyncStatusUnknown   SyncStatus = "Unknown"
+	SyncStatusSynced    = v1alpha1.SyncStatusCodeSynced
+	SyncStatusOutOfSync = v1alpha1.SyncStatusCodeOutOfSync
+	SyncStatusUnknown   = v1alpha1.SyncStatusCodeUnknown
 )
 
 // HealthStatus represents the health state of an application.
-type HealthStatus string
+type HealthStatus = health.HealthStatusCode
 
 const (
-	HealthStatusHealthy     HealthStatus = "Healthy"
-	HealthStatusDegraded    HealthStatus = "Degraded"
-	HealthStatusProgressing HealthStatus = "Progressing"
-	HealthStatusSuspended   HealthStatus = "Suspended"
-	HealthStatusMissing     HealthStatus = "Missing"
-	HealthStatusUnknown     HealthStatus = "Unknown"
+	HealthStatusHealthy     = health.HealthStatusHealthy
+	HealthStatusDegraded    = health.HealthStatusDegraded
+	HealthStatusProgressing = health.HealthStatusProgressing
+	HealthStatusSuspended   = health.HealthStatusSuspended
+	HealthStatusMissing     = health.HealthStatusMissing
+	HealthStatusUnknown     = health.HealthStatusUnknown
 )
 
 // ApplicationSet represents an Argo CD ApplicationSet.
@@ -134,13 +140,13 @@ type SyncResult struct {
 }
 
 // SyncPhase represents the phase of a sync operation.
-type SyncPhase string
+type SyncPhase = synccommon.OperationPhase
 
 const (
-	SyncPhaseSucceeded SyncPhase = "Succeeded"
-	SyncPhaseFailed    SyncPhase = "Failed"
-	SyncPhaseRunning   SyncPhase = "Running"
-	SyncPhaseError     SyncPhase = "Error"
+	SyncPhaseSucceeded = synccommon.OperationSucceeded
+	SyncPhaseFailed    = synccommon.OperationFailed
+	SyncPhaseRunning   = synccommon.OperationRunning
+	SyncPhaseError     = synccommon.OperationError
 )
 
 // ResourceResult represents the sync result for a single resource.

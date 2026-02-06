@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	"github.com/pmezard/go-difflib/difflib"
 	"gopkg.in/yaml.v3"
 
@@ -56,11 +57,11 @@ type DiffOptions struct {
 	PRRepo       string        // Repository (e.g., "owner/repo")
 	Timeout      time.Duration // Timeout for manifest rendering
 
-	// BaseAppSpec and HeadAppSpec are raw Application specs read from git.
+	// BaseAppSpec and HeadAppSpec are typed Application specs read from git.
 	// When set, they override the live ArgoCD spec for temp app creation,
 	// allowing diffs to reflect inline changes to Application CRs (e.g., Helm values).
-	BaseAppSpec map[string]any // Application spec from base branch (nil = use live ArgoCD)
-	HeadAppSpec map[string]any // Application spec from head branch (nil = use live ArgoCD)
+	BaseAppSpec *v1alpha1.Application // Application spec from base branch (nil = use live ArgoCD)
+	HeadAppSpec *v1alpha1.Application // Application spec from head branch (nil = use live ArgoCD)
 }
 
 // GetApplicationDiff computes diff using temporary applications.
