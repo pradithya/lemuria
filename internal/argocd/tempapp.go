@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/org/lemuria/internal/models"
@@ -272,12 +271,4 @@ func deepCopySlice(s []interface{}) []interface{} {
 		}
 	}
 	return result
-}
-
-// sourceMatchesPRRepo checks if a source RepoURL matches the PR repository.
-func sourceMatchesPRRepo(repoURL, prRepo string) bool {
-	// Normalize both URLs for comparison
-	prRepoNormalized := NormalizeRepoURL("https://github.com/" + prRepo)
-	sourceNormalized := NormalizeRepoURL(repoURL)
-	return strings.EqualFold(sourceNormalized, prRepoNormalized)
 }
