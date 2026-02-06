@@ -667,9 +667,23 @@ func cleanForDiff(data map[string]any) {
 		delete(metadata, "creationTimestamp")
 		delete(metadata, "generation")
 		if annotations, ok := metadata["annotations"].(map[string]any); ok {
+			// Remove kubectl annotations
 			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+			// Remove ArgoCD annotations that are auto-generated
+			delete(annotations, "argocd.argoproj.io/tracking-id")
+			delete(annotations, "argocd.argoproj.io/compare-options")
+			delete(annotations, "argocd.argoproj.io/sync-options")
+			delete(annotations, "argocd.argoproj.io/manifest-generate-paths")
 			if len(annotations) == 0 {
 				delete(metadata, "annotations")
+			}
+		}
+		if labels, ok := metadata["labels"].(map[string]any); ok {
+			// Remove ArgoCD labels that are auto-generated
+			delete(labels, "argocd.argoproj.io/instance")
+			delete(labels, "app.kubernetes.io/instance")
+			if len(labels) == 0 {
+				delete(metadata, "labels")
 			}
 		}
 	}
