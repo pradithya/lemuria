@@ -374,6 +374,153 @@ func TestCleanForDiff(t *testing.T) {
 	}
 }
 
+func TestCleanForDiff_LabelsInSelectors(t *testing.T) {
+	t.Run("removes known labels from metadata, selector, and pod template", func(t *testing.T) {
+		data := map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata": map[string]any{
+				"name": "my-app",
+				"labels": map[string]any{
+					"app":                        "my-app",
+					"app.kubernetes.io/instance":  "argocd-app-name",
+					"argocd.argoproj.io/instance": "argocd-app-name",
+				},
+			},
+			"spec": map[string]any{
+				"selector": map[string]any{
+					"matchLabels": map[string]any{
+						"app":                        "my-app",
+						"app.kubernetes.io/instance":  "argocd-app-name",
+						"argocd.argoproj.io/instance": "argocd-app-name",
+					},
+				},
+				"template": map[string]any{
+					"metadata": map[string]any{
+						"labels": map[string]any{
+							"app":                        "my-app",
+							"app.kubernetes.io/instance":  "argocd-app-name",
+							"argocd.argoproj.io/instance": "argocd-app-name",
+						},
+					},
+				},
+			},
+		}
+
+		cleanForDiff(data)
+
+		// Check metadata.labels
+		metaLabels := data["metadata"].(map[string]any)["labels"].(map[string]any)
+		if _, ok := metaLabels["app.kubernetes.io/instance"]; ok {
+			t.Error("app.kubernetes.io/instance should be removed from metadata.labels")
+		}
+		if _, ok := metaLabels["argocd.argoproj.io/instance"]; ok {
+			t.Error("argocd.argoproj.io/instance should be removed from metadata.labels")
+		}
+		if metaLabels["app"] != "my-app" {
+			t.Error("non-argocd labels should be preserved in metadata.labels")
+		}
+
+		// Check spec.selector.matchLabels
+		spec := data["spec"].(map[string]any)
+		selector := spec["selector"].(map[string]any)
+		matchLabels := selector["matchLabels"].(map[string]any)
+		if _, ok := matchLabels["app.kubernetes.io/instance"]; ok {
+			t.Error("app.kubernetes.io/instance should be removed from spec.selector.matchLabels")
+		}
+		if _, ok := matchLabels["argocd.argoproj.io/instance"]; ok {
+			t.Error("argocd.argoproj.io/instance should be removed from spec.selector.matchLabels")
+		}
+		if matchLabels["app"] != "my-app" {
+			t.Error("non-argocd labels should be preserved in spec.selector.matchLabels")
+		}
+
+		// Check spec.template.metadata.labels
+		tmpl := spec["template"].(map[string]any)
+		tmplLabels := tmpl["metadata"].(map[string]any)["labels"].(map[string]any)
+		if _, ok := tmplLabels["app.kubernetes.io/instance"]; ok {
+			t.Error("app.kubernetes.io/instance should be removed from spec.template.metadata.labels")
+		}
+		if _, ok := tmplLabels["argocd.argoproj.io/instance"]; ok {
+			t.Error("argocd.argoproj.io/instance should be removed from spec.template.metadata.labels")
+		}
+		if tmplLabels["app"] != "my-app" {
+			t.Error("non-argocd labels should be preserved in spec.template.metadata.labels")
+		}
+	})
+
+	t.Run("removes empty matchLabels and labels after cleaning", func(t *testing.T) {
+		data := map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata": map[string]any{
+				"name": "my-app",
+				"labels": map[string]any{
+					"app.kubernetes.io/instance": "argocd-app-name",
+				},
+			},
+			"spec": map[string]any{
+				"selector": map[string]any{
+					"matchLabels": map[string]any{
+						"app.kubernetes.io/instance": "argocd-app-name",
+					},
+				},
+				"template": map[string]any{
+					"metadata": map[string]any{
+						"labels": map[string]any{
+							"app.kubernetes.io/instance": "argocd-app-name",
+						},
+					},
+				},
+			},
+		}
+
+		cleanForDiff(data)
+
+		metadata := data["metadata"].(map[string]any)
+		if _, ok := metadata["labels"]; ok {
+			t.Error("empty metadata.labels should be removed")
+		}
+
+		spec := data["spec"].(map[string]any)
+		selector := spec["selector"].(map[string]any)
+		if _, ok := selector["matchLabels"]; ok {
+			t.Error("empty spec.selector.matchLabels should be removed")
+		}
+
+		tmplMeta := spec["template"].(map[string]any)["metadata"].(map[string]any)
+		if _, ok := tmplMeta["labels"]; ok {
+			t.Error("empty spec.template.metadata.labels should be removed")
+		}
+	})
+
+	t.Run("handles resources without spec selectors", func(t *testing.T) {
+		data := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name": "test",
+				"labels": map[string]any{
+					"app.kubernetes.io/instance": "argocd-app-name",
+				},
+			},
+			"data": map[string]any{
+				"key": "value",
+			},
+		}
+
+		cleanForDiff(data)
+
+		metadata := data["metadata"].(map[string]any)
+		if _, ok := metadata["labels"]; ok {
+			t.Error("empty metadata.labels should be removed")
+		}
+		if data["data"] == nil {
+			t.Error("data should be preserved")
+		}
+	})
+}
+
 func TestSummarizeDiffs(t *testing.T) {
 	diffs := []models.ManifestDiff{
 		{Action: models.DiffActionCreate},
