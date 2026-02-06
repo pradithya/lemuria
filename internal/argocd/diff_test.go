@@ -127,16 +127,22 @@ func TestComputeDiff(t *testing.T) {
 			wantDiff:    false,
 		},
 		{
-			name:        "empty current produces diff (additions)",
+			name:        "empty current produces diff",
 			currentJSON: "",
 			targetJSON:  `{"spec": {"replicas": 3}}`,
 			wantDiff:    true,
 		},
 		{
-			name:        "empty target produces diff (deletions)",
+			name:        "empty target produces diff",
 			currentJSON: `{"spec": {"replicas": 2}}`,
 			targetJSON:  "",
 			wantDiff:    true,
+		},
+		{
+			name:        "both empty no diff",
+			currentJSON: "",
+			targetJSON:  "",
+			wantDiff:    false,
 		},
 	}
 
@@ -148,6 +154,64 @@ func TestComputeDiff(t *testing.T) {
 				t.Errorf("computeDiff() hasDiff = %v, want %v; diff = %q", hasDiff, tt.wantDiff, diff)
 			}
 		})
+	}
+}
+
+func TestComputeManifestsDiff(t *testing.T) {
+	current := []models.Manifest{
+		{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Name:       "existing",
+			Namespace:  "default",
+			Raw:        `{"data": {"key": "old"}}`,
+		},
+		{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Name:       "to-delete",
+			Namespace:  "default",
+			Raw:        `{"data": {"key": "value"}}`,
+		},
+	}
+
+	target := []models.Manifest{
+		{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Name:       "existing",
+			Namespace:  "default",
+			Raw:        `{"data": {"key": "new"}}`,
+		},
+		{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Name:       "new-resource",
+			Namespace:  "default",
+			Raw:        `{"data": {"key": "value"}}`,
+		},
+	}
+
+	diffs := computeManifestsDiff(current, target)
+
+	// Should have 3 diffs: 1 update, 1 create, 1 delete
+	if len(diffs) != 3 {
+		t.Errorf("Expected 3 diffs, got %d", len(diffs))
+	}
+
+	actions := make(map[models.DiffAction]int)
+	for _, d := range diffs {
+		actions[d.Action]++
+	}
+
+	if actions[models.DiffActionUpdate] != 1 {
+		t.Errorf("Expected 1 update, got %d", actions[models.DiffActionUpdate])
+	}
+	if actions[models.DiffActionCreate] != 1 {
+		t.Errorf("Expected 1 create, got %d", actions[models.DiffActionCreate])
+	}
+	if actions[models.DiffActionDelete] != 1 {
+		t.Errorf("Expected 1 delete, got %d", actions[models.DiffActionDelete])
 	}
 }
 
@@ -192,7 +256,6 @@ func TestFormatCreateDiff(t *testing.T) {
 		t.Error("Expected non-empty diff for create")
 	}
 
-	// Should contain + lines (additions)
 	if !contains(diff, "+") {
 		t.Error("Expected diff to contain additions")
 	}
@@ -206,7 +269,6 @@ func TestFormatDeleteDiff(t *testing.T) {
 		t.Error("Expected non-empty diff for delete")
 	}
 
-	// Should contain - lines (deletions)
 	if !contains(diff, "-") {
 		t.Error("Expected diff to contain deletions")
 	}
@@ -244,14 +306,12 @@ func TestJSONToYAML(t *testing.T) {
 		})
 	}
 
-	// Test valid JSON converts to YAML
-	t.Run("valid JSON converts", func(t *testing.T) {
+	t.Run("valid JSON converts to YAML", func(t *testing.T) {
 		json := `{"apiVersion": "v1", "kind": "ConfigMap"}`
 		result := jsonToYAML(json)
 		if result == "" {
 			t.Error("Expected non-empty result for valid JSON")
 		}
-		// YAML should not have JSON syntax
 		if contains(result, "{") || contains(result, "}") {
 			t.Error("Expected YAML format, not JSON")
 		}

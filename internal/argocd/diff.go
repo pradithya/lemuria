@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -13,6 +14,17 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
+// ManagedResource represents a resource from the managed-resources API.
+type ManagedResource struct {
+	Group               string `json:"group,omitempty"`
+	Kind                string `json:"kind,omitempty"`
+	Namespace           string `json:"namespace,omitempty"`
+	Name                string `json:"name,omitempty"`
+	LiveState           string `json:"liveState,omitempty"`
+	NormalizedLiveState string `json:"normalizedLiveState,omitempty"`
+	Hook                bool   `json:"hook,omitempty"`
+}
+
 // resourceKey creates a unique key for a resource.
 func resourceKey(group, kind, namespace, name string) string {
 	if namespace != "" {
@@ -21,30 +33,61 @@ func resourceKey(group, kind, namespace, name string) string {
 	return fmt.Sprintf("%s/%s/%s", group, kind, name)
 }
 
-// GetApplicationDiff computes the diff between current target manifests and target manifests at revision.
-// If revision is empty, returns empty diff (same revision).
-// This compares what would be deployed now vs what would be deployed at the given revision.
+// GetApplicationDiff computes the diff between live cluster state and target revision.
+// This mimics `argocd app diff --revision <revision>` behavior.
+//
+// revision: the git revision to compare against live state. Required.
+//
+// Returns what changes would be applied to the cluster if synced to this revision.
 func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision string) ([]models.ManifestDiff, error) {
-	// Get current target manifests (at app's configured targetRevision)
-	currentManifests, _, err := c.GetManifests(ctx, name, nil)
+	if revision == "" {
+		return nil, fmt.Errorf("revision is required")
+	}
+
+	// Get live state from cluster via managed-resources API
+	liveResources, err := c.getManagedResources(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("getting current manifests: %w", err)
+		return nil, fmt.Errorf("getting live resources: %w", err)
 	}
 
 	// Get target manifests at the specified revision
-	var targetManifests []models.Manifest
-	if revision != "" {
-		targetManifests, _, err = c.GetManifests(ctx, name, &GetManifestsParams{Revision: revision})
-		if err != nil {
-			return nil, fmt.Errorf("getting manifests at revision %s: %w", revision, err)
-		}
-	} else {
-		// No revision specified - compare against itself (no diff)
-		targetManifests = currentManifests
+	targetManifests, _, err := c.GetManifests(ctx, name, &GetManifestsParams{Revision: revision})
+	if err != nil {
+		return nil, fmt.Errorf("getting manifests at revision %s: %w", revision, err)
 	}
 
-	// Build maps keyed by group/kind/namespace/name
-	currentMap := buildManifestMap(currentManifests)
+	return computeLiveVsTargetDiff(liveResources, targetManifests), nil
+}
+
+// getManagedResources fetches the live state of resources from the cluster.
+func (c *Client) getManagedResources(ctx context.Context, name string) ([]ManagedResource, error) {
+	var resp struct {
+		Items []ManagedResource `json:"items"`
+	}
+
+	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/managed-resources", nil, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.Items, nil
+}
+
+// computeLiveVsTargetDiff compares live cluster state against target manifests.
+func computeLiveVsTargetDiff(liveResources []ManagedResource, targetManifests []models.Manifest) []models.ManifestDiff {
+	// Build maps for comparison
+	liveMap := make(map[string]ManagedResource)
+	for _, res := range liveResources {
+		if res.Hook {
+			continue
+		}
+		// Skip secrets
+		if res.Kind == "Secret" && (res.Group == "" || res.Group == "v1") {
+			continue
+		}
+		key := resourceKey(res.Group, res.Kind, res.Namespace, res.Name)
+		liveMap[key] = res
+	}
+
 	targetMap := buildManifestMap(targetManifests)
 
 	var diffs []models.ManifestDiff
@@ -58,10 +101,10 @@ func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision s
 			continue
 		}
 
-		currentManifest, exists := currentMap[key]
+		liveRes, exists := liveMap[key]
 
 		if !exists {
-			// Resource will be created (exists in target revision but not current)
+			// Resource doesn't exist in cluster - will be created
 			diffs = append(diffs, models.ManifestDiff{
 				Resource:    resource,
 				LiveState:   "",
@@ -70,7 +113,92 @@ func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision s
 				Action:      models.DiffActionCreate,
 			})
 		} else {
-			// Resource exists in both - check for updates
+			// Resource exists - check for updates
+			// Use NormalizedLiveState for cleaner comparison
+			liveState := liveRes.NormalizedLiveState
+			if liveState == "" {
+				liveState = liveRes.LiveState
+			}
+
+			diffStr := computeDiff(liveState, targetManifest.Raw)
+			if diffStr != "" {
+				diffs = append(diffs, models.ManifestDiff{
+					Resource:    resource,
+					LiveState:   liveState,
+					TargetState: targetManifest.Raw,
+					Diff:        diffStr,
+					Action:      models.DiffActionUpdate,
+				})
+			}
+		}
+	}
+
+	// Check for resources that exist live but not in target (deletes)
+	// Note: This only shows resources that ArgoCD is tracking (managed resources)
+	for key, liveRes := range liveMap {
+		if _, exists := targetMap[key]; exists {
+			continue
+		}
+
+		resource := models.ResourceKey{
+			APIVersion: liveRes.Group,
+			Kind:       liveRes.Kind,
+			Name:       liveRes.Name,
+			Namespace:  liveRes.Namespace,
+		}
+
+		liveState := liveRes.NormalizedLiveState
+		if liveState == "" {
+			liveState = liveRes.LiveState
+		}
+
+		// Only show delete if there's actual live state
+		if liveState == "" || liveState == "null" {
+			continue
+		}
+
+		diffs = append(diffs, models.ManifestDiff{
+			Resource:    resource,
+			LiveState:   liveState,
+			TargetState: "",
+			Diff:        formatDeleteDiff(liveState),
+			Action:      models.DiffActionDelete,
+		})
+	}
+
+	sort.Slice(diffs, func(i, j int) bool {
+		return diffs[i].Resource.String() < diffs[j].Resource.String()
+	})
+
+	return diffs
+}
+
+// computeManifestsDiff compares two sets of manifests (for testing or manifest-only comparison).
+func computeManifestsDiff(current, target []models.Manifest) []models.ManifestDiff {
+	currentMap := buildManifestMap(current)
+	targetMap := buildManifestMap(target)
+
+	var diffs []models.ManifestDiff
+
+	// Check resources in target (creates and updates)
+	for key, targetManifest := range targetMap {
+		resource := parseResourceKey(key)
+
+		if resource.Kind == "Secret" && (resource.APIVersion == "" || resource.APIVersion == "v1") {
+			continue
+		}
+
+		currentManifest, exists := currentMap[key]
+
+		if !exists {
+			diffs = append(diffs, models.ManifestDiff{
+				Resource:    resource,
+				LiveState:   "",
+				TargetState: targetManifest.Raw,
+				Diff:        formatCreateDiff(targetManifest.Raw),
+				Action:      models.DiffActionCreate,
+			})
+		} else {
 			diffStr := computeDiff(currentManifest.Raw, targetManifest.Raw)
 			if diffStr != "" {
 				diffs = append(diffs, models.ManifestDiff{
@@ -84,15 +212,13 @@ func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision s
 		}
 	}
 
-	// Check for resources that exist in current but not in target (deletes)
+	// Check for deletes
 	for key, currentManifest := range currentMap {
 		if _, exists := targetMap[key]; exists {
 			continue
 		}
 
 		resource := parseResourceKey(key)
-
-		// Skip secrets
 		if resource.Kind == "Secret" && (resource.APIVersion == "" || resource.APIVersion == "v1") {
 			continue
 		}
@@ -106,12 +232,11 @@ func (c *Client) GetApplicationDiff(ctx context.Context, name string, revision s
 		})
 	}
 
-	// Sort for consistent output
 	sort.Slice(diffs, func(i, j int) bool {
 		return diffs[i].Resource.String() < diffs[j].Resource.String()
 	})
 
-	return diffs, nil
+	return diffs
 }
 
 // buildManifestMap creates a map of manifests keyed by group/kind/namespace/name.
@@ -142,7 +267,7 @@ func parseResourceKey(key string) models.ResourceKey {
 	}
 }
 
-// extractGroup extracts the API group from an apiVersion (e.g., "apps/v1" -> "apps", "v1" -> "").
+// extractGroup extracts the API group from an apiVersion.
 func extractGroup(apiVersion string) string {
 	if idx := strings.Index(apiVersion, "/"); idx != -1 {
 		return apiVersion[:idx]
@@ -150,7 +275,7 @@ func extractGroup(apiVersion string) string {
 	return ""
 }
 
-// computeDiff generates a unified diff between current and target states.
+// computeDiff generates a unified diff between two JSON states.
 func computeDiff(currentJSON, targetJSON string) string {
 	currentYAML := jsonToYAML(currentJSON)
 	targetYAML := jsonToYAML(targetJSON)
@@ -159,7 +284,7 @@ func computeDiff(currentJSON, targetJSON string) string {
 		return ""
 	}
 
-	return generateUnifiedDiff(currentYAML, targetYAML, "current", "target")
+	return generateUnifiedDiff(currentYAML, targetYAML, "live", "target")
 }
 
 // formatCreateDiff formats a diff for a new resource.
@@ -168,7 +293,7 @@ func formatCreateDiff(targetJSON string) string {
 	if targetYAML == "" {
 		return ""
 	}
-	return generateUnifiedDiff("", targetYAML, "current", "target")
+	return generateUnifiedDiff("", targetYAML, "live", "target")
 }
 
 // formatDeleteDiff formats a diff for a deleted resource.
@@ -177,7 +302,7 @@ func formatDeleteDiff(currentJSON string) string {
 	if currentYAML == "" {
 		return ""
 	}
-	return generateUnifiedDiff(currentYAML, "", "current", "target")
+	return generateUnifiedDiff(currentYAML, "", "live", "target")
 }
 
 // generateUnifiedDiff creates a unified diff string.
@@ -210,7 +335,6 @@ func jsonToYAML(jsonStr string) string {
 		return jsonStr
 	}
 
-	// Remove fields that cause noisy diffs
 	cleanForDiff(data)
 
 	yamlBytes, err := yaml.Marshal(data)
@@ -224,14 +348,12 @@ func jsonToYAML(jsonStr string) string {
 
 // cleanForDiff removes fields that cause noisy diffs.
 func cleanForDiff(data map[string]any) {
-	// Remove metadata fields that change frequently
 	if metadata, ok := data["metadata"].(map[string]any); ok {
 		delete(metadata, "managedFields")
 		delete(metadata, "resourceVersion")
 		delete(metadata, "uid")
 		delete(metadata, "creationTimestamp")
 		delete(metadata, "generation")
-		// Clean up annotations
 		if annotations, ok := metadata["annotations"].(map[string]any); ok {
 			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
 			if len(annotations) == 0 {
@@ -239,7 +361,6 @@ func cleanForDiff(data map[string]any) {
 			}
 		}
 	}
-	// Remove status - we only care about spec
 	delete(data, "status")
 }
 

@@ -195,7 +195,8 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	)
 	result.LockStatus = "Locked by this PR"
 
-	// Get diff
+	// Get diff between live cluster state and PR revision
+	// This mimics `argocd app diff --revision <sha>` behavior
 	e.logger.Debug("getting application diff",
 		"app", app.Name,
 		"revision", event.PR.HeadSHA,
