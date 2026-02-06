@@ -276,7 +276,7 @@ func TestGetManifests(t *testing.T) {
 	}
 }
 
-func TestGetApplicationDiff(t *testing.T) {
+func TestGetApplicationDiffV2(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping ArgoCD test in short mode")
 	}
@@ -290,8 +290,14 @@ func TestGetApplicationDiff(t *testing.T) {
 	}
 
 	appName := apps[0].Name
-	// Compare live state vs HEAD revision (mimics `argocd app diff --revision HEAD`)
-	diffs, err := argoClient.GetApplicationDiff(testCtx, appName, "HEAD")
+	// Test live mode: compare live state vs target branch
+	diffs, err := argoClient.GetApplicationDiff(testCtx, appName, argocd.DiffOptions{
+		Mode:         argocd.DiffModeLive,
+		TargetBranch: "HEAD",
+		PRNumber:     0,
+		PRRepo:       "test/repo",
+		Timeout:      2 * time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("Failed to get diff for %s: %v", appName, err)
 	}
@@ -533,8 +539,14 @@ func TestFullPlanWorkflow(t *testing.T) {
 
 	t.Logf("Target revision: %s", revision)
 
-	// Step 3: Get diff (compare live state vs target revision)
-	diffs, err := argoClient.GetApplicationDiff(testCtx, app.Name, revision)
+	// Step 3: Get diff (compare live state vs target revision using new V2 API)
+	diffs, err := argoClient.GetApplicationDiff(testCtx, app.Name, argocd.DiffOptions{
+		Mode:         argocd.DiffModeLive,
+		TargetBranch: revision,
+		PRNumber:     prNumber,
+		PRRepo:       repo,
+		Timeout:      2 * time.Minute,
+	})
 	if err != nil {
 		t.Fatalf("Failed to get diff: %v", err)
 	}

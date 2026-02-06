@@ -29,9 +29,11 @@ type GitHubConfig struct {
 
 // ArgoCDConfig holds Argo CD connection settings.
 type ArgoCDConfig struct {
-	ServerURL string `koanf:"server_url"`
-	Token     string `koanf:"token"`
-	Insecure  bool   `koanf:"insecure"`
+	ServerURL      string        `koanf:"server_url"`
+	Token          string        `koanf:"token"`
+	Insecure       bool          `koanf:"insecure"`
+	DiffMode       string        `koanf:"diff_mode"`        // "branch" or "live", default: "branch"
+	TempAppTimeout time.Duration `koanf:"temp_app_timeout"` // Timeout for temp app manifest rendering, default: 2m
 }
 
 // RedisConfig holds Redis connection settings.
