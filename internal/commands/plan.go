@@ -208,11 +208,65 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		timeout = 2 * time.Minute
 	}
 
+	// If the Application CR file was modified, read specs from git branches
+	// so the diff reflects inline changes (e.g., Helm values in the Application CR)
+	var baseAppSpec, headAppSpec map[string]any
+	if app.SourceFile != "" {
+		e.logger.Debug("reading application spec from git branches",
+			"app", app.Name,
+			"source_file", app.SourceFile,
+		)
+
+		// Read base branch version
+		baseContent, err := e.github.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.BaseRef)
+		if err != nil {
+			e.logger.Warn("failed to read application CR from base branch, falling back to live spec",
+				"app", app.Name,
+				"source_file", app.SourceFile,
+				"base_ref", event.PR.BaseRef,
+				"error", err,
+			)
+		} else {
+			parsed, parseErr := argocd.ParseRawApplicationFromYAML(baseContent, app.Name)
+			if parseErr != nil {
+				e.logger.Warn("failed to parse application CR from base branch, falling back to live spec",
+					"app", app.Name,
+					"error", parseErr,
+				)
+			} else {
+				baseAppSpec = parsed
+			}
+		}
+
+		// Read head branch version
+		headContent, err := e.github.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.HeadRef)
+		if err != nil {
+			e.logger.Warn("failed to read application CR from head branch, falling back to live spec",
+				"app", app.Name,
+				"source_file", app.SourceFile,
+				"head_ref", event.PR.HeadRef,
+				"error", err,
+			)
+		} else {
+			parsed, parseErr := argocd.ParseRawApplicationFromYAML(headContent, app.Name)
+			if parseErr != nil {
+				e.logger.Warn("failed to parse application CR from head branch, falling back to live spec",
+					"app", app.Name,
+					"error", parseErr,
+				)
+			} else {
+				headAppSpec = parsed
+			}
+		}
+	}
+
 	e.logger.Debug("getting application diff",
 		"app", app.Name,
 		"mode", diffMode,
 		"base_branch", event.PR.BaseRef,
 		"target_branch", event.PR.HeadRef,
+		"has_base_spec_override", baseAppSpec != nil,
+		"has_head_spec_override", headAppSpec != nil,
 	)
 
 	diffs, err := e.argocd.GetApplicationDiff(ctx, app.Name, argocd.DiffOptions{
@@ -222,6 +276,8 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		PRNumber:     event.PR.Number,
 		PRRepo:       event.Repo.FullName,
 		Timeout:      timeout,
+		BaseAppSpec:  baseAppSpec,
+		HeadAppSpec:  headAppSpec,
 	})
 	if err != nil {
 		e.logger.Debug("failed to generate diff",

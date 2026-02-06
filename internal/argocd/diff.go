@@ -55,6 +55,12 @@ type DiffOptions struct {
 	PRNumber     int           // PR number for temp app naming
 	PRRepo       string        // Repository (e.g., "owner/repo")
 	Timeout      time.Duration // Timeout for manifest rendering
+
+	// BaseAppSpec and HeadAppSpec are raw Application specs read from git.
+	// When set, they override the live ArgoCD spec for temp app creation,
+	// allowing diffs to reflect inline changes to Application CRs (e.g., Helm values).
+	BaseAppSpec map[string]any // Application spec from base branch (nil = use live ArgoCD)
+	HeadAppSpec map[string]any // Application spec from head branch (nil = use live ArgoCD)
 }
 
 // GetApplicationDiff computes diff using temporary applications.
@@ -110,6 +116,7 @@ func (c *Client) diffBranchMode(ctx context.Context, tempMgr *TempAppManager, ap
 		PRNumber:        opts.PRNumber,
 		PRRepo:          opts.PRRepo,
 		Suffix:          "base",
+		AppSpecOverride: opts.BaseAppSpec,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating base temp app: %w", err)
@@ -125,6 +132,7 @@ func (c *Client) diffBranchMode(ctx context.Context, tempMgr *TempAppManager, ap
 		PRNumber:        opts.PRNumber,
 		PRRepo:          opts.PRRepo,
 		Suffix:          "head",
+		AppSpecOverride: opts.HeadAppSpec,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating target temp app: %w", err)
@@ -167,6 +175,7 @@ func (c *Client) diffLiveMode(ctx context.Context, tempMgr *TempAppManager, appN
 		PRNumber:        opts.PRNumber,
 		PRRepo:          opts.PRRepo,
 		Suffix:          "head",
+		AppSpecOverride: opts.HeadAppSpec,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating target temp app: %w", err)
@@ -214,6 +223,7 @@ func (c *Client) diffBothMode(ctx context.Context, tempMgr *TempAppManager, appN
 		PRNumber:        opts.PRNumber,
 		PRRepo:          opts.PRRepo,
 		Suffix:          "base",
+		AppSpecOverride: opts.BaseAppSpec,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating base temp app: %w", err)
@@ -229,6 +239,7 @@ func (c *Client) diffBothMode(ctx context.Context, tempMgr *TempAppManager, appN
 		PRNumber:        opts.PRNumber,
 		PRRepo:          opts.PRRepo,
 		Suffix:          "head",
+		AppSpecOverride: opts.HeadAppSpec,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating target temp app: %w", err)

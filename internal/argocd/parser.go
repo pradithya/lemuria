@@ -146,6 +146,48 @@ func convertK8sResourceToApplication(resource K8sResource, sourceFile string) mo
 	return app
 }
 
+// ParseRawApplicationFromYAML parses YAML content and returns the raw spec
+// (as map[string]any) for the Application CR matching appName.
+// This preserves the full structure needed by buildTempAppSpec, including
+// inline Helm values and other fields not captured by the typed structs.
+// Handles multi-document YAML files.
+func ParseRawApplicationFromYAML(content []byte, appName string) (map[string]any, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+
+	for {
+		var raw map[string]any
+		err := decoder.Decode(&raw)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		// Check if this is an ArgoCD Application matching appName
+		apiVersion, _ := raw["apiVersion"].(string)
+		if !strings.HasPrefix(apiVersion, "argoproj.io/") {
+			continue
+		}
+		kind, _ := raw["kind"].(string)
+		if kind != "Application" {
+			continue
+		}
+		metadata, _ := raw["metadata"].(map[string]any)
+		if metadata == nil {
+			continue
+		}
+		name, _ := metadata["name"].(string)
+		if name != appName {
+			continue
+		}
+
+		return raw, nil
+	}
+
+	return nil, fmt.Errorf("application %q not found in YAML", appName)
+}
+
 // ParsedApplications holds applications parsed from PR files.
 type ParsedApplications struct {
 	// New contains applications that are being added in the PR (file status: added)
