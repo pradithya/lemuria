@@ -115,12 +115,12 @@ func TestBuildTempAppSpec_WithLiveSpec(t *testing.T) {
 			Kind:       "Application",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              "my-app",
-			Namespace:         "argocd",
-			ResourceVersion:   "12345",
-			UID:               "abc-123",
-			Generation:        3,
-			ManagedFields:     []metav1.ManagedFieldsEntry{},
+			Name:            "my-app",
+			Namespace:       "argocd",
+			ResourceVersion: "12345",
+			UID:             "abc-123",
+			Generation:      3,
+			ManagedFields:   []metav1.ManagedFieldsEntry{},
 		},
 		Spec: v1alpha1.ApplicationSpec{
 			Source: &v1alpha1.ApplicationSource{

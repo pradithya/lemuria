@@ -23,11 +23,11 @@ type MockGitHubClient struct {
 	PRMergeable    bool
 
 	// Recorded interactions
-	PostedComments []PostedComment
-	Reactions      []Reaction
-	MergeCalls     []MergeCall
+	PostedComments  []PostedComment
+	Reactions       []Reaction
+	MergeCalls      []MergeCall
 	DeletedBranches []string
-	InvalidatedPRs []InvalidatedPR
+	InvalidatedPRs  []InvalidatedPR
 
 	// Internal counter for comment IDs
 	nextCommentID int64

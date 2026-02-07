@@ -382,7 +382,7 @@ func TestCleanForDiff_LabelsInSelectors(t *testing.T) {
 			"metadata": map[string]any{
 				"name": "my-app",
 				"labels": map[string]any{
-					"app":                        "my-app",
+					"app":                         "my-app",
 					"app.kubernetes.io/instance":  "argocd-app-name",
 					"argocd.argoproj.io/instance": "argocd-app-name",
 				},
@@ -390,7 +390,7 @@ func TestCleanForDiff_LabelsInSelectors(t *testing.T) {
 			"spec": map[string]any{
 				"selector": map[string]any{
 					"matchLabels": map[string]any{
-						"app":                        "my-app",
+						"app":                         "my-app",
 						"app.kubernetes.io/instance":  "argocd-app-name",
 						"argocd.argoproj.io/instance": "argocd-app-name",
 					},
@@ -398,7 +398,7 @@ func TestCleanForDiff_LabelsInSelectors(t *testing.T) {
 				"template": map[string]any{
 					"metadata": map[string]any{
 						"labels": map[string]any{
-							"app":                        "my-app",
+							"app":                         "my-app",
 							"app.kubernetes.io/instance":  "argocd-app-name",
 							"argocd.argoproj.io/instance": "argocd-app-name",
 						},
