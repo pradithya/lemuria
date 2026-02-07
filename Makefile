@@ -90,9 +90,9 @@ deps:
 	go mod download
 	go mod tidy
 
-# Run go vet
+# Run go vet (excludes e2e which has heavy deps and is vetted in its own CI job)
 vet:
-	go vet ./...
+	go vet ./internal/... ./pkg/... ./cmd/...
 
 # ============================================================================
 # Development Tools
