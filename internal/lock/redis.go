@@ -228,8 +228,23 @@ func (m *RedisManager) ListAll(ctx context.Context) ([]models.Lock, error) {
 
 // StorePlan stores the plan revision for verification before sync.
 func (m *RedisManager) StorePlan(ctx context.Context, application string, prNumber int, revision string) error {
+	// Store in the dedicated plan key
 	key := planKeyPrefix + application + ":" + fmt.Sprint(prNumber)
-	return m.client.Set(ctx, key, revision, lockTTL).Err()
+	if err := m.client.Set(ctx, key, revision, lockTTL).Err(); err != nil {
+		return err
+	}
+
+	// Also update the lock's PlanRevision so ListByPR returns it
+	lock, err := m.Get(ctx, application)
+	if err != nil {
+		return fmt.Errorf("getting lock to update plan revision: %w", err)
+	}
+	if lock != nil && lock.IsHeldByPR(lock.Repo, prNumber) {
+		lock.PlanRevision = revision
+		return m.setLock(ctx, lock)
+	}
+
+	return nil
 }
 
 // GetPlan retrieves the stored plan revision.

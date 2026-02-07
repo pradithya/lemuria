@@ -95,9 +95,10 @@ func TestE2EPlanCommand(t *testing.T) {
 
 	executor := newTestExecutor(mockGH, nil)
 
+	headSHA := "abc123plan"
 	event := newPREvent(
 		"test-owner/test-repo", "test-owner", "test-repo",
-		100, "", "feature-branch", "main",
+		100, headSHA, "feature-branch", "main",
 		"lemuria plan -a test-app",
 	)
 
@@ -124,7 +125,7 @@ func TestE2EPlanCommand(t *testing.T) {
 		t.Error("Expected plan comment to have isPlan=true")
 	}
 
-	// Assert: lock was acquired
+	// Assert: lock was acquired with correct PlanRevision
 	lock, err := lockManager.Get(testCtx, appName)
 	if err != nil {
 		t.Fatalf("Failed to get lock: %v", err)
@@ -135,8 +136,11 @@ func TestE2EPlanCommand(t *testing.T) {
 	if lock.PRNumber != 100 {
 		t.Errorf("Expected lock PR number 100, got %d", lock.PRNumber)
 	}
+	if lock.PlanRevision != headSHA {
+		t.Errorf("Expected lock PlanRevision %q, got %q", headSHA, lock.PlanRevision)
+	}
 
-	t.Logf("Lock acquired: app=%s, pr=%d, user=%s", lock.Application, lock.PRNumber, lock.User)
+	t.Logf("Lock acquired: app=%s, pr=%d, user=%s, plan_revision=%s", lock.Application, lock.PRNumber, lock.User, lock.PlanRevision)
 
 	// Assert: reaction was added
 	if len(mockGH.Reactions) == 0 {
@@ -285,6 +289,103 @@ spec:
 }
 
 // =============================================================================
+// Plan Revision Persistence Tests
+// =============================================================================
+
+// TestE2EPlanRevisionPersistedOnLock verifies that after running plan, the lock
+// has the PlanRevision field set so that sync can verify plan freshness.
+// This is a regression test for a bug where StorePlan stored the revision in a
+// separate Redis key but never updated the lock object, causing sync to always
+// see PlanRevision="" and reject with "plan is stale".
+func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+
+	appName := "test-app"
+	_, err := argoClient.GetApplication(testCtx, appName)
+	if err != nil {
+		t.Skipf("test-app not available: %v", err)
+	}
+
+	repo := "test-owner/test-repo"
+	prNumber := 150
+	headSHA := "7c6b40f55ab2a67877f5695f4cf0af9bb54fc219"
+
+	// Ensure clean lock state
+	_ = lockManager.ForceUnlock(testCtx, appName)
+	defer cleanupForceUnlock(testCtx, t, appName)
+
+	mockGH := NewMockGitHubClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+	executor := newTestExecutor(mockGH, nil)
+
+	// Run plan with a specific HeadSHA
+	event := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+appName)
+	cmd := &commands.Command{
+		Name:        commands.CommandPlan,
+		Application: appName,
+	}
+
+	if err := executor.Execute(testCtx, cmd, event); err != nil {
+		t.Fatalf("Plan command failed: %v", err)
+	}
+
+	// Assert: PlanRevision is set on the lock via Get
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to get lock: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("Expected lock to be acquired after plan")
+	}
+	if lock.PlanRevision != headSHA {
+		t.Errorf("Get: expected PlanRevision %q, got %q", headSHA, lock.PlanRevision)
+	}
+
+	// Assert: PlanRevision is also set on locks returned by ListByPR
+	// (this is the path used by executeSync)
+	locks, err := lockManager.ListByPR(testCtx, repo, prNumber)
+	if err != nil {
+		t.Fatalf("Failed to list locks by PR: %v", err)
+	}
+	if len(locks) == 0 {
+		t.Fatal("Expected at least one lock from ListByPR")
+	}
+	found := false
+	for _, l := range locks {
+		if l.Application == appName {
+			found = true
+			if l.PlanRevision != headSHA {
+				t.Errorf("ListByPR: expected PlanRevision %q, got %q", headSHA, l.PlanRevision)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected lock for %s in ListByPR results", appName)
+	}
+
+	// Assert: sync with the same HeadSHA does NOT report stale plan
+	mockGH.Reset()
+	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
+	syncCmd := &commands.Command{Name: commands.CommandSync}
+
+	if err := executor.Execute(testCtx, syncCmd, syncEvent); err != nil {
+		t.Fatalf("Sync command failed: %v", err)
+	}
+
+	comments := mockGH.GetPostedComments()
+	if len(comments) == 0 {
+		t.Fatal("Expected sync result comment")
+	}
+	lastComment := comments[len(comments)-1]
+	if strings.Contains(lastComment.Body, "stale") {
+		t.Errorf("Sync should NOT report stale plan when HeadSHA matches PlanRevision, got: %s", lastComment.Body)
+	}
+}
+
+// =============================================================================
 // Sync Command Tests
 // =============================================================================
 
@@ -305,12 +406,14 @@ func TestE2ESyncCommand(t *testing.T) {
 	// Ensure clean lock state
 	defer cleanupForceUnlock(testCtx, t, appName)
 
+	headSHA := "abc123sync"
+
 	mockGH := NewMockGitHubClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor := newTestExecutor(mockGH, nil)
 
 	// Step 1: Run plan to acquire lock
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "lemuria plan -a "+appName)
+	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+appName)
 	planCmd := &commands.Command{
 		Name:        commands.CommandPlan,
 		Application: appName,
@@ -320,15 +423,18 @@ func TestE2ESyncCommand(t *testing.T) {
 		t.Fatalf("Plan command failed: %v", err)
 	}
 
-	// Verify lock acquired
+	// Verify lock acquired with PlanRevision
 	lock, err := lockManager.Get(testCtx, appName)
 	if err != nil || lock == nil {
 		t.Fatalf("Expected lock to be acquired: %v", err)
 	}
+	if lock.PlanRevision != headSHA {
+		t.Fatalf("Expected lock PlanRevision %q, got %q", headSHA, lock.PlanRevision)
+	}
 
-	// Step 2: Run sync (HeadSHA empty to match stored plan revision)
+	// Step 2: Run sync with the same HeadSHA (plan is fresh)
 	mockGH.Reset()
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "lemuria sync")
+	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
 	syncCmd := &commands.Command{
 		Name: commands.CommandSync,
 	}
@@ -531,8 +637,9 @@ func TestE2ESyncStalePlan(t *testing.T) {
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor := newTestExecutor(mockGH, nil)
 
-	// Step 1: Run plan to acquire lock (HeadSHA empty)
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "lemuria plan -a "+appName)
+	// Step 1: Run plan to acquire lock with a specific HeadSHA
+	planSHA := "abc123original"
+	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, planSHA, "feature-branch", "main", "lemuria plan -a "+appName)
 	planCmd := &commands.Command{
 		Name:        commands.CommandPlan,
 		Application: appName,
@@ -541,9 +648,18 @@ func TestE2ESyncStalePlan(t *testing.T) {
 		t.Fatalf("Plan command failed: %v", err)
 	}
 
+	// Verify plan revision was stored on the lock
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil || lock == nil {
+		t.Fatalf("Expected lock to be acquired: %v", err)
+	}
+	if lock.PlanRevision != planSHA {
+		t.Fatalf("Expected lock PlanRevision %q, got %q", planSHA, lock.PlanRevision)
+	}
+
 	// Step 2: Run sync with a DIFFERENT HeadSHA to trigger stale plan
 	mockGH.Reset()
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "def456", "feature-branch", "main", "lemuria sync")
+	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "def456newpush", "feature-branch", "main", "lemuria sync")
 	syncCmd := &commands.Command{
 		Name: commands.CommandSync,
 	}
