@@ -170,6 +170,19 @@ func (h *Handler) handleComment(ctx context.Context, event *models.PREvent) {
 		return
 	}
 
+	// issue_comment webhooks only include the PR number — branch info, HEAD SHA,
+	// etc. are missing. Fetch the full PR details before executing commands.
+	if event.PR.HeadRef == "" || event.PR.BaseRef == "" {
+		if err := h.enrichPRInfo(ctx, event); err != nil {
+			h.logger.Error("failed to fetch PR details",
+				"error", err,
+				"repo", event.Repo.FullName,
+				"pr", event.PR.Number,
+			)
+			return
+		}
+	}
+
 	h.logger.Info("executing command",
 		"command", cmd.Name,
 		"repo", event.Repo.FullName,
@@ -185,4 +198,33 @@ func (h *Handler) handleComment(ctx context.Context, event *models.PREvent) {
 			"pr", event.PR.Number,
 		)
 	}
+}
+
+// enrichPRInfo fetches full PR details from GitHub and populates missing fields.
+func (h *Handler) enrichPRInfo(ctx context.Context, event *models.PREvent) error {
+	pr, err := h.githubClient.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+	if err != nil {
+		return err
+	}
+
+	if pr.Head != nil {
+		event.PR.HeadSHA = pr.Head.GetSHA()
+		event.PR.HeadRef = pr.Head.GetRef()
+	}
+	if pr.Base != nil {
+		event.PR.BaseRef = pr.Base.GetRef()
+	}
+	event.PR.State = pr.GetState()
+	event.PR.Title = pr.GetTitle()
+	event.PR.Draft = pr.GetDraft()
+	event.PR.Merged = pr.GetMerged()
+
+	h.logger.Debug("enriched PR info from API",
+		"pr", event.PR.Number,
+		"head_ref", event.PR.HeadRef,
+		"base_ref", event.PR.BaseRef,
+		"head_sha", event.PR.HeadSHA,
+	)
+
+	return nil
 }
