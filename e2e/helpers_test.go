@@ -73,14 +73,6 @@ func uniqueAppName(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()%100000)
 }
 
-// cleanupLocks removes all locks for a given app and PR from the lock manager.
-func cleanupLocks(ctx context.Context, t *testing.T, app string, repo string, prNumber int) {
-	t.Helper()
-	if err := lockManager.Unlock(ctx, app, repo, prNumber); err != nil {
-		t.Logf("Warning: failed to cleanup lock for %s: %v", app, err)
-	}
-}
-
 // cleanupForceUnlock force-unlocks an application regardless of owner.
 func cleanupForceUnlock(ctx context.Context, t *testing.T, app string) {
 	t.Helper()
