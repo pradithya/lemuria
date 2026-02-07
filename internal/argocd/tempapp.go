@@ -33,12 +33,12 @@ func NewTempAppManager(client *Client) *TempAppManager {
 
 // TempAppConfig configures a temporary application.
 type TempAppConfig struct {
-	OriginalAppName string                 // Name of the original application
-	TargetBranch    string                 // Branch to point to (e.g., "main" or "feature/xyz")
-	PRNumber        int                    // For naming and labeling
-	PRRepo          string                 // Repository (e.g., "owner/repo") to identify which sources to update
-	Suffix          string                 // "base" or "head"
-	AppSpecOverride *v1alpha1.Application  // If set, use this spec instead of fetching from live ArgoCD
+	OriginalAppName string                // Name of the original application
+	TargetBranch    string                // Branch to point to (e.g., "main" or "feature/xyz")
+	PRNumber        int                   // For naming and labeling
+	PRRepo          string                // Repository (e.g., "owner/repo") to identify which sources to update
+	Suffix          string                // "base" or "head"
+	AppSpecOverride *v1alpha1.Application // If set, use this spec instead of fetching from live ArgoCD
 }
 
 // CreateTempApp creates a temporary application configured for diff rendering.

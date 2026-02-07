@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/org/lemuria/internal/argocd"
 )
 
@@ -18,21 +21,21 @@ func createTestApplication(ctx context.Context, t *testing.T, client *argocd.Cli
 		namespace = "e2e-test-apps"
 	}
 
-	app := map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"name":      name,
-			"namespace": "argocd",
+	app := &v1alpha1.Application{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "argocd",
 		},
-		"spec": map[string]interface{}{
-			"project": "default",
-			"source": map[string]interface{}{
-				"repoURL":        "https://github.com/argoproj/argocd-example-apps.git",
-				"targetRevision": "HEAD",
-				"path":           "guestbook",
+		Spec: v1alpha1.ApplicationSpec{
+			Project: "default",
+			Source: &v1alpha1.ApplicationSource{
+				RepoURL:        "https://github.com/argoproj/argocd-example-apps.git",
+				TargetRevision: "HEAD",
+				Path:           "guestbook",
 			},
-			"destination": map[string]interface{}{
-				"server":    "https://kubernetes.default.svc",
-				"namespace": namespace,
+			Destination: v1alpha1.ApplicationDestination{
+				Server:    "https://kubernetes.default.svc",
+				Namespace: namespace,
 			},
 		},
 	}
