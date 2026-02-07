@@ -494,6 +494,60 @@ func TestCleanForDiff_LabelsInSelectors(t *testing.T) {
 		}
 	})
 
+	t.Run("removes known labels from Service spec.selector", func(t *testing.T) {
+		data := map[string]any{
+			"apiVersion": "v1",
+			"kind":       "Service",
+			"metadata": map[string]any{
+				"name": "my-service",
+				"labels": map[string]any{
+					"app":                         "my-app",
+					"app.kubernetes.io/instance":  "argocd-app-name",
+					"argocd.argoproj.io/instance": "argocd-app-name",
+				},
+			},
+			"spec": map[string]any{
+				"selector": map[string]any{
+					"app":                         "my-app",
+					"app.kubernetes.io/instance":  "argocd-app-name",
+					"argocd.argoproj.io/instance": "argocd-app-name",
+				},
+				"ports": []any{
+					map[string]any{
+						"port":       80,
+						"targetPort": 8080,
+					},
+				},
+			},
+		}
+
+		cleanForDiff(data)
+
+		// Check metadata.labels
+		metaLabels := data["metadata"].(map[string]any)["labels"].(map[string]any)
+		if _, ok := metaLabels["app.kubernetes.io/instance"]; ok {
+			t.Error("app.kubernetes.io/instance should be removed from metadata.labels")
+		}
+		if _, ok := metaLabels["argocd.argoproj.io/instance"]; ok {
+			t.Error("argocd.argoproj.io/instance should be removed from metadata.labels")
+		}
+		if metaLabels["app"] != "my-app" {
+			t.Error("non-argocd labels should be preserved in metadata.labels")
+		}
+
+		// Check spec.selector (Service uses flat selector, not matchLabels)
+		selector := data["spec"].(map[string]any)["selector"].(map[string]any)
+		if _, ok := selector["app.kubernetes.io/instance"]; ok {
+			t.Error("app.kubernetes.io/instance should be removed from spec.selector")
+		}
+		if _, ok := selector["argocd.argoproj.io/instance"]; ok {
+			t.Error("argocd.argoproj.io/instance should be removed from spec.selector")
+		}
+		if selector["app"] != "my-app" {
+			t.Error("non-argocd labels should be preserved in spec.selector")
+		}
+	})
+
 	t.Run("handles resources without spec selectors", func(t *testing.T) {
 		data := map[string]any{
 			"apiVersion": "v1",
