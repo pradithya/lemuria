@@ -21,7 +21,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   HELM_CHART_NAME: lemuria
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.25'
   NODE_VERSION: '20'
   DOCKER_BUILDKIT: 1
 
