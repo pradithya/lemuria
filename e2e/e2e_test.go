@@ -81,7 +81,7 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	// Cleanup
-	lockManager.Close()
+	_ = lockManager.Close()
 	if redisContainer != nil {
 		_ = redisContainer.Terminate(testCtx)
 	}
@@ -102,7 +102,7 @@ func loadEnv() {
 		}
 		parts := splitFirst(line, '=')
 		if len(parts) == 2 {
-			os.Setenv(parts[0], parts[1])
+			_ = os.Setenv(parts[0], parts[1])
 		}
 	}
 }
