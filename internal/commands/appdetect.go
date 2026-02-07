@@ -187,28 +187,10 @@ func (e *Executor) parseAppsFromFile(ctx context.Context, event *models.PREvent,
 		"total_apps", len(apps),
 	)
 
-	// Filter to apps that reference this repo
-	repoURL := fmt.Sprintf("https://github.com/%s", event.Repo.FullName)
-	var filtered []models.Application
-	for _, app := range apps {
-		references := e.appReferencesRepo(app, repoURL)
-		e.logger.Debug("checking if app references repo",
-			"app", app.Name,
-			"repo_url", repoURL,
-			"references", references,
-		)
-		if references {
-			filtered = append(filtered, app)
-		}
-	}
-
-	e.logger.Debug("filtered applications referencing repo",
-		"file", filePath,
-		"filtered_count", len(filtered),
-		"original_count", len(apps),
-	)
-
-	return filtered, nil
+	// All Application CRs in changed files are relevant — the CR definition itself
+	// was modified, regardless of whether the app sources from this repo or an
+	// external chart/repo (e.g., Helm chart apps with inline values).
+	return apps, nil
 }
 
 // detectModifiedApps compares base and head versions of a file to find added/removed apps.
@@ -286,19 +268,6 @@ func (e *Executor) detectModifiedApps(ctx context.Context, event *models.PREvent
 	)
 
 	return newApps, deletedApps, nil
-}
-
-// appReferencesRepo checks if an application references the given repository.
-func (e *Executor) appReferencesRepo(app models.Application, repoURL string) bool {
-	normalizedTarget := argocd.NormalizeRepoURL(repoURL)
-
-	for _, appRepoURL := range app.GetRepoURLs() {
-		if argocd.NormalizeRepoURL(appRepoURL) == normalizedTarget {
-			return true
-		}
-	}
-
-	return false
 }
 
 // containsAppByName checks if an app with the given name exists in the slice.

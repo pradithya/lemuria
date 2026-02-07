@@ -153,6 +153,138 @@ func TestE2EPlanCommand(t *testing.T) {
 }
 
 // =============================================================================
+// Plan: External Helm Chart App Detection
+// =============================================================================
+
+// TestE2EPlanDetectsModifiedExternalChartApp verifies that when a PR modifies
+// an Application CR file where the app sources from an external Helm chart
+// (not the PR's git repo), the app is still detected as affected.
+// This is a regression test for a bug where apps with external chart sources
+// were invisible to both isAppAffected() and detectApplicationChanges().
+func TestE2EPlanDetectsModifiedExternalChartApp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+
+	appName := uniqueAppName("e2e-helm")
+
+	// Create an app with an external Helm chart source (not a git repo)
+	createTestHelmChartApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+
+	// Wait for app to appear in ArgoCD
+	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
+
+	// Ensure clean lock state
+	defer cleanupForceUnlock(testCtx, t, appName)
+
+	// Configure mock GitHub to simulate a PR that modifies the Application CR file.
+	// The PR repo is "test-owner/test-repo", but the app's source is
+	// "https://argoproj.github.io/argo-helm" — a completely different repo.
+	mockGH := NewMockGitHubClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+
+	crFilePath := "bootstrap/" + appName + ".yaml"
+	mockGH.ChangedFiles = []models.ChangedFile{
+		{Filename: crFilePath, Status: "modified"},
+	}
+
+	// Base version (current Helm values)
+	baseYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: %s
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argocd-apps
+    targetRevision: "1.4.1"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: e2e-test-apps`, appName)
+
+	// Head version (modified Helm values — added helm.values)
+	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: %s
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argocd-apps
+    targetRevision: "1.4.1"
+    helm:
+      values: |
+        createClusterRoles: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: e2e-test-apps`, appName)
+
+	mockGH.FileContents[crFilePath+"@main"] = []byte(baseYAML)
+	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(headYAML)
+
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "branch",
+			TempAppTimeout: 90 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			RequireApproval: false,
+		},
+	}
+	executor := newTestExecutor(mockGH, cfg)
+
+	// Run plan in auto-detect mode (no -a flag) — the app should be found
+	// via detectApplicationChanges even though its source doesn't match the PR repo
+	event := newPREvent(
+		"test-owner/test-repo", "test-owner", "test-repo",
+		1100, "abc123", "feature-branch", "main",
+		"lemuria plan",
+	)
+	cmd := &commands.Command{Name: commands.CommandPlan}
+
+	err := executor.Execute(testCtx, cmd, event)
+	if err != nil {
+		t.Fatalf("Plan command failed: %v", err)
+	}
+
+	// Assert: a comment was posted
+	comments := mockGH.GetPostedComments()
+	if len(comments) == 0 {
+		t.Fatal("Expected at least one comment to be posted")
+	}
+
+	lastComment := comments[len(comments)-1]
+	t.Logf("Plan comment (truncated): %.500s...", lastComment.Body)
+
+	// Assert: the app WAS detected (not "No applications affected")
+	if strings.Contains(lastComment.Body, "No applications affected") {
+		t.Fatal("App with external Helm chart source should have been detected as affected when its Application CR file is modified in the PR")
+	}
+
+	// Assert: the app name appears in the comment
+	if !strings.Contains(lastComment.Body, appName) {
+		t.Errorf("Expected plan comment to mention app %q", appName)
+	}
+
+	// Assert: lock was acquired (confirms the app went through planApplication)
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to get lock: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("Expected lock to be acquired for the detected app")
+	}
+	if lock.PRNumber != 1100 {
+		t.Errorf("Expected lock PR number 1100, got %d", lock.PRNumber)
+	}
+}
+
+// =============================================================================
 // Sync Command Tests
 // =============================================================================
 
