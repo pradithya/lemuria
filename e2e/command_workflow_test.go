@@ -300,7 +300,6 @@ func TestE2EUnlockCommand(t *testing.T) {
 		t.Skip("skipping E2E command test in short mode")
 	}
 
-	appName := uniqueAppName("e2e-unlock")
 	repo := "test-owner/test-repo"
 	prNumber := 400
 
@@ -309,7 +308,7 @@ func TestE2EUnlockCommand(t *testing.T) {
 	if err != nil {
 		t.Skipf("test-app not available: %v", err)
 	}
-	appName = "test-app"
+	appName := "test-app"
 
 	// Ensure clean lock state
 	_ = lockManager.ForceUnlock(testCtx, appName)
@@ -382,7 +381,6 @@ func TestE2ESyncStalePlan(t *testing.T) {
 		t.Skip("skipping E2E command test in short mode")
 	}
 
-	appName := uniqueAppName("e2e-stale")
 	repo := "test-owner/test-repo"
 	prNumber := 500
 
@@ -391,7 +389,7 @@ func TestE2ESyncStalePlan(t *testing.T) {
 	if err != nil {
 		t.Skipf("test-app not available: %v", err)
 	}
-	appName = "test-app"
+	appName := "test-app"
 
 	// Ensure clean lock state
 	_ = lockManager.ForceUnlock(testCtx, appName)
