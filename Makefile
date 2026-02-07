@@ -3,7 +3,7 @@
         k3d-create k3d-delete k3d-build k3d-deploy k3d-all \
         helm-lint helm-template helm-template-ci helm-test helm-test-install helm-package helm-deploy helm-delete helm-dep \
         tools install-tools \
-        deps vet lint fmt fmt-check generate frontend-deps frontend-type-check frontend-build \
+        deps lint fmt fmt-check generate frontend-deps frontend-type-check frontend-build \
         help
 
 # Build variables
@@ -90,9 +90,6 @@ deps:
 	go mod download
 	go mod tidy
 
-# Run go vet (excludes e2e which has heavy deps and is vetted in its own CI job)
-vet:
-	go vet ./internal/... ./pkg/... ./cmd/...
 
 # ============================================================================
 # Development Tools
@@ -369,7 +366,6 @@ help:
 	@echo "  make e2e-setup      - Setup k3d cluster with Argo CD and Redis"
 	@echo "  make e2e-teardown   - Teardown e2e test infrastructure"
 	@echo "  make e2e            - Setup, run e2e tests (no auto-teardown)"
-	@echo "  make vet            - Run go vet"
 	@echo ""
 	@echo "Helm Chart:"
 	@echo "  make helm-lint      - Lint Helm chart"

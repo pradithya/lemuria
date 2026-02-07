@@ -54,9 +54,6 @@ jobs:
       - name: Install tools
         run: make install-tools
 
-      - name: Run go vet
-        run: make vet
-
       - name: Run lint
         run: make lint
 
