@@ -47,6 +47,42 @@ func createTestApplication(ctx context.Context, t *testing.T, client *argocd.Cli
 	t.Logf("Created test application: %s", name)
 }
 
+// createTestHelmChartApplication creates an ArgoCD application that sources from
+// an external Helm chart repository (not a git repo). This is used to test detection
+// of Application CR changes where the app's source doesn't reference the PR repo.
+func createTestHelmChartApplication(ctx context.Context, t *testing.T, client *argocd.Client, name, namespace string) {
+	t.Helper()
+
+	if namespace == "" {
+		namespace = "e2e-test-apps"
+	}
+
+	app := &v1alpha1.Application{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "argocd",
+		},
+		Spec: v1alpha1.ApplicationSpec{
+			Project: "default",
+			Source: &v1alpha1.ApplicationSource{
+				RepoURL:        "https://argoproj.github.io/argo-helm",
+				Chart:          "argocd-apps",
+				TargetRevision: "1.4.1",
+			},
+			Destination: v1alpha1.ApplicationDestination{
+				Server:    "https://kubernetes.default.svc",
+				Namespace: namespace,
+			},
+		},
+	}
+
+	if err := client.CreateApplication(ctx, app); err != nil {
+		t.Fatalf("Failed to create test Helm chart application %s: %v", name, err)
+	}
+
+	t.Logf("Created test Helm chart application: %s", name)
+}
+
 // deleteTestApplication deletes an ArgoCD application with cascade.
 func deleteTestApplication(ctx context.Context, t *testing.T, client *argocd.Client, name string) {
 	t.Helper()

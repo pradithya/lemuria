@@ -243,13 +243,30 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 			}
 		}
 
-		// Propagate SourceFile from modified apps to affected list
-		// This ensures planApplication knows which apps have Application CR files
+		// Process modified apps (Application CRs modified in the PR)
 		for _, modApp := range parsed.Modified {
-			for i := range affected {
-				if affected[i].Name == modApp.Name && affected[i].SourceFile == "" {
-					affected[i].SourceFile = modApp.SourceFile
-					break
+			if containsAppByName(affected, modApp.Name) {
+				// Already in affected list, just propagate SourceFile
+				for i := range affected {
+					if affected[i].Name == modApp.Name && affected[i].SourceFile == "" {
+						affected[i].SourceFile = modApp.SourceFile
+						break
+					}
+				}
+			} else if existingByName[modApp.Name] {
+				// App exists in ArgoCD but wasn't detected by isAppAffected
+				// (e.g., app uses external Helm chart but its CR was modified)
+				for _, existingApp := range existingApps {
+					if existingApp.Name == modApp.Name {
+						e.logger.Debug("adding modified application with external source",
+							"app", modApp.Name,
+							"source_file", modApp.SourceFile,
+						)
+						existingApp.ChangeType = models.ApplicationExisting
+						existingApp.SourceFile = modApp.SourceFile
+						affected = append(affected, existingApp)
+						break
+					}
 				}
 			}
 		}
