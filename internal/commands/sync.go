@@ -249,7 +249,7 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 	)
 
 	if !mergeable {
-		return fmt.Errorf("PR has merge conflicts. Please resolve before syncing.")
+		return fmt.Errorf("PR has merge conflicts, please resolve before syncing")
 	}
 
 	e.logger.Debug("all sync requirements met")

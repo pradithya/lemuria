@@ -56,10 +56,7 @@ func TestApprovalRequired(t *testing.T) {
 			}
 
 			// Simulate the approval check logic from sync/rollback
-			allowed := true
-			if cfg.Defaults.RequireApproval && !tt.isApproved {
-				allowed = false
-			}
+			allowed := !cfg.Defaults.RequireApproval || tt.isApproved
 
 			if allowed != tt.wantAllowed {
 				t.Errorf("Allowed: got %v, want %v", allowed, tt.wantAllowed)

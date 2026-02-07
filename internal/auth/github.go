@@ -115,7 +115,7 @@ func (p *GitHubProvider) getUserInfo(ctx context.Context, token *oauth2.Token) (
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -166,7 +166,7 @@ func (p *GitHubProvider) getPrimaryEmail(ctx context.Context, token *oauth2.Toke
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to get emails")
@@ -212,7 +212,7 @@ func (p *GitHubProvider) getUserOrgs(ctx context.Context, token *oauth2.Token) (
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to get orgs")
@@ -247,7 +247,7 @@ func (p *GitHubProvider) getUserTeams(ctx context.Context, token *oauth2.Token) 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("failed to get teams")
