@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/org/lemuria/internal/argocd"
+	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
 
@@ -214,8 +215,16 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 		"locks_count", len(locks),
 	)
 
-	// Check if PR is approved (if required)
-	if e.config.Defaults.RequireApproval {
+	// Load repo config for per-app sync requirements
+	repoConfig := e.loadRepoConfig(ctx, event)
+
+	// Check if PR approval is required for any locked application
+	requireApproval := e.isApprovalRequired(repoConfig, locks)
+	e.logger.Debug("approval requirement resolved",
+		"require_approval", requireApproval,
+	)
+
+	if requireApproval {
 		e.logger.Debug("checking PR approval status")
 		approved, err := e.github.IsPRApproved(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 		if err != nil {
@@ -254,6 +263,70 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 
 	e.logger.Debug("all sync requirements met")
 	return nil
+}
+
+// loadRepoConfig fetches and parses the repo's .lemuria.yaml from the PR head branch.
+func (e *Executor) loadRepoConfig(ctx context.Context, event *models.PREvent) *config.RepoConfig {
+	configData, err := e.github.GetRepoConfig(ctx, event.Repo.Owner, event.Repo.Name, event.PR.HeadRef)
+	if err != nil {
+		e.logger.Debug("failed to load .lemuria.yaml for sync requirements", "error", err)
+		return nil
+	}
+
+	repoConfig, err := config.LoadRepoConfig(configData)
+	if err != nil {
+		e.logger.Debug("failed to parse .lemuria.yaml for sync requirements", "error", err)
+		return nil
+	}
+
+	return repoConfig
+}
+
+// isApprovalRequired checks if any of the locked applications require PR approval.
+// Resolution order (highest priority first): sync_requirements per-app > repo config top-level > server defaults.
+func (e *Executor) isApprovalRequired(repoConfig *config.RepoConfig, locks []models.Lock) bool {
+	for _, l := range locks {
+		if e.appRequiresApproval(repoConfig, l.Application) {
+			return true
+		}
+	}
+	return false
+}
+
+// appRequiresApproval determines if a specific application requires PR approval for sync.
+func (e *Executor) appRequiresApproval(repoConfig *config.RepoConfig, appName string) bool {
+	// Start with server default
+	requireApproval := e.config.Defaults.RequireApproval
+
+	if repoConfig != nil {
+		// Override with repo config top-level setting
+		if repoConfig.RequireApproval != nil {
+			requireApproval = *repoConfig.RequireApproval
+		}
+
+		// Check sync_requirements for per-app override (exact match first, then wildcard)
+		for _, req := range repoConfig.SyncRequirements {
+			if req.Name == appName {
+				e.logger.Debug("sync requirement exact match",
+					"app", appName,
+					"require_approval", req.RequireApproval,
+				)
+				return req.RequireApproval
+			}
+		}
+		for _, req := range repoConfig.SyncRequirements {
+			if req.Name != appName && matchAppName(req.Name, appName) {
+				e.logger.Debug("sync requirement wildcard match",
+					"app", appName,
+					"pattern", req.Name,
+					"require_approval", req.RequireApproval,
+				)
+				return req.RequireApproval
+			}
+		}
+	}
+
+	return requireApproval
 }
 
 // renderSyncResults formats sync results as a markdown comment.
