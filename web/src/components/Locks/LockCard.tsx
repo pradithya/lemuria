@@ -106,19 +106,22 @@ function PlanDiffSection({ diffs }: { diffs: PlanDiffEntry[] }) {
 
       {expanded && (
         <div className="mt-2 space-y-3">
-          {diffs.map((d, i) => (
-            <div key={i} className="text-sm">
-              <div className="flex items-center space-x-2 font-medium text-gray-700">
-                <span>{actionIcon(d.action)}</span>
-                <span>{formatResourceKey(d.resource)}</span>
+          {diffs.map((d) => {
+            const key = `${d.resource.apiVersion || 'core'}:${d.resource.namespace || ''}/${d.resource.kind}/${d.resource.name}:${d.action}`;
+            return (
+              <div key={key} className="text-sm">
+                <div className="flex items-center space-x-2 font-medium text-gray-700">
+                  <span>{actionIcon(d.action)}</span>
+                  <span>{formatResourceKey(d.resource)}</span>
+                </div>
+                {d.diff && (
+                  <pre className="mt-1 p-2 bg-gray-50 rounded text-xs overflow-x-auto whitespace-pre-wrap border border-gray-200">
+                    {d.diff}
+                  </pre>
+                )}
               </div>
-              {d.diff && (
-                <pre className="mt-1 p-2 bg-gray-50 rounded text-xs overflow-x-auto whitespace-pre-wrap border border-gray-200">
-                  {d.diff}
-                </pre>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
