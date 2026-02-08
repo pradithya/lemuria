@@ -68,14 +68,13 @@ func (m *mockGitHubForSync) DeleteBranch(context.Context, string, string, string
 }
 
 // mockLockManagerForSync is a minimal lock.Manager mock for sync tests.
-// It always returns cache miss for GetRepoConfig and no-ops for SetRepoConfig.
 type mockLockManagerForSync struct{}
 
 func (m *mockLockManagerForSync) Lock(context.Context, models.LockRequest) (*models.LockResult, error) {
 	return nil, nil
 }
 func (m *mockLockManagerForSync) Unlock(context.Context, string, string, int) error { return nil }
-func (m *mockLockManagerForSync) ForceUnlock(context.Context, string) error        { return nil }
+func (m *mockLockManagerForSync) ForceUnlock(context.Context, string) error         { return nil }
 func (m *mockLockManagerForSync) Get(context.Context, string) (*models.Lock, error) {
 	return nil, nil
 }
@@ -88,12 +87,6 @@ func (m *mockLockManagerForSync) StorePlan(context.Context, string, int, string,
 }
 func (m *mockLockManagerForSync) GetPlan(context.Context, string, int) (string, error) {
 	return "", nil
-}
-func (m *mockLockManagerForSync) GetRepoConfig(context.Context, string) (*config.RepoConfig, error) {
-	return nil, nil
-}
-func (m *mockLockManagerForSync) SetRepoConfig(context.Context, string, *config.RepoConfig) error {
-	return nil
 }
 func (m *mockLockManagerForSync) Ping(context.Context) error { return nil }
 func (m *mockLockManagerForSync) Close() error               { return nil }

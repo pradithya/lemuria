@@ -112,36 +112,32 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 	return nil
 }
 
-// getRepoConfig returns the parsed RepoConfig for the PR's repo, using a Redis cache
-// to avoid redundant GitHub fetches within the same request.
+// getRepoConfig returns the parsed RepoConfig for the PR's repo.
+// The result is cached on the PREvent to avoid redundant GitHub fetches
+// within the same command execution.
 func (e *Executor) getRepoConfig(ctx context.Context, event *models.PREvent) *config.RepoConfig {
-	// Check cache first
-	cached, err := e.lock.GetRepoConfig(ctx, event.Repo.FullName)
-	if err != nil {
-		e.logger.Debug("failed to check repo config cache", "error", err)
-	}
-	if cached != nil {
-		e.logger.Debug("repo config cache hit", "repo", event.Repo.FullName)
-		return cached
+	if event.RepoConfigLoaded {
+		return event.RepoConfig
 	}
 
-	// Cache miss — fetch from GitHub
-	configData, err := e.github.GetRepoConfig(ctx, event.Repo.Owner, event.Repo.Name, event.PR.HeadRef)
+	ref := event.PR.HeadRef
+
+	configData, err := e.github.GetRepoConfig(ctx, event.Repo.Owner, event.Repo.Name, ref)
 	if err != nil {
-		e.logger.Debug("failed to load .lemuria.yaml", "error", err, "ref", event.PR.HeadRef)
+		e.logger.Debug("failed to load .lemuria.yaml", "error", err, "ref", ref)
+		event.RepoConfigLoaded = true
 		return nil
 	}
 
 	repoConfig, err := config.LoadRepoConfig(configData)
 	if err != nil {
 		e.logger.Debug("failed to parse .lemuria.yaml", "error", err)
+		event.RepoConfigLoaded = true
 		return nil
 	}
 
-	// Store in cache
-	if err := e.lock.SetRepoConfig(ctx, event.Repo.FullName, repoConfig); err != nil {
-		e.logger.Debug("failed to cache repo config", "error", err)
-	}
+	event.RepoConfig = repoConfig
+	event.RepoConfigLoaded = true
 
 	return repoConfig
 }

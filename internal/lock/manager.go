@@ -3,7 +3,6 @@ package lock
 import (
 	"context"
 
-	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
 
@@ -32,13 +31,6 @@ type Manager interface {
 
 	// GetPlan retrieves the stored plan revision.
 	GetPlan(ctx context.Context, application string, prNumber int) (string, error)
-
-	// GetRepoConfig retrieves a cached RepoConfig for the given repo.
-	// Returns nil, nil on cache miss.
-	GetRepoConfig(ctx context.Context, repo string) (*config.RepoConfig, error)
-
-	// SetRepoConfig caches a RepoConfig for the given repo with a short TTL.
-	SetRepoConfig(ctx context.Context, repo string, cfg *config.RepoConfig) error
 
 	// Ping checks the connection to the lock backend.
 	Ping(ctx context.Context) error

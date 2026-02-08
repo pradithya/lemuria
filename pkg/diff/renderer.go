@@ -312,10 +312,28 @@ func (r *Renderer) renderPlanDiffs(diffs []models.PlanDiffEntry) string {
 	return sb.String()
 }
 
-// sanitizeDiffForMarkdown escapes triple-backtick sequences in diff content
-// to prevent breaking markdown fenced code blocks.
+// sanitizeDiffForMarkdown escapes runs of 3 or more backticks in diff content
+// to prevent breaking markdown fenced code blocks. A zero-width space is inserted
+// after the second backtick to break any fence-like sequence.
 func sanitizeDiffForMarkdown(s string) string {
-	return strings.ReplaceAll(s, "```", "` ` `")
+	var b strings.Builder
+	b.Grow(len(s))
+	count := 0
+	for _, r := range s {
+		if r == '`' {
+			count++
+			b.WriteRune(r)
+			if count == 2 {
+				// Insert zero-width space after the second consecutive backtick
+				// so that any run of 3+ backticks is broken.
+				b.WriteRune('\u200B')
+			}
+		} else {
+			count = 0
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // resourceStatusIcon returns an emoji for the given sync status.
