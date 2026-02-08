@@ -138,7 +138,7 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	// Auto-merge if enabled and all syncs succeeded (not dry-run)
 	// Resolution order: repo config (.lemuria.yaml) > server defaults
 	autoMerge := e.config.Defaults.AutoMerge
-	repoConfig := e.loadRepoConfig(ctx, event)
+	repoConfig := e.getRepoConfig(ctx, event)
 	if repoConfig != nil && repoConfig.AutoMerge != nil {
 		autoMerge = *repoConfig.AutoMerge
 	}
@@ -168,6 +168,7 @@ type syncResult struct {
 	Result      *models.SyncResult
 	Error       error
 	PlanOutput  string
+	PlanDiffs   []models.PlanDiffEntry
 }
 
 // syncApplication triggers a sync for a single application.
@@ -183,6 +184,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 	result := syncResult{
 		Application: l.Application,
 		PlanOutput:  l.PlanOutput,
+		PlanDiffs:   l.PlanDiffs,
 	}
 
 	// Determine if the app sources from the PR repo
@@ -294,7 +296,7 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 	)
 
 	// Load repo config for per-app sync requirements
-	repoConfig := e.loadRepoConfig(ctx, event)
+	repoConfig := e.getRepoConfig(ctx, event)
 
 	// Check if PR approval is required for any locked application
 	requireApproval := e.isApprovalRequired(repoConfig, locks)
@@ -341,23 +343,6 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 
 	e.logger.Debug("all sync requirements met")
 	return nil
-}
-
-// loadRepoConfig fetches and parses the repo's .lemuria.yaml from the PR head branch.
-func (e *Executor) loadRepoConfig(ctx context.Context, event *models.PREvent) *config.RepoConfig {
-	configData, err := e.github.GetRepoConfig(ctx, event.Repo.Owner, event.Repo.Name, event.PR.HeadRef)
-	if err != nil {
-		e.logger.Debug("failed to load .lemuria.yaml for sync requirements", "error", err)
-		return nil
-	}
-
-	repoConfig, err := config.LoadRepoConfig(configData)
-	if err != nil {
-		e.logger.Debug("failed to parse .lemuria.yaml for sync requirements", "error", err)
-		return nil
-	}
-
-	return repoConfig
 }
 
 // isApprovalRequired checks if any of the locked applications require PR approval.
@@ -414,6 +399,7 @@ func (e *Executor) renderSyncResults(results []syncResult) string {
 		entry := diff.SyncResultEntry{
 			Application: r.Application,
 			PlanOutput:  r.PlanOutput,
+			PlanDiffs:   r.PlanDiffs,
 			Error:       r.Error,
 		}
 		if r.Result != nil {

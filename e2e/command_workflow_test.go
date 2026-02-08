@@ -140,7 +140,24 @@ func TestE2EPlanCommand(t *testing.T) {
 		t.Errorf("Expected lock PlanRevision %q, got %q", headSHA, lock.PlanRevision)
 	}
 
-	t.Logf("Lock acquired: app=%s, pr=%d, user=%s, plan_revision=%s", lock.Application, lock.PRNumber, lock.User, lock.PlanRevision)
+	t.Logf("Lock acquired: app=%s, pr=%d, user=%s, plan_revision=%s, plan_diffs=%d",
+		lock.Application, lock.PRNumber, lock.User, lock.PlanRevision, len(lock.PlanDiffs))
+
+	// Assert: if the plan comment shows resource changes, PlanDiffs should be populated
+	if strings.Contains(lastComment.Body, "resources changed") {
+		if len(lock.PlanDiffs) == 0 {
+			t.Error("Expected PlanDiffs to be populated when plan shows resource changes")
+		}
+		for i, d := range lock.PlanDiffs {
+			if d.Resource.Kind == "" {
+				t.Errorf("PlanDiffs[%d]: expected non-empty Kind", i)
+			}
+			if d.Action == "" {
+				t.Errorf("PlanDiffs[%d]: expected non-empty Action", i)
+			}
+			t.Logf("  PlanDiff[%d]: %s %s/%s", i, d.Action, d.Resource.Kind, d.Resource.Name)
+		}
+	}
 
 	// Assert: reaction was added
 	if len(mockGH.Reactions) == 0 {
@@ -343,6 +360,16 @@ func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
 		t.Errorf("Get: expected PlanRevision %q, got %q", headSHA, lock.PlanRevision)
 	}
 
+	// Assert: PlanDiffs are persisted on the lock via Get
+	// (the live diff against test-app may or may not produce diffs depending on cluster state)
+	t.Logf("Get: PlanDiffs count = %d, PlanOutput = %q", len(lock.PlanDiffs), lock.PlanOutput)
+	if lock.PlanOutput != "" && lock.PlanOutput != "No changes detected" {
+		// If there's a non-trivial plan output, PlanDiffs should also be populated
+		if len(lock.PlanDiffs) == 0 {
+			t.Errorf("Get: expected PlanDiffs to be populated when PlanOutput=%q", lock.PlanOutput)
+		}
+	}
+
 	// Assert: PlanRevision is also set on locks returned by ListByPR
 	// (this is the path used by executeSync)
 	locks, err := lockManager.ListByPR(testCtx, repo, prNumber)
@@ -358,6 +385,10 @@ func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
 			found = true
 			if l.PlanRevision != headSHA {
 				t.Errorf("ListByPR: expected PlanRevision %q, got %q", headSHA, l.PlanRevision)
+			}
+			// Assert: PlanDiffs also round-trip through ListByPR
+			if len(lock.PlanDiffs) > 0 && len(l.PlanDiffs) != len(lock.PlanDiffs) {
+				t.Errorf("ListByPR: expected %d PlanDiffs, got %d", len(lock.PlanDiffs), len(l.PlanDiffs))
 			}
 			break
 		}
@@ -382,6 +413,14 @@ func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
 	lastComment := comments[len(comments)-1]
 	if strings.Contains(lastComment.Body, "stale") {
 		t.Errorf("Sync should NOT report stale plan when HeadSHA matches PlanRevision, got: %s", lastComment.Body)
+	}
+
+	// Assert: if PlanDiffs were stored and sync actually proceeded (not blocked by
+	// auto-sync or other pre-sync checks), they should appear in the sync comment.
+	if len(lock.PlanDiffs) > 0 && !strings.Contains(lastComment.Body, "auto-sync enabled") {
+		if !strings.Contains(lastComment.Body, "Plan Diff") {
+			t.Errorf("Sync comment should include 'Plan Diff' section when PlanDiffs are stored")
+		}
 	}
 }
 
@@ -811,7 +850,14 @@ spec:
 	if err != nil {
 		t.Fatalf("Failed to lock git app: %v", err)
 	}
-	if err := lockManager.StorePlan(testCtx, gitAppName, prNumber, headSHA, "", "1 to update"); err != nil {
+	gitAppDiffs := []models.PlanDiffEntry{
+		{
+			Resource: models.ResourceKey{APIVersion: "apps/v1", Kind: "Deployment", Name: gitAppName, Namespace: "e2e-test-apps"},
+			Action:   models.DiffActionUpdate,
+			Diff:     "- replicas: 1\n+ replicas: 2\n",
+		},
+	}
+	if err := lockManager.StorePlan(testCtx, gitAppName, prNumber, headSHA, "", "1 to update", gitAppDiffs); err != nil {
 		t.Fatalf("Failed to store plan for git app: %v", err)
 	}
 
@@ -825,7 +871,14 @@ spec:
 	if err != nil {
 		t.Fatalf("Failed to lock Helm app: %v", err)
 	}
-	if err := lockManager.StorePlan(testCtx, helmAppName, prNumber, headSHA, helmCRFilePath, "1 to update"); err != nil {
+	helmAppDiffs := []models.PlanDiffEntry{
+		{
+			Resource: models.ResourceKey{APIVersion: "v1", Kind: "ConfigMap", Name: "helm-values", Namespace: "e2e-test-apps"},
+			Action:   models.DiffActionCreate,
+			Diff:     "+ apiVersion: v1\n+ kind: ConfigMap\n",
+		},
+	}
+	if err := lockManager.StorePlan(testCtx, helmAppName, prNumber, headSHA, helmCRFilePath, "1 to update", helmAppDiffs); err != nil {
 		t.Fatalf("Failed to store plan for Helm app: %v", err)
 	}
 
@@ -890,6 +943,18 @@ spec:
 	}
 	if !strings.Contains(lastComment.Body, "1 to update") {
 		t.Error("Expected sync comment to show '1 to update' from stored plan output")
+	}
+
+	// Assert: plan diffs are rendered in the sync comment
+	if !strings.Contains(lastComment.Body, "Plan Diff") {
+		t.Error("Expected sync comment to include 'Plan Diff' section from stored PlanDiffs")
+	}
+	if !strings.Contains(lastComment.Body, "resources changed") {
+		t.Error("Expected sync comment to include resource count in plan diff section")
+	}
+	// Verify diff content appears in the comment (inside ```diff blocks)
+	if !strings.Contains(lastComment.Body, "replicas") {
+		t.Error("Expected sync comment to contain diff content (replicas) from stored PlanDiffs")
 	}
 }
 

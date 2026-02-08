@@ -226,8 +226,8 @@ func (m *RedisManager) ListAll(ctx context.Context) ([]models.Lock, error) {
 	return locks, nil
 }
 
-// StorePlan stores the plan revision, source file, and plan output for verification before sync.
-func (m *RedisManager) StorePlan(ctx context.Context, application string, prNumber int, revision, sourceFile, planOutput string) error {
+// StorePlan stores the plan revision, source file, plan output, and diffs for verification before sync.
+func (m *RedisManager) StorePlan(ctx context.Context, application string, prNumber int, revision, sourceFile, planOutput string, diffs []models.PlanDiffEntry) error {
 	// Store in the dedicated plan key
 	key := planKeyPrefix + application + ":" + fmt.Sprint(prNumber)
 	if err := m.client.Set(ctx, key, revision, lockTTL).Err(); err != nil {
@@ -239,10 +239,11 @@ func (m *RedisManager) StorePlan(ctx context.Context, application string, prNumb
 	if err != nil {
 		return fmt.Errorf("getting lock to update plan revision: %w", err)
 	}
-	if lock != nil && lock.IsHeldByPR(lock.Repo, prNumber) {
+	if lock != nil && lock.PRNumber == prNumber {
 		lock.PlanRevision = revision
 		lock.SourceFile = sourceFile
 		lock.PlanOutput = planOutput
+		lock.PlanDiffs = diffs
 		return m.setLock(ctx, lock)
 	}
 

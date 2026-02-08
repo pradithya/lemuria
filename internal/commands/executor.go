@@ -112,6 +112,36 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 	return nil
 }
 
+// getRepoConfig returns the parsed RepoConfig for the PR's repo.
+// The result is cached on the PREvent to avoid redundant GitHub fetches
+// within the same command execution.
+func (e *Executor) getRepoConfig(ctx context.Context, event *models.PREvent) *config.RepoConfig {
+	if event.RepoConfigLoaded {
+		return event.RepoConfig
+	}
+
+	ref := event.PR.HeadRef
+
+	configData, err := e.github.GetRepoConfig(ctx, event.Repo.Owner, event.Repo.Name, ref)
+	if err != nil {
+		e.logger.Debug("failed to load .lemuria.yaml", "error", err, "ref", ref)
+		event.RepoConfigLoaded = true
+		return nil
+	}
+
+	repoConfig, err := config.LoadRepoConfig(configData)
+	if err != nil {
+		e.logger.Debug("failed to parse .lemuria.yaml", "error", err)
+		event.RepoConfigLoaded = true
+		return nil
+	}
+
+	event.RepoConfig = repoConfig
+	event.RepoConfigLoaded = true
+
+	return repoConfig
+}
+
 // findAffectedApplications determines which applications are affected by a PR.
 // This includes:
 // - Existing applications with changed manifest paths
@@ -137,33 +167,20 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		"files", filePaths,
 	)
 
-	// Load repo config
-	var repoConfig *config.RepoConfig
-	configData, err := e.github.GetRepoConfig(ctx, event.Repo.Owner, event.Repo.Name, event.PR.HeadRef)
-	if err != nil {
-		e.logger.Debug("failed to load .lemuria.yaml",
-			"error", err,
-			"ref", event.PR.HeadRef,
+	// Load repo config (cached)
+	repoConfig := e.getRepoConfig(ctx, event)
+	if repoConfig != nil {
+		e.logger.Debug("loaded .lemuria.yaml",
+			"applications_count", len(repoConfig.Applications),
+			"autoplan", repoConfig.Autoplan,
+			"require_approval", repoConfig.RequireApproval,
 		)
-	} else {
-		repoConfig, err = config.LoadRepoConfig(configData)
-		if err != nil {
-			e.logger.Debug("failed to parse .lemuria.yaml",
-				"error", err,
+		for _, mapping := range repoConfig.Applications {
+			e.logger.Debug("repo config application mapping",
+				"app_name", mapping.Name,
+				"paths", mapping.Paths,
+				"applicationset", mapping.ApplicationSet,
 			)
-		} else {
-			e.logger.Debug("loaded .lemuria.yaml",
-				"applications_count", len(repoConfig.Applications),
-				"autoplan", repoConfig.Autoplan,
-				"require_approval", repoConfig.RequireApproval,
-			)
-			for _, mapping := range repoConfig.Applications {
-				e.logger.Debug("repo config application mapping",
-					"app_name", mapping.Name,
-					"paths", mapping.Paths,
-					"applicationset", mapping.ApplicationSet,
-				)
-			}
 		}
 	}
 
