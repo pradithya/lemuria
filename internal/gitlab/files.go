@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	gogitlab "github.com/xanzy/go-gitlab"
+	gogitlab "gitlab.com/gitlab-org/api/client-go"
 
 	"github.com/org/lemuria/internal/models"
 )
@@ -20,7 +20,7 @@ func (c *Client) GetChangedFiles(ctx context.Context, owner, repo string, number
 	var allFiles []models.ChangedFile
 
 	for {
-		diffs, resp, err := c.client.MergeRequests.ListMergeRequestDiffs(project, number, opts, gogitlab.WithContext(ctx))
+		diffs, resp, err := c.client.MergeRequests.ListMergeRequestDiffs(project, int64(number), opts, gogitlab.WithContext(ctx))
 		if err != nil {
 			return nil, fmt.Errorf("listing MR diffs: %w", err)
 		}

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	gogitlab "github.com/xanzy/go-gitlab"
+	gogitlab "gitlab.com/gitlab-org/api/client-go"
 
 	"github.com/org/lemuria/internal/models"
 )
@@ -30,7 +30,7 @@ func (c *Client) PostComment(ctx context.Context, owner, repo string, number int
 	}
 	markedBody := markers + "\n" + body
 
-	note, _, err := c.client.Notes.CreateMergeRequestNote(projectPath(owner, repo), number, &gogitlab.CreateMergeRequestNoteOptions{
+	note, _, err := c.client.Notes.CreateMergeRequestNote(projectPath(owner, repo), int64(number), &gogitlab.CreateMergeRequestNoteOptions{
 		Body: gogitlab.Ptr(markedBody),
 	}, gogitlab.WithContext(ctx))
 	if err != nil {
@@ -82,7 +82,7 @@ func (c *Client) AddReaction(ctx context.Context, owner, repo string, commentID 
 		return fmt.Errorf("could not determine MR IID for note %d", commentID)
 	}
 
-	_, _, err = c.client.AwardEmoji.CreateMergeRequestAwardEmojiOnNote(project, info.NoteableIID, int(commentID), &gogitlab.CreateAwardEmojiOptions{
+	_, _, err = c.client.AwardEmoji.CreateMergeRequestAwardEmojiOnNote(project, int64(info.NoteableIID), commentID, &gogitlab.CreateAwardEmojiOptions{
 		Name: emojiName,
 	}, gogitlab.WithContext(ctx))
 	if err != nil {
@@ -101,7 +101,7 @@ func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string,
 	}
 
 	for {
-		notes, resp, err := c.client.Notes.ListMergeRequestNotes(project, number, opts, gogitlab.WithContext(ctx))
+		notes, resp, err := c.client.Notes.ListMergeRequestNotes(project, int64(number), opts, gogitlab.WithContext(ctx))
 		if err != nil {
 			return fmt.Errorf("listing MR notes: %w", err)
 		}
@@ -121,7 +121,7 @@ func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string,
 					newBody = newBody[:markerEnd+1] + StaleNotice + newBody[markerEnd+1:]
 				}
 
-				_, _, err := c.client.Notes.UpdateMergeRequestNote(project, number, note.ID, &gogitlab.UpdateMergeRequestNoteOptions{
+				_, _, err := c.client.Notes.UpdateMergeRequestNote(project, int64(number), note.ID, &gogitlab.UpdateMergeRequestNoteOptions{
 					Body: gogitlab.Ptr(newBody),
 				}, gogitlab.WithContext(ctx))
 				if err != nil {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	gogitlab "github.com/xanzy/go-gitlab"
+	gogitlab "gitlab.com/gitlab-org/api/client-go"
 
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
@@ -40,18 +40,18 @@ func projectPath(owner, repo string) string {
 
 // GetPR fetches merge request details and returns a provider-agnostic PullRequestDetail.
 func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*models.PullRequestDetail, error) {
-	mr, _, err := c.client.MergeRequests.GetMergeRequest(projectPath(owner, repo), number, nil, gogitlab.WithContext(ctx))
+	mr, _, err := c.client.MergeRequests.GetMergeRequest(projectPath(owner, repo), int64(number), nil, gogitlab.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("getting MR !%d: %w", number, err)
 	}
 
 	state := mr.State
 	merged := state == "merged"
-	draft := mr.Draft || mr.WorkInProgress
-	mergeable := mr.MergeStatus == "can_be_merged"
+	draft := mr.Draft
+	mergeable := mr.DetailedMergeStatus == "mergeable"
 
 	return &models.PullRequestDetail{
-		Number:    mr.IID,
+		Number:    int(mr.IID),
 		Title:     mr.Title,
 		State:     state,
 		Draft:     draft,
@@ -65,7 +65,7 @@ func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*mo
 
 // IsPRApproved checks if the merge request has been approved by at least one reviewer.
 func (c *Client) IsPRApproved(ctx context.Context, owner, repo string, number int) (bool, error) {
-	approvals, _, err := c.client.MergeRequestApprovals.GetConfiguration(projectPath(owner, repo), number, gogitlab.WithContext(ctx))
+	approvals, _, err := c.client.MergeRequestApprovals.GetConfiguration(projectPath(owner, repo), int64(number), gogitlab.WithContext(ctx))
 	if err != nil {
 		return false, fmt.Errorf("getting MR !%d approvals: %w", number, err)
 	}
@@ -94,7 +94,7 @@ func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, numbe
 		}
 	}
 
-	_, _, err := c.client.MergeRequests.AcceptMergeRequest(projectPath(owner, repo), number, opts, gogitlab.WithContext(ctx))
+	_, _, err := c.client.MergeRequests.AcceptMergeRequest(projectPath(owner, repo), int64(number), opts, gogitlab.WithContext(ctx))
 	if err != nil {
 		return fmt.Errorf("merging MR !%d: %w", number, err)
 	}
