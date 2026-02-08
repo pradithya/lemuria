@@ -20,8 +20,12 @@ const (
 	planKeyPrefix = "lemuria:plan:"
 	// prLocksKeyPrefix is the prefix for PR-to-locks index.
 	prLocksKeyPrefix = "lemuria:pr-locks:"
+	// repoConfigKeyPrefix is the prefix for cached repo config keys in Redis.
+	repoConfigKeyPrefix = "lemuria:repoconfig:"
 	// lockTTL is the default TTL for locks (7 days).
 	lockTTL = 7 * 24 * time.Hour
+	// repoConfigTTL is the TTL for cached repo configs (5 minutes).
+	repoConfigTTL = 5 * time.Minute
 )
 
 // RedisManager implements Manager using Redis.
@@ -254,6 +258,41 @@ func (m *RedisManager) StorePlan(ctx context.Context, application string, prNumb
 func (m *RedisManager) GetPlan(ctx context.Context, application string, prNumber int) (string, error) {
 	key := planKeyPrefix + application + ":" + fmt.Sprint(prNumber)
 	return m.client.Get(ctx, key).Result()
+}
+
+// GetRepoConfig retrieves a cached RepoConfig for the given repo.
+// Returns nil, nil on cache miss.
+func (m *RedisManager) GetRepoConfig(ctx context.Context, repo string) (*config.RepoConfig, error) {
+	key := repoConfigKeyPrefix + repo
+	data, err := m.client.Get(ctx, key).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting repo config cache: %w", err)
+	}
+
+	var cfg config.RepoConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshaling repo config cache: %w", err)
+	}
+
+	return &cfg, nil
+}
+
+// SetRepoConfig caches a RepoConfig for the given repo with a short TTL.
+func (m *RedisManager) SetRepoConfig(ctx context.Context, repo string, cfg *config.RepoConfig) error {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshaling repo config: %w", err)
+	}
+
+	key := repoConfigKeyPrefix + repo
+	if err := m.client.Set(ctx, key, data, repoConfigTTL).Err(); err != nil {
+		return fmt.Errorf("storing repo config cache: %w", err)
+	}
+
+	return nil
 }
 
 // Ping checks the connection to Redis.

@@ -67,10 +67,42 @@ func (m *mockGitHubForSync) DeleteBranch(context.Context, string, string, string
 	return nil
 }
 
+// mockLockManagerForSync is a minimal lock.Manager mock for sync tests.
+// It always returns cache miss for GetRepoConfig and no-ops for SetRepoConfig.
+type mockLockManagerForSync struct{}
+
+func (m *mockLockManagerForSync) Lock(context.Context, models.LockRequest) (*models.LockResult, error) {
+	return nil, nil
+}
+func (m *mockLockManagerForSync) Unlock(context.Context, string, string, int) error { return nil }
+func (m *mockLockManagerForSync) ForceUnlock(context.Context, string) error        { return nil }
+func (m *mockLockManagerForSync) Get(context.Context, string) (*models.Lock, error) {
+	return nil, nil
+}
+func (m *mockLockManagerForSync) ListByPR(context.Context, string, int) ([]models.Lock, error) {
+	return nil, nil
+}
+func (m *mockLockManagerForSync) ListAll(context.Context) ([]models.Lock, error) { return nil, nil }
+func (m *mockLockManagerForSync) StorePlan(context.Context, string, int, string, string, string, []models.PlanDiffEntry) error {
+	return nil
+}
+func (m *mockLockManagerForSync) GetPlan(context.Context, string, int) (string, error) {
+	return "", nil
+}
+func (m *mockLockManagerForSync) GetRepoConfig(context.Context, string) (*config.RepoConfig, error) {
+	return nil, nil
+}
+func (m *mockLockManagerForSync) SetRepoConfig(context.Context, string, *config.RepoConfig) error {
+	return nil
+}
+func (m *mockLockManagerForSync) Ping(context.Context) error { return nil }
+func (m *mockLockManagerForSync) Close() error               { return nil }
+
 func newSyncTestExecutor(gh GitHubClient, cfg *config.Config) *Executor {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	return &Executor{
 		github: gh,
+		lock:   &mockLockManagerForSync{},
 		config: cfg,
 		logger: logger,
 	}
