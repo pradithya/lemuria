@@ -14,14 +14,122 @@ Lemuria uses YAML configuration files with support for environment variable subs
 
 | File | Location | Purpose |
 |------|----------|---------|
-| `lemuria.yaml` | Server | Main server configuration |
 | `.lemuria.yaml` | Repository root | Per-repository settings |
+| `lemuria.yaml` | Server | Main server configuration |
 
 Multiple server configuration files can be merged by passing `-config` multiple times. Later files override earlier ones.
 
 ```bash
 ./bin/lemuria -config base.yaml -config production.yaml
 ```
+
+---
+
+
+## Repository Configuration
+
+Create `.lemuria.yaml` in your repository root to customize behavior per-repo. These settings override the server defaults.
+
+### Full Example
+
+```yaml
+version: 1
+
+# Override server defaults
+autoplan: true
+require_approval: true
+auto_merge: true
+
+# Application to path mappings
+applications:
+  # Exact application name
+  - name: frontend
+    paths:
+      - "apps/frontend/**"
+      - "base/frontend/**"
+
+  # Wildcard application name (matches frontend-dev, frontend-prod, etc.)
+  - name: "frontend-*"
+    paths:
+      - "apps/frontend/**"
+      - "envs/**/frontend/**"
+
+  # ApplicationSet-generated apps
+  - name: "cluster-*"
+    applicationset: cluster-apps
+    paths:
+      - "clusters/**"
+
+# Per-application sync requirements
+sync_requirements:
+  - name: production
+    require_approval: true
+    allowed_users:
+      - "senior-dev"
+      - "platform-team"
+
+  - name: staging
+    require_approval: false
+```
+
+### Applications Section
+
+Maps Argo CD applications to repository paths. Lemuria uses this to determine which applications are affected when files change in a PR.
+
+```yaml
+applications:
+  - name: my-app              # Argo CD application name (supports wildcards)
+    paths:                    # Paths that affect this app
+      - "apps/my-app/**"
+      - "base/**"
+    applicationset: my-set    # Optional: ApplicationSet name
+```
+
+**Path Pattern Syntax:**
+
+| Pattern | Matches |
+|---------|---------|
+| `apps/my-app/**` | All files under `apps/my-app/` |
+| `*.yaml` | All YAML files in root |
+| `envs/*/values.yaml` | values.yaml in any env subdirectory |
+| `**/*.yaml` | All YAML files recursively |
+
+**Application Detection Fallback:**
+
+If no `.lemuria.yaml` exists or an app has no explicit path mapping, Lemuria falls back to checking if the app's configured `source.path` in Argo CD contains any of the changed files.
+
+### Sync Requirements Section
+
+Override approval requirements per application. Supports exact names and wildcard patterns.
+
+```yaml
+sync_requirements:
+  - name: production          # Application name (supports wildcards)
+    require_approval: true    # Require PR approval
+    allowed_users:            # Users allowed to sync
+      - "admin"
+      - "@myorg/platform"     # GitHub team
+```
+
+---
+
+## Configuration Precedence
+
+Settings are applied in this order (later overrides earlier):
+
+1. **Built-in defaults** (`config.DefaultConfig()`)
+2. **Server configuration** (`lemuria.yaml` - can be multiple files merged in order)
+3. **Repository configuration** (`.lemuria.yaml` - `autoplan`, `require_approval`, `auto_merge`)
+4. **Sync requirements** (per-application `require_approval`, `allowed_users`)
+
+For approval requirements specifically, the resolution order is:
+1. `sync_requirements` per-app match (exact match first, then wildcard)
+2. Repository `.lemuria.yaml` top-level `require_approval`
+3. Server `defaults.require_approval`
+
+For auto-merge, the resolution order is:
+1. Repository `.lemuria.yaml` top-level `auto_merge`
+2. Server `defaults.auto_merge`
 
 ---
 
@@ -305,6 +413,8 @@ When `auto_merge: true`:
 3. Optionally deletes the source branch (if `delete_source_branch: true`)
 4. Protected branches (`main`, `master`, `develop`, `development`) are never deleted
 
+**Server default:**
+
 ```yaml
 defaults:
   auto_merge: true
@@ -312,109 +422,16 @@ defaults:
   delete_source_branch: true    # Delete branch after merge
 ```
 
----
-
-## Repository Configuration
-
-Create `.lemuria.yaml` in your repository root to customize behavior per-repo. These settings override the server defaults.
-
-### Full Example
+**Per-repository override** (`.lemuria.yaml`):
 
 ```yaml
-version: 1
-
-# Override server defaults
-autoplan: true
-require_approval: true
-
-# Application to path mappings
-applications:
-  # Exact application name
-  - name: frontend
-    paths:
-      - "apps/frontend/**"
-      - "base/frontend/**"
-
-  # Wildcard application name (matches frontend-dev, frontend-prod, etc.)
-  - name: "frontend-*"
-    paths:
-      - "apps/frontend/**"
-      - "envs/**/frontend/**"
-
-  # ApplicationSet-generated apps
-  - name: "cluster-*"
-    applicationset: cluster-apps
-    paths:
-      - "clusters/**"
-
-# Per-application sync requirements
-sync_requirements:
-  - name: production
-    require_approval: true
-    allowed_users:
-      - "senior-dev"
-      - "platform-team"
-
-  - name: staging
-    require_approval: false
+auto_merge: true    # Override server default for this repo
 ```
 
-### Applications Section
-
-Maps Argo CD applications to repository paths. Lemuria uses this to determine which applications are affected when files change in a PR.
-
-```yaml
-applications:
-  - name: my-app              # Argo CD application name (supports wildcards)
-    paths:                    # Paths that affect this app
-      - "apps/my-app/**"
-      - "base/**"
-    applicationset: my-set    # Optional: ApplicationSet name
-```
-
-**Path Pattern Syntax:**
-
-| Pattern | Matches |
-|---------|---------|
-| `apps/my-app/**` | All files under `apps/my-app/` |
-| `*.yaml` | All YAML files in root |
-| `envs/*/values.yaml` | values.yaml in any env subdirectory |
-| `**/*.yaml` | All YAML files recursively |
-
-**Application Detection Fallback:**
-
-If no `.lemuria.yaml` exists or an app has no explicit path mapping, Lemuria falls back to checking if the app's configured `source.path` in Argo CD contains any of the changed files.
-
-### Sync Requirements Section
-
-Override approval requirements per application. Supports exact names and wildcard patterns.
-
-```yaml
-sync_requirements:
-  - name: production          # Application name (supports wildcards)
-    require_approval: true    # Require PR approval
-    allowed_users:            # Users allowed to sync
-      - "admin"
-      - "@myorg/platform"     # GitHub team
-```
+The repo-level `auto_merge` setting takes precedence over the server default, allowing individual repositories to opt in or out of auto-merge regardless of the server configuration.
 
 ---
 
-## Configuration Precedence
-
-Settings are applied in this order (later overrides earlier):
-
-1. **Built-in defaults** (`config.DefaultConfig()`)
-2. **Server configuration** (`lemuria.yaml` - can be multiple files merged in order)
-3. **Repository configuration** (`.lemuria.yaml` - `autoplan`, `require_approval`)
-4. **Sync requirements** (per-application `require_approval`, `allowed_users`)
-
-For approval requirements specifically, the resolution order is:
-1. `sync_requirements` per-app match (exact match first, then wildcard)
-2. Repository `.lemuria.yaml` top-level `require_approval`
-3. Server `defaults.require_approval`
-
----
 
 ## Environment Variable Substitution
 
