@@ -200,9 +200,20 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 			sb.WriteString("✅ **Sync successful**\n\n")
 		case "Running":
 			sb.WriteString("⏳ **Sync in progress**\n\n")
+			allSucceeded = false
 		default:
 			sb.WriteString(fmt.Sprintf("❌ **Sync failed:** %s\n\n", result.Message))
 			allSucceeded = false
+		}
+
+		// Plan summary (what was planned)
+		if result.PlanOutput != "" {
+			sb.WriteString(fmt.Sprintf("📋 **Planned changes:** %s\n\n", result.PlanOutput))
+		}
+
+		// Per-resource sync results
+		if len(result.Resources) > 0 {
+			sb.WriteString(r.renderResourceTable(result.Resources))
 		}
 	}
 
@@ -220,6 +231,50 @@ type SyncResultEntry struct {
 	Phase       string
 	Message     string
 	Error       error
+	PlanOutput  string
+	Resources   []models.ResourceResult
+}
+
+// renderResourceTable formats resource sync results as a collapsible markdown table.
+func (r *Renderer) renderResourceTable(resources []models.ResourceResult) string {
+	var sb strings.Builder
+
+	sb.WriteString("<details>\n")
+	sb.WriteString(fmt.Sprintf("<summary>Resource Results (%d resources)</summary>\n\n", len(resources)))
+	sb.WriteString("| Resource | Status | Message |\n")
+	sb.WriteString("|----------|--------|--------|\n")
+
+	for _, res := range resources {
+		icon := resourceStatusIcon(res.Status)
+		msg := res.Message
+		if len(msg) > 80 {
+			msg = msg[:77] + "..."
+		}
+		// Escape pipe characters in messages to avoid breaking the table
+		msg = strings.ReplaceAll(msg, "|", "\\|")
+		sb.WriteString(fmt.Sprintf("| %s | %s %s | %s |\n",
+			res.Resource.String(), icon, res.Status, msg))
+	}
+
+	sb.WriteString("\n</details>\n\n")
+
+	return sb.String()
+}
+
+// resourceStatusIcon returns an emoji for the given sync status.
+func resourceStatusIcon(status string) string {
+	switch status {
+	case "Synced":
+		return "✅"
+	case "SyncFailed":
+		return "❌"
+	case "Pruned":
+		return "🗑️"
+	case "PruningRequired":
+		return "⚠️"
+	default:
+		return "ℹ️"
+	}
 }
 
 // RenderError formats an error as a markdown comment.

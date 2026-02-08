@@ -811,7 +811,7 @@ spec:
 	if err != nil {
 		t.Fatalf("Failed to lock git app: %v", err)
 	}
-	if err := lockManager.StorePlan(testCtx, gitAppName, prNumber, headSHA, ""); err != nil {
+	if err := lockManager.StorePlan(testCtx, gitAppName, prNumber, headSHA, "", "1 to update"); err != nil {
 		t.Fatalf("Failed to store plan for git app: %v", err)
 	}
 
@@ -825,7 +825,7 @@ spec:
 	if err != nil {
 		t.Fatalf("Failed to lock Helm app: %v", err)
 	}
-	if err := lockManager.StorePlan(testCtx, helmAppName, prNumber, headSHA, helmCRFilePath); err != nil {
+	if err := lockManager.StorePlan(testCtx, helmAppName, prNumber, headSHA, helmCRFilePath, "1 to update"); err != nil {
 		t.Fatalf("Failed to store plan for Helm app: %v", err)
 	}
 
@@ -882,6 +882,14 @@ spec:
 	// Assert: no stale plan error
 	if strings.Contains(lastComment.Body, "stale") {
 		t.Error("Sync should not report stale plan")
+	}
+
+	// Assert: plan output is included in sync comment
+	if !strings.Contains(lastComment.Body, "Planned changes") {
+		t.Error("Expected sync comment to include plan summary")
+	}
+	if !strings.Contains(lastComment.Body, "1 to update") {
+		t.Error("Expected sync comment to show '1 to update' from stored plan output")
 	}
 }
 

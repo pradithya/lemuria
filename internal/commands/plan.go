@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
@@ -281,10 +282,17 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		BaseAppSpec:  baseAppSpec,
 		HeadAppSpec:  headAppSpec,
 	})
+	// Compute a concise plan summary from diffs (empty if diff failed).
+	var planSummary string
+	if err == nil && len(diffs) > 0 {
+		summary := argocd.SummarizeDiffs(diffs)
+		planSummary = formatPlanSummary(summary)
+	}
+
 	// Store plan revision for later sync verification.
 	// This is stored regardless of diff outcome so that sync can proceed
 	// even if the diff fails (e.g., temp app timeout for external Helm charts).
-	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile); err != nil {
+	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary); err != nil {
 		e.logger.Warn("failed to store plan", "app", app.Name, "error", err)
 	}
 
@@ -334,6 +342,25 @@ func convertToRenderResults(results []appPlanResult) []diff.PlanResult {
 		}
 	}
 	return rendered
+}
+
+// formatPlanSummary builds a concise summary string from diff counts.
+// e.g., "3 to create, 1 to update, 2 to delete"
+func formatPlanSummary(summary argocd.DiffSummary) string {
+	var parts []string
+	if summary.Created > 0 {
+		parts = append(parts, fmt.Sprintf("%d to create", summary.Created))
+	}
+	if summary.Updated > 0 {
+		parts = append(parts, fmt.Sprintf("%d to update", summary.Updated))
+	}
+	if summary.Deleted > 0 {
+		parts = append(parts, fmt.Sprintf("%d to delete", summary.Deleted))
+	}
+	if len(parts) == 0 {
+		return "No changes detected"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // postComment creates a new Lemuria comment on the PR.
