@@ -206,6 +206,11 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 			allSucceeded = false
 		}
 
+		// Health status
+		if result.HealthStatus != "" {
+			sb.WriteString(fmt.Sprintf("**Health:** %s %s\n\n", healthStatusIcon(result.HealthStatus), result.HealthStatus))
+		}
+
 		// Plan summary (what was planned)
 		if result.PlanOutput != "" {
 			sb.WriteString(fmt.Sprintf("📋 **Planned changes:** %s\n\n", result.PlanOutput))
@@ -227,12 +232,13 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 
 // SyncResultEntry represents a sync result for rendering.
 type SyncResultEntry struct {
-	Application string
-	Phase       string
-	Message     string
-	Error       error
-	PlanOutput  string
-	Resources   []models.ResourceResult
+	Application  string
+	Phase        string
+	Message      string
+	Error        error
+	PlanOutput   string
+	Resources    []models.ResourceResult
+	HealthStatus string
 }
 
 // renderResourceTable formats resource sync results as a collapsible markdown table.
@@ -272,6 +278,24 @@ func resourceStatusIcon(status string) string {
 		return "🗑️"
 	case "PruningRequired":
 		return "⚠️"
+	default:
+		return "ℹ️"
+	}
+}
+
+// healthStatusIcon returns an emoji for the given health status.
+func healthStatusIcon(status string) string {
+	switch status {
+	case "Healthy":
+		return "💚"
+	case "Degraded":
+		return "❤️"
+	case "Progressing":
+		return "⏳"
+	case "Suspended":
+		return "⏸️"
+	case "Missing":
+		return "❓"
 	default:
 		return "ℹ️"
 	}
