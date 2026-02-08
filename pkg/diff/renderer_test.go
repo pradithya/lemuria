@@ -19,9 +19,10 @@ func TestRenderSync(t *testing.T) {
 		{
 			name: "successful sync with plan output and resources",
 			results: []SyncResultEntry{{
-				Application: "my-app",
-				Phase:       "Succeeded",
-				PlanOutput:  "2 to create, 1 to update",
+				Application:  "my-app",
+				Phase:        "Succeeded",
+				HealthStatus: "Healthy",
+				PlanOutput:   "2 to create, 1 to update",
 				Resources: []models.ResourceResult{
 					{
 						Resource: models.ResourceKey{Kind: "Deployment", Name: "web", Namespace: "default"},
@@ -37,6 +38,7 @@ func TestRenderSync(t *testing.T) {
 			}},
 			contains: []string{
 				"Sync successful",
+				"💚 Healthy",
 				"2 to create, 1 to update",
 				"Resource Results (2 resources)",
 				"Deployment/web",
@@ -162,6 +164,43 @@ func TestRenderSync(t *testing.T) {
 			}},
 			contains: []string{
 				"🗑️ Pruned",
+			},
+		},
+		{
+			name: "successful sync with degraded health",
+			results: []SyncResultEntry{{
+				Application:  "my-app",
+				Phase:        "Succeeded",
+				HealthStatus: "Degraded",
+			}},
+			contains: []string{
+				"Sync successful",
+				"❤️ Degraded",
+			},
+		},
+		{
+			name: "sync without health status",
+			results: []SyncResultEntry{{
+				Application: "my-app",
+				Phase:       "Succeeded",
+			}},
+			contains: []string{
+				"Sync successful",
+			},
+			excludes: []string{
+				"Health:",
+			},
+		},
+		{
+			name: "sync with progressing health",
+			results: []SyncResultEntry{{
+				Application:  "my-app",
+				Phase:        "Succeeded",
+				HealthStatus: "Progressing",
+			}},
+			contains: []string{
+				"Sync successful",
+				"⏳ Progressing",
 			},
 		},
 	}

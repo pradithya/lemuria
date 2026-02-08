@@ -132,11 +132,12 @@ const (
 
 // SyncResult represents the outcome of a sync operation.
 type SyncResult struct {
-	Application string           `json:"application"`
-	Revision    string           `json:"revision"`
-	Phase       SyncPhase        `json:"phase"`
-	Message     string           `json:"message"`
-	Resources   []ResourceResult `json:"resources"`
+	Application  string           `json:"application"`
+	Revision     string           `json:"revision"`
+	Phase        SyncPhase        `json:"phase"`
+	Message      string           `json:"message"`
+	Resources    []ResourceResult `json:"resources"`
+	HealthStatus HealthStatus     `json:"healthStatus"`
 }
 
 // SyncPhase represents the phase of a sync operation.

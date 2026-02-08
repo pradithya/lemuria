@@ -2,9 +2,13 @@ package argocd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 
@@ -112,7 +116,7 @@ func convertV1alpha1Application(app v1alpha1.Application, sourceFile string) mod
 	return result
 }
 
-// SyncApplication triggers a sync for the specified application.
+// SyncApplication triggers a sync for the specified application and waits for it to complete.
 func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOptions) (*models.SyncResult, error) {
 	payload := map[string]interface{}{
 		"name": name,
@@ -133,40 +137,194 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 		}
 	}
 
-	var resp struct {
-		Status struct {
-			OperationState struct {
-				Phase      string `json:"phase"`
-				Message    string `json:"message"`
-				SyncResult struct {
-					Revision  string `json:"revision"`
-					Resources []struct {
-						Group     string `json:"group"`
-						Version   string `json:"version"`
-						Kind      string `json:"kind"`
-						Namespace string `json:"namespace"`
-						Name      string `json:"name"`
-						Status    string `json:"status"`
-						Message   string `json:"message"`
-						HookType  string `json:"hookType,omitempty"`
-					} `json:"resources"`
-				} `json:"syncResult"`
-			} `json:"operationState"`
-		} `json:"status"`
-	}
-
-	if err := c.post(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/sync", nil, payload, &resp); err != nil {
+	// Trigger the sync. The response may not reflect the new operation state yet
+	// because ArgoCD processes the operation asynchronously.
+	if err := c.post(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/sync", nil, payload, nil); err != nil {
 		return nil, fmt.Errorf("syncing application %s: %w", name, err)
 	}
 
-	result := &models.SyncResult{
-		Application: name,
-		Phase:       models.SyncPhase(resp.Status.OperationState.Phase),
-		Message:     resp.Status.OperationState.Message,
-		Revision:    resp.Status.OperationState.SyncResult.Revision,
+	// Poll until the operation reaches a terminal phase.
+	return c.waitForSyncComplete(ctx, name, syncWaitTimeout)
+}
+
+const syncWaitTimeout = 3 * time.Minute
+
+// waitForSyncComplete watches the application using the streaming Watch API until
+// the operation reaches a terminal phase and health stabilizes.
+func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout time.Duration) (*models.SyncResult, error) {
+	watchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	events, err := c.watchApplication(watchCtx, name)
+	if err != nil {
+		return nil, fmt.Errorf("watching application %s: %w", name, err)
 	}
 
-	for _, r := range resp.Status.OperationState.SyncResult.Resources {
+	var syncResult *models.SyncResult
+
+	for event := range events {
+		status := extractAppSyncStatus(&event)
+		phase := models.SyncPhase(status.OperationPhase)
+
+		// Wait for sync to reach a terminal phase.
+		if syncResult == nil {
+			switch phase {
+			case models.SyncPhaseSucceeded, models.SyncPhaseFailed, models.SyncPhaseError:
+				syncResult = buildSyncResult(name, status)
+				if phase != models.SyncPhaseSucceeded {
+					return syncResult, nil
+				}
+			default:
+				continue
+			}
+		}
+
+		// Sync succeeded — wait for health to stabilize.
+		healthStatus := models.HealthStatus(status.HealthStatus)
+		if healthStatus != models.HealthStatusProgressing && healthStatus != "" {
+			syncResult.HealthStatus = healthStatus
+			return syncResult, nil
+		}
+	}
+
+	// Stream ended (timeout or connection closed).
+	if syncResult == nil {
+		return nil, fmt.Errorf("timeout waiting for sync to complete for %s", name)
+	}
+
+	// Sync completed but health didn't stabilize before timeout.
+	syncResult.HealthStatus = models.HealthStatusProgressing
+	return syncResult, nil
+}
+
+// watchEvent represents a single event from the ArgoCD Watch API stream.
+type watchEvent struct {
+	Result struct {
+		Type        string `json:"type"`
+		Application struct {
+			Status struct {
+				Health struct {
+					Status string `json:"status"`
+				} `json:"health"`
+				OperationState *struct {
+					Phase      string `json:"phase"`
+					Message    string `json:"message"`
+					SyncResult struct {
+						Revision  string               `json:"revision"`
+						Resources []syncResourceResult  `json:"resources"`
+					} `json:"syncResult"`
+				} `json:"operationState"`
+			} `json:"status"`
+		} `json:"application"`
+	} `json:"result"`
+}
+
+// watchApplication opens a streaming connection to the ArgoCD Watch API
+// and returns a channel of watch events. The channel is closed when the
+// context is cancelled or the connection is closed.
+func (c *Client) watchApplication(ctx context.Context, name string) (<-chan watchEvent, error) {
+	query := url.Values{}
+	query.Set("name", name)
+
+	u, err := url.Parse(c.baseURL + "/api/v1/stream/applications")
+	if err != nil {
+		return nil, fmt.Errorf("parsing watch URL: %w", err)
+	}
+	u.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating watch request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	// Use a separate client without timeout — the watch stream is long-lived.
+	watchClient := *c.httpClient
+	watchClient.Timeout = 0
+
+	resp, err := watchClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("starting watch stream: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("watch API error (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	ch := make(chan watchEvent)
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+
+		decoder := json.NewDecoder(resp.Body)
+		for {
+			var event watchEvent
+			if err := decoder.Decode(&event); err != nil {
+				return // stream ended, connection closed, or context cancelled
+			}
+			select {
+			case ch <- event:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
+// extractAppSyncStatus extracts the sync status from a watch event.
+func extractAppSyncStatus(event *watchEvent) *appSyncStatus {
+	result := &appSyncStatus{
+		HealthStatus: event.Result.Application.Status.Health.Status,
+	}
+
+	if event.Result.Application.Status.OperationState != nil {
+		op := event.Result.Application.Status.OperationState
+		result.OperationPhase = op.Phase
+		result.Message = op.Message
+		result.SyncResult.Revision = op.SyncResult.Revision
+		result.SyncResult.Resources = op.SyncResult.Resources
+	}
+
+	return result
+}
+
+// appSyncStatus holds the operation state and health from the ArgoCD API.
+type appSyncStatus struct {
+	OperationPhase string
+	HealthStatus   string
+	Message        string
+	SyncResult     struct {
+		Revision  string
+		Resources []syncResourceResult
+	}
+}
+
+type syncResourceResult struct {
+	Group     string `json:"group"`
+	Version   string `json:"version"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	Message   string `json:"message"`
+	HookType  string `json:"hookType,omitempty"`
+}
+
+// buildSyncResult converts an appSyncStatus into a SyncResult.
+func buildSyncResult(name string, status *appSyncStatus) *models.SyncResult {
+	result := &models.SyncResult{
+		Application:  name,
+		Phase:        models.SyncPhase(status.OperationPhase),
+		Message:      status.Message,
+		Revision:     status.SyncResult.Revision,
+		HealthStatus: models.HealthStatus(status.HealthStatus),
+	}
+
+	for _, r := range status.SyncResult.Resources {
 		// Skip hook resources (PreSync, PostSync, SyncFail)
 		if r.HookType != "" {
 			continue
@@ -187,7 +345,7 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 		})
 	}
 
-	return result, nil
+	return result
 }
 
 // SyncOptions configures a sync operation.
