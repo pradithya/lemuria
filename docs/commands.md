@@ -16,7 +16,7 @@ Lemuria commands are triggered by commenting on pull requests. All commands star
 |---------|-------------|
 | `lemuria plan` | Generate diff for affected applications |
 | `lemuria sync` | Deploy planned changes |
-| `lemuria rollback` | Revert to previous deployment |
+| `lemuria rollback` | Revert to the application's configured targetRevision |
 | `lemuria unlock` | Release application locks |
 | `lemuria help` | Show help message |
 
@@ -43,10 +43,11 @@ lemuria plan --all              # Plan all apps in repo (ignore path filtering)
 
 ### Behavior
 
-1. Identifies applications affected by changed files
+1. Identifies applications affected by changed files (using `.lemuria.yaml` path patterns or Argo CD app source paths)
 2. Acquires locks for each application
-3. Generates diff between live state and PR state
-4. Posts results as PR comment
+3. For branch diff mode: creates a temporary Application CR pointing to the PR branch, fetches rendered manifests, compares with target branch
+4. Posts results as PR comment with resource-level diffs
+5. Stores the plan revision (PR HEAD commit SHA) for later verification during sync
 
 ### Example Output
 
@@ -55,32 +56,28 @@ lemuria plan --all              # Plan all apps in repo (ignore path filtering)
 
 ### Application: `frontend`
 
-📋 **Changes:** 1 to create, 2 to update
+**Changes:** 1 to create, 2 to update
 
 <details>
 <summary>Diff (3 resources changed)</summary>
 
-#### ➕ ConfigMap/frontend-config
+#### ConfigMap/frontend-config
 
-```diff
 + apiVersion: v1
 + kind: ConfigMap
 + metadata:
 +   name: frontend-config
-```
 
-#### 📝 Deployment/frontend
+#### Deployment/frontend
 
-```diff
   spec:
     replicas: 3
 -   image: frontend:v1.0.0
 +   image: frontend:v1.1.0
-```
 
 </details>
 
-**Status:** 🔒 Locked by this PR
+**Status:** Locked by this PR
 
 ---
 To apply: comment `lemuria sync`
@@ -90,8 +87,10 @@ To unlock: comment `lemuria unlock`
 ### Auto-Plan
 
 When `autoplan: true` (default), Lemuria automatically runs `plan` when:
-- PR is opened
-- New commits are pushed to PR
+- A PR is opened
+- New commits are pushed to a PR branch
+
+When a new plan runs, previous plan comments are marked as stale.
 
 ---
 
@@ -118,13 +117,27 @@ lemuria sync --dry-run          # Preview sync without applying
 
 ### Requirements
 
-Sync requires:
+Sync requires all of the following:
 
-1. **Valid plan** - Run `lemuria plan` first
-2. **Non-stale plan** - Plan must match current PR head
-3. **PR approval** - If `require_approval: true`
+1. **Valid plan** - Run `lemuria plan` first (locks must exist for the PR)
+2. **Non-stale plan** - Plan revision must match current PR HEAD SHA
+3. **PR approval** - If `require_approval: true` (checked at server, repo, or per-app level)
 4. **No merge conflicts** - PR must be mergeable
-5. **Auto-sync disabled** - Application must not have auto-sync enabled
+5. **Auto-sync disabled** - Application must not have auto-sync enabled in Argo CD
+
+### Sync Behavior
+
+For applications sourcing from the PR repository:
+- Syncs to the PR's HEAD commit SHA (not the app's configured targetRevision)
+- This enables "deploy before merge" workflow
+
+For applications with external sources (e.g., Helm chart repos):
+- If the Application CR was modified in the PR, Lemuria updates the live app's spec from the PR branch before syncing
+- Syncs using the app's configured revision (not the PR SHA)
+
+On successful sync:
+- Locks are released
+- If `auto_merge: true` and all syncs succeeded, the PR is merged
 
 ### Example Output
 
@@ -133,29 +146,30 @@ Sync requires:
 
 ### Application: `frontend`
 
-✅ **Sync successful**
+Sync successful
 
 ### Application: `backend`
 
-✅ **Sync successful**
+Sync successful
 
 ---
-🎉 All applications synced successfully!
+All applications synced successfully!
 ```
 
 ### Auto-Merge
 
-When `auto_merge: true` and all syncs succeed:
+When `auto_merge: true` and all syncs succeed (not dry-run):
 
 1. PR is automatically merged
 2. Uses configured `merge_method` (squash, merge, rebase)
-3. Optionally deletes source branch
+3. Optionally deletes source branch (if `delete_source_branch: true`)
+4. Protected branches (`main`, `master`, `develop`, `development`) are never deleted
 
 ---
 
 ## Rollback
 
-Revert applications to their configured targetRevision (main/master).
+Revert applications to their configured targetRevision (typically `main` or `HEAD`), effectively undoing any PR-deployed changes.
 
 ### Usage
 
@@ -163,6 +177,7 @@ Revert applications to their configured targetRevision (main/master).
 lemuria rollback                # Rollback all locked applications
 lemuria rollback -a <app>       # Rollback specific application
 lemuria rollback --dry-run      # Preview rollback
+lemuria rollback --prune        # Rollback with resource pruning
 ```
 
 ### Options
@@ -173,9 +188,16 @@ lemuria rollback --dry-run      # Preview rollback
 | `--dry-run` | Preview only, don't apply |
 | `--prune` | Enable resource pruning |
 
+### Requirements
+
+- **PR approval** - If `require_approval: true` (same as sync)
+- **Auto-sync disabled** - Application must not have auto-sync enabled
+
 ### Behavior
 
-Rollback syncs the application to its configured `targetRevision` (typically `main` or `HEAD`), effectively reverting any changes deployed from the PR.
+Rollback syncs the application using an empty revision, which causes Argo CD to use the application's configured `targetRevision` (typically `main` or `HEAD`). This effectively reverts any changes deployed from the PR branch.
+
+On successful rollback, locks are released (unless dry-run).
 
 ### Example Output
 
@@ -184,14 +206,14 @@ Rollback syncs the application to its configured `targetRevision` (typically `ma
 
 **Target:** `main`
 
-✅ Rollback successful. Application synced to configured targetRevision.
+Rollback successful. Application synced to configured targetRevision.
 ```
 
 ### When to Use Rollback
 
-- After syncing, if issues are discovered
+- After syncing, if issues are discovered in the deployed changes
 - To revert PR changes before merging
-- To restore application to main branch state
+- To restore an application to its main branch state
 
 ---
 
@@ -216,7 +238,7 @@ lemuria unlock -a <app>         # Unlock specific application
 
 1. Releases locks for specified applications
 2. Discards stored plan
-3. Allows other PRs to plan/sync
+3. Allows other PRs to plan/sync the unlocked applications
 
 ### Example Output
 
@@ -233,6 +255,8 @@ Unlocked 2 applications:
 Locks are automatically released when:
 - PR is merged
 - PR is closed
+
+Locks also expire automatically after 7 days (TTL) for abandoned PRs.
 
 ---
 
@@ -281,7 +305,7 @@ LEMURIA PLAN     ✓
 
 ### Multi-line Comments
 
-Lemuria finds the command in multi-line comments:
+Lemuria finds the first matching command line in multi-line comments:
 
 ```
 I think we should deploy this.
@@ -300,6 +324,14 @@ lemuria plan -a "my app name"
 lemuria sync --app 'another-app'
 ```
 
+### Bare Arguments
+
+A bare word (non-flag) is treated as the application name:
+
+```
+lemuria plan my-app       # Same as: lemuria plan -a my-app
+```
+
 ---
 
 ## Error Messages
@@ -309,7 +341,7 @@ lemuria sync --app 'another-app'
 ```markdown
 ## Lemuria Sync
 
-⚠️ Application `unknown-app` is not locked by this PR.
+Application `unknown-app` is not locked by this PR.
 ```
 
 ### Stale Plan
@@ -317,15 +349,17 @@ lemuria sync --app 'another-app'
 ```markdown
 ## Lemuria Sync
 
-⚠️ Plan for `frontend` is stale. Please run `lemuria plan` again.
+Plan for `frontend` is stale. Please run `lemuria plan` again.
 ```
+
+This happens when new commits are pushed after the plan was generated. The stored plan revision no longer matches the PR's current HEAD SHA.
 
 ### Approval Required
 
 ```markdown
 ## Lemuria Sync
 
-❌ PR must be approved before sync
+PR must be approved before sync
 ```
 
 ### Auto-Sync Enabled
@@ -333,7 +367,7 @@ lemuria sync --app 'another-app'
 ```markdown
 ## Lemuria Sync
 
-❌ Application `frontend` has auto-sync enabled.
+Application `frontend` has auto-sync enabled.
 
 Disable auto-sync before using Lemuria to prevent conflicts.
 ```
@@ -345,14 +379,22 @@ Disable auto-sync before using Lemuria to prevent conflicts.
 
 ### Application: `frontend`
 
-⚠️ **Locked by PR #42 (otheruser)**
+**Locked by PR #42 (otheruser)**
+```
+
+### Merge Conflicts
+
+```markdown
+## Lemuria Sync
+
+PR has merge conflicts, please resolve before syncing
 ```
 
 ---
 
 ## Reactions
 
-Lemuria adds emoji reactions to show command status:
+Lemuria adds emoji reactions to PR comments to show command status:
 
 | Reaction | Meaning |
 |----------|---------|

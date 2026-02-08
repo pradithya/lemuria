@@ -152,11 +152,12 @@ Then retry sync.
 **Solutions:**
 
 1. Get PR approved by a reviewer
-2. Or disable approval requirement:
-   ```yaml
-   defaults:
-     require_approval: false
-   ```
+2. Or disable approval requirement. Note the approval precedence (highest priority first):
+   - Per-app `sync_requirements` in `.lemuria.yaml` (exact match, then wildcard)
+   - Repository-level `require_approval` in `.lemuria.yaml`
+   - Server `defaults.require_approval` in `lemuria.yaml`
+
+   Check all three levels to find where the requirement is set.
 
 ### "Auto-sync is enabled"
 
@@ -224,17 +225,34 @@ Then retry sync.
 
 ---
 
+### "PR has merge conflicts"
+
+**Symptoms:**
+```
+❌ PR has merge conflicts, please resolve before syncing
+```
+
+**Solution:**
+
+Resolve the merge conflicts in the PR branch and push updated commits. Lemuria checks PR mergeability before allowing sync.
+
+---
+
 ## Rollback Issues
 
 ### Rollback Blocked
 
 Same causes as sync issues:
-- Approval required
-- Auto-sync enabled
+- Approval required (same precedence rules as sync)
+- Auto-sync enabled on the application
 
 ### Rollback "Fails"
 
-**Note:** Rollback syncs to the app's `targetRevision`. If that revision has issues, the rollback will still deploy those issues.
+**Note:** Rollback syncs to the app's configured `targetRevision` (typically `main` or `HEAD`) by passing an empty revision to the Argo CD sync API. If the target revision itself has issues, rollback will still deploy those issues.
+
+### Rollback Doesn't Undo Changes
+
+Rollback reverts to the app's `targetRevision`, not to a previous sync history entry. If the target branch already contains the changes (e.g., the PR was merged), rollback won't revert them.
 
 ---
 
@@ -262,8 +280,9 @@ Same causes as sync issues:
    - Check webhook delivery
 
 4. **Force unlock (admin)**
-   - Via web UI
-   - Via Redis CLI:
+   - Via web UI (admin role required)
+   - Via API: `DELETE /api/v1/locks/{app}` (admin role required)
+   - Via Redis CLI (last resort):
      ```bash
      redis-cli DEL lemuria:lock:my-app
      ```
@@ -320,6 +339,13 @@ Ensure callback URLs match exactly:
    curl https://your-issuer/.well-known/openid-configuration
    ```
 3. Check network connectivity
+
+### OIDC Login Rejected
+
+If a user can authenticate with the IdP but is rejected by Lemuria, check:
+
+1. **`allowed_domains`** - User's email domain may not be in the allowed list
+2. **Email claim** - Ensure the IdP returns the email in the configured `email_claim` field
 
 ---
 
@@ -419,6 +445,7 @@ permission denied: applications, sync
 | `failed to acquire lock` | Redis error | Check Redis connectivity |
 | `merge conflicts` | PR has conflicts | Resolve conflicts |
 | `webhook secret mismatch` | Invalid signature | Check webhook secret |
+| `auto-sync enabled` | App has automated sync policy | Disable auto-sync on the Argo CD app |
 
 ---
 
@@ -426,10 +453,26 @@ permission denied: applications, sync
 
 ### Enable Debug Logging
 
+Set `log_level` to `debug` in the server configuration:
+
 ```yaml
-# Via environment variable
-LOG_LEVEL=debug
+server:
+  log_level: "debug"    # debug, info, warn, error
 ```
+
+### Check Health and Readiness
+
+Lemuria provides two health check endpoints:
+
+```bash
+# Health check (always returns 200 if the server is running)
+curl https://lemuria.example.com/health
+
+# Readiness check (verifies Redis connectivity, returns 503 if unavailable)
+curl https://lemuria.example.com/ready
+```
+
+The `/ready` endpoint checks Redis connectivity via `PING`. If it returns 503, check your Redis connection.
 
 ### Check Component Status
 
@@ -470,7 +513,7 @@ If you're still stuck:
    - Configuration (redact secrets)
    - Error messages
    - Steps to reproduce
-3. **Join our community:** [Discord/Slack link]
+3. **Join our community**
 
 ---
 

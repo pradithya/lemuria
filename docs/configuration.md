@@ -17,6 +17,12 @@ Lemuria uses YAML configuration files with support for environment variable subs
 | `lemuria.yaml` | Server | Main server configuration |
 | `.lemuria.yaml` | Repository root | Per-repository settings |
 
+Multiple server configuration files can be merged by passing `-config` multiple times. Later files override earlier ones.
+
+```bash
+./bin/lemuria -config base.yaml -config production.yaml
+```
+
 ---
 
 ## Server Configuration
@@ -28,6 +34,7 @@ server:
   port: 4141
   host: "0.0.0.0"
   base_url: "https://lemuria.example.com"
+  log_level: "info"
 
 github:
   webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
@@ -38,6 +45,8 @@ argocd:
   server_url: "https://argocd.example.com"
   token: "${ARGOCD_TOKEN}"
   insecure: false
+  diff_mode: "branch"
+  temp_app_timeout: 2m
 
 redis:
   address: "redis:6379"
@@ -57,6 +66,7 @@ auth:
   enabled: true
   session_secret: "${SESSION_SECRET}"
   session_ttl: 24h
+  cookie_domain: "example.com"
   cookie_secure: true
   default_role: "user"
   github:
@@ -64,6 +74,18 @@ auth:
     client_secret: "${GITHUB_OAUTH_CLIENT_SECRET}"
     allowed_orgs:
       - "myorg"
+  oidc:
+    name: "Company SSO"
+    issuer_url: "https://sso.example.com"
+    client_id: "${OIDC_CLIENT_ID}"
+    client_secret: "${OIDC_CLIENT_SECRET}"
+    scopes: ["openid", "profile", "email"]
+    allowed_domains: ["example.com"]
+  basic:
+    users:
+      - username: admin
+        password: admin
+        role: admin
   role_assignments:
     - pattern: "*@platform.example.com"
       role: "admin"
@@ -78,13 +100,15 @@ server:
   port: 4141              # HTTP port (default: 4141)
   host: "0.0.0.0"         # Bind address (default: 0.0.0.0)
   base_url: "https://..."  # Public URL for OAuth callbacks
+  log_level: "info"        # Log verbosity
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `port` | int | `4141` | HTTP server port |
 | `host` | string | `0.0.0.0` | Bind address |
-| `base_url` | string | - | Public URL (required for auth) |
+| `base_url` | string | - | Public URL (required for OAuth callbacks) |
+| `log_level` | string | `info` | Log level: `debug`, `info`, `warn`, `error` |
 
 ---
 
@@ -99,9 +123,9 @@ github:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `webhook_secret` | string | Yes | Webhook signature secret |
+| `webhook_secret` | string | Yes | Webhook HMAC-SHA256 secret |
 | `app_id` | int | Yes | GitHub App ID |
-| `app_private_key` | string | Yes | Path to private key file or key content |
+| `app_private_key` | string | Yes | Path to private key file or PEM content |
 
 ---
 
@@ -112,6 +136,8 @@ argocd:
   server_url: "https://argocd.example.com"
   token: "${ARGOCD_TOKEN}"
   insecure: false
+  diff_mode: "branch"
+  temp_app_timeout: 2m
 ```
 
 | Field | Type | Default | Description |
@@ -119,6 +145,15 @@ argocd:
 | `server_url` | string | Required | Argo CD API URL |
 | `token` | string | Required | API token |
 | `insecure` | bool | `false` | Skip TLS verification |
+| `diff_mode` | string | `branch` | Diff mode (see below) |
+| `temp_app_timeout` | duration | `2m` | Timeout for temporary app manifest rendering |
+
+### Diff Modes
+
+| Mode | Description |
+|------|-------------|
+| `branch` | Compare PR branch manifests vs target branch manifests. Creates a temporary Application CR pointing to the PR branch, fetches its rendered manifests, then compares with the target branch manifests. |
+| `live` | Compare PR branch manifests vs the live cluster state. Useful for detecting drift. |
 
 ---
 
@@ -136,6 +171,10 @@ redis:
 | `address` | string | `localhost:6379` | Redis server address |
 | `password` | string | - | Redis password |
 | `db` | int | `0` | Redis database number |
+
+Redis is used for two purposes:
+1. **Distributed locks** - Application locks with 7-day TTL
+2. **Session storage** - Web UI sessions (when auth is enabled)
 
 ---
 
@@ -158,10 +197,10 @@ defaults:
 |-------|------|---------|-------------|
 | `autoplan` | bool | `true` | Auto-run plan on PR open/update |
 | `require_approval` | bool | `false` | Require PR approval before sync |
-| `delete_source_branch` | bool | `false` | Delete branch after merge |
+| `delete_source_branch` | bool | `false` | Delete branch after auto-merge |
 | `auto_merge` | bool | `false` | Auto-merge PR after successful sync |
 | `merge_method` | string | `squash` | Merge method: `squash`, `merge`, `rebase` |
-| `allowed_repos` | []string | `[]` | Repository allowlist (empty = all) |
+| `allowed_repos` | []string | `[]` | Repository allowlist (empty = all repos allowed) |
 
 ### Repository Allowlist Patterns
 
@@ -170,6 +209,89 @@ allowed_repos:
   - "myorg/specific-repo"     # Exact match
   - "myorg/infra-*"           # Prefix wildcard
   - "myorg/*"                 # All repos in org
+```
+
+When the list is empty, all repositories where the GitHub App is installed are allowed.
+
+---
+
+## Auth Section
+
+See [Authentication](authentication) for detailed provider setup.
+
+```yaml
+auth:
+  enabled: true
+  session_secret: "${SESSION_SECRET}"
+  session_ttl: 24h
+  cookie_domain: "example.com"
+  cookie_secure: true
+  default_role: "user"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable authentication for the web UI |
+| `session_secret` | string | Required (if auth enabled) | Secret for signing session cookies |
+| `session_ttl` | duration | `24h` | Session duration |
+| `cookie_domain` | string | auto | Cookie domain |
+| `cookie_secure` | bool | `true` | HTTPS-only cookies |
+| `default_role` | string | `user` | Default role for new users (`user` or `admin`) |
+
+### Auth Providers
+
+Multiple providers can be configured simultaneously. Users see login buttons for each.
+
+#### GitHub OAuth
+
+```yaml
+auth:
+  github:
+    client_id: "${GITHUB_OAUTH_CLIENT_ID}"
+    client_secret: "${GITHUB_OAUTH_CLIENT_SECRET}"
+    allowed_orgs: ["myorg"]
+    allowed_teams: ["myorg/platform-team"]
+```
+
+#### OIDC
+
+```yaml
+auth:
+  oidc:
+    name: "Company SSO"
+    issuer_url: "https://sso.example.com"
+    client_id: "${OIDC_CLIENT_ID}"
+    client_secret: "${OIDC_CLIENT_SECRET}"
+    scopes: ["openid", "profile", "email"]
+    username_claim: "preferred_username"
+    email_claim: "email"
+    groups_claim: "groups"
+    allowed_domains: ["example.com"]
+```
+
+#### Basic Auth (dev only)
+
+```yaml
+auth:
+  basic:
+    users:
+      - username: admin
+        password: admin
+        role: admin
+```
+
+### Role Assignments
+
+```yaml
+auth:
+  role_assignments:
+    - pattern: "admin@example.com"
+      role: "admin"
+    - pattern: "*@platform.example.com"
+      role: "admin"
+    - pattern: "@myorg/platform-admins"
+      provider: "github"
+      role: "admin"
 ```
 
 ---
@@ -181,7 +303,7 @@ When `auto_merge: true`:
 1. After all syncs succeed, Lemuria merges the PR
 2. Uses the specified `merge_method`
 3. Optionally deletes the source branch (if `delete_source_branch: true`)
-4. Protected branches (`main`, `master`, `develop`) are never deleted
+4. Protected branches (`main`, `master`, `develop`, `development`) are never deleted
 
 ```yaml
 defaults:
@@ -194,7 +316,7 @@ defaults:
 
 ## Repository Configuration
 
-Create `.lemuria.yaml` in your repository root to customize behavior per-repo.
+Create `.lemuria.yaml` in your repository root to customize behavior per-repo. These settings override the server defaults.
 
 ### Full Example
 
@@ -239,7 +361,7 @@ sync_requirements:
 
 ### Applications Section
 
-Maps Argo CD applications to repository paths.
+Maps Argo CD applications to repository paths. Lemuria uses this to determine which applications are affected when files change in a PR.
 
 ```yaml
 applications:
@@ -259,13 +381,17 @@ applications:
 | `envs/*/values.yaml` | values.yaml in any env subdirectory |
 | `**/*.yaml` | All YAML files recursively |
 
+**Application Detection Fallback:**
+
+If no `.lemuria.yaml` exists or an app has no explicit path mapping, Lemuria falls back to checking if the app's configured `source.path` in Argo CD contains any of the changed files.
+
 ### Sync Requirements Section
 
-Override approval requirements per application.
+Override approval requirements per application. Supports exact names and wildcard patterns.
 
 ```yaml
 sync_requirements:
-  - name: production          # Application name
+  - name: production          # Application name (supports wildcards)
     require_approval: true    # Require PR approval
     allowed_users:            # Users allowed to sync
       - "admin"
@@ -274,9 +400,25 @@ sync_requirements:
 
 ---
 
+## Configuration Precedence
+
+Settings are applied in this order (later overrides earlier):
+
+1. **Built-in defaults** (`config.DefaultConfig()`)
+2. **Server configuration** (`lemuria.yaml` - can be multiple files merged in order)
+3. **Repository configuration** (`.lemuria.yaml` - `autoplan`, `require_approval`)
+4. **Sync requirements** (per-application `require_approval`, `allowed_users`)
+
+For approval requirements specifically, the resolution order is:
+1. `sync_requirements` per-app match (exact match first, then wildcard)
+2. Repository `.lemuria.yaml` top-level `require_approval`
+3. Server `defaults.require_approval`
+
+---
+
 ## Environment Variable Substitution
 
-Use `${VAR_NAME}` syntax for environment variables:
+Use `${VAR_NAME}` syntax for environment variables in any configuration value:
 
 ```yaml
 github:
@@ -289,32 +431,7 @@ redis:
   password: "${REDIS_PASSWORD}"
 ```
 
----
-
-## Configuration Precedence
-
-Settings are applied in this order (later overrides earlier):
-
-1. **Built-in defaults**
-2. **Server configuration** (`lemuria.yaml`)
-3. **Repository configuration** (`.lemuria.yaml`)
-4. **Sync requirements** (per-application)
-
----
-
-## Validation
-
-Lemuria validates configuration on startup:
-
-```bash
-# Check configuration
-./lemuria --config lemuria.yaml --validate
-
-# Common validation errors:
-# - Missing required fields (github.app_id, argocd.server_url)
-# - Invalid YAML syntax
-# - Unreachable Redis/Argo CD endpoints
-```
+If an environment variable is not set, the `${VAR_NAME}` string is left as-is.
 
 ---
 
@@ -342,6 +459,7 @@ redis:
 server:
   port: 4141
   base_url: "https://lemuria.example.com"
+  log_level: "info"
 
 github:
   webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
@@ -351,6 +469,8 @@ github:
 argocd:
   server_url: "https://argocd.example.com"
   token: "${ARGOCD_TOKEN}"
+  diff_mode: "branch"
+  temp_app_timeout: "2m"
 
 redis:
   address: "redis-master.redis:6379"
@@ -361,23 +481,29 @@ defaults:
   require_approval: true
   auto_merge: true
   merge_method: "squash"
+  delete_source_branch: true
   allowed_repos:
     - "myorg/*"
 
 auth:
   enabled: true
   session_secret: "${SESSION_SECRET}"
+  session_ttl: "24h"
+  cookie_secure: true
   github:
     client_id: "${GITHUB_OAUTH_CLIENT_ID}"
     client_secret: "${GITHUB_OAUTH_CLIENT_SECRET}"
     allowed_orgs:
       - "myorg"
+  role_assignments:
+    - pattern: "*@platform.example.com"
+      role: "admin"
 ```
 
 ---
 
 ## Next Steps
 
-- [Authentication](authentication) - Configure SSO
+- [Authentication](authentication) - Configure SSO providers
 - [Commands](commands) - Available commands
 - [Workflow](workflow) - PR workflow details

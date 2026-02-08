@@ -15,7 +15,7 @@ Lemuria supports multiple authentication providers for the web UI, including Git
 | Provider | Use Case | Features |
 |----------|----------|----------|
 | **GitHub OAuth** | GitHub-centric organizations | Org/team restrictions |
-| **OIDC** | Enterprise SSO | Works with any OIDC provider |
+| **OIDC** | Enterprise SSO | Works with any OIDC provider, domain restrictions |
 | **Basic Auth** | Local development | Simple username/password |
 
 ---
@@ -145,6 +145,24 @@ auth:
 | `username_claim` | string | `preferred_username` | Claim for username |
 | `email_claim` | string | `email` | Claim for email |
 | `groups_claim` | string | - | Claim for groups (for role assignment) |
+| `allowed_domains` | []string | `[]` | Restrict login to email domains (empty = all allowed) |
+
+### Domain Restrictions
+
+Use `allowed_domains` to restrict OIDC login to users with email addresses from specific domains. Domain matching is case-insensitive.
+
+```yaml
+oidc:
+  name: "Company SSO"
+  issuer_url: "https://login.example.com"
+  client_id: "${OIDC_CLIENT_ID}"
+  client_secret: "${OIDC_CLIENT_SECRET}"
+  allowed_domains:
+    - "example.com"
+    - "subsidiary.com"
+```
+
+If `allowed_domains` is empty or not set, all domains are allowed.
 
 ### Provider-Specific Examples
 
@@ -265,8 +283,20 @@ Lemuria has two roles:
 
 | Role | Permissions |
 |------|-------------|
-| `admin` | Full access, manage locks, view all repos |
-| `user` | View access, interact with own PRs |
+| `admin` | Full access: read, write, delete, admin. Can force-unlock applications, manage users and roles. |
+| `user` | Read-only access to the web UI. |
+
+### Admin Capabilities
+
+Admins have access to additional API endpoints:
+
+| Action | Endpoint | Description |
+|--------|----------|-------------|
+| Force unlock | `DELETE /api/v1/locks/{app}` | Remove a lock for any application |
+| List users | `GET /api/v1/users` | View all active users and roles |
+| Update role | `PUT /api/v1/users/{id}/role` | Change a user's role (`admin` or `user`) |
+
+Force unlock is also available via the web UI for admin users.
 
 ### Role Assignment
 
@@ -341,7 +371,7 @@ auth:
 
 ### Session Storage
 
-Sessions are stored in Redis alongside locks:
+Sessions are stored in Redis (the same instance used for application locks):
 
 ```yaml
 redis:
@@ -356,9 +386,30 @@ auth:
   session_ttl: 24h  # Default: 24 hours
 ```
 
+### Session Cookie
+
+The session cookie is named `lemuria_session` and is configured with `HttpOnly`, `Secure` (when `cookie_secure: true`), and `SameSite=Lax` attributes.
+
 ### Logout
 
-Users can log out via the web UI or by visiting `/auth/logout`.
+Users can log out via the web UI or by calling `POST /auth/logout`.
+
+---
+
+## Auth API Endpoints
+
+These endpoints are available when authentication is enabled:
+
+| Endpoint | Method | Auth Required | Description |
+|----------|--------|---------------|-------------|
+| `/auth/providers` | GET | No | List available auth providers |
+| `/auth/github/login` | GET | No | Initiate GitHub OAuth flow |
+| `/auth/github/callback` | GET | No | GitHub OAuth callback |
+| `/auth/oidc/login` | GET | No | Initiate OIDC login flow |
+| `/auth/oidc/callback` | GET | No | OIDC callback |
+| `/auth/basic/login` | POST | No | Basic auth login |
+| `/auth/me` | GET | Yes | Get current user info |
+| `/auth/logout` | POST | Yes | End session |
 
 ---
 
@@ -367,7 +418,7 @@ Users can log out via the web UI or by visiting `/auth/logout`.
 1. **Use HTTPS** - Set `cookie_secure: true` (default)
 2. **Strong session secret** - Use `openssl rand -hex 32`
 3. **Rotate secrets** - Periodically rotate session and OAuth secrets
-4. **Restrict access** - Use `allowed_orgs` or `allowed_teams` with GitHub
+4. **Restrict access** - Use `allowed_orgs`/`allowed_teams` with GitHub, or `allowed_domains` with OIDC
 5. **Use SSO** - Prefer OIDC over basic auth in production
 
 ---

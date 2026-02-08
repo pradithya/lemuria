@@ -14,10 +14,11 @@ This guide walks you through installing and configuring Lemuria for your Argo CD
 
 Before installing Lemuria, ensure you have:
 
-- **Argo CD** 2.0+ running in your cluster
-- **Redis** instance for distributed locking
+- **Argo CD** v2.0+ running in your cluster
+- **Redis** instance for distributed locking and session storage
 - **GitHub App** credentials (see [Creating a GitHub App](#creating-a-github-app))
 - **kubectl** access to your Kubernetes cluster
+- **Helm** 3.16+ (for Helm-based installation)
 
 ---
 
@@ -25,30 +26,20 @@ Before installing Lemuria, ensure you have:
 
 ### Option 1: Helm Chart (Recommended)
 
-```bash
-# Add the Lemuria Helm repository
-helm repo add lemuria https://pradithya.github.io/lemuria/charts
-helm repo update
+Lemuria publishes Helm charts to an OCI registry on GitHub Container Registry.
 
-# Install Lemuria
-helm install lemuria lemuria/lemuria \
+```bash
+# Install Lemuria with Helm (OCI registry)
+helm upgrade --install lemuria \
+  oci://ghcr.io/pradithya/charts/lemuria \
   --namespace lemuria \
   --create-namespace \
-  --values values.yaml
+  -f values.yaml
 ```
 
-### Option 2: Kubernetes Manifests
+The Helm chart includes an optional Bitnami Redis dependency. Enable it with `redis.enabled: true` in your values file, or point to an existing Redis instance.
 
-```bash
-# Clone the repository
-git clone https://github.com/pradithya/lemuria.git
-cd lemuria
-
-# Apply the manifests
-kubectl apply -k deploy/
-```
-
-### Option 3: Docker
+### Option 2: Docker
 
 ```bash
 docker run -d \
@@ -59,15 +50,29 @@ docker run -d \
   ghcr.io/pradithya/lemuria:latest
 ```
 
+### Option 3: Build from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/pradithya/lemuria.git
+cd lemuria
+
+# Install dependencies and build (requires Go 1.25+ and Node.js 20+)
+make build
+
+# Run
+./bin/lemuria -config lemuria.yaml
+```
+
 ---
 
 ## Creating a GitHub App
 
-Lemuria uses a GitHub App for authentication and webhook integration.
+Lemuria uses a GitHub App for webhook integration and PR interaction.
 
 ### Step 1: Create the App
 
-1. Go to **GitHub Settings** → **Developer settings** → **GitHub Apps**
+1. Go to **GitHub Settings** > **Developer settings** > **GitHub Apps**
 2. Click **New GitHub App**
 3. Fill in the details:
 
@@ -120,6 +125,7 @@ server:
   port: 4141
   host: "0.0.0.0"
   base_url: "https://lemuria.example.com"
+  log_level: "info"           # debug, info, warn, error
 
 github:
   webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
@@ -130,6 +136,8 @@ argocd:
   server_url: "https://argocd.example.com"
   token: "${ARGOCD_TOKEN}"
   insecure: false
+  diff_mode: "branch"         # "branch" (PR vs target branch) or "live" (PR vs cluster)
+  temp_app_timeout: "2m"      # Timeout for temporary app manifest rendering
 
 redis:
   address: "redis:6379"
@@ -140,8 +148,18 @@ defaults:
   autoplan: true
   require_approval: false
   auto_merge: false
-  merge_method: "squash"
+  merge_method: "squash"      # squash, merge, or rebase
 ```
+
+### Multi-file Configuration
+
+Lemuria supports merging multiple config files. Later files override earlier ones:
+
+```bash
+./bin/lemuria -config base.yaml -config production.yaml
+```
+
+This is useful for separating base settings from environment-specific overrides.
 
 ---
 
@@ -163,9 +181,10 @@ applications:
       - "apps/my-app/**"
       - "base/**"
 
-  - name: "my-apps-*"  # Wildcard matching
+  - name: "my-apps-*"           # Wildcard for ApplicationSet-generated apps
     paths:
       - "apps/**"
+    applicationset: "my-appset"
 
 # Sync requirements per application
 sync_requirements:
@@ -226,8 +245,13 @@ data:
     p, lemuria, applications, get, */*, allow
     p, lemuria, applications, sync, */*, allow
     p, lemuria, applications, action/*, */*, allow
+    p, lemuria, applications, create, */*, allow
+    p, lemuria, applications, update, */*, allow
+    p, lemuria, applications, delete, */*, allow
 '
 ```
+
+The `create`, `update`, and `delete` permissions are needed for the temporary Application CR pattern that Lemuria uses to render branch manifests during `plan`.
 
 ---
 
@@ -240,10 +264,14 @@ kubectl get pods -n lemuria
 kubectl logs -n lemuria deployment/lemuria
 ```
 
-### 2. Test Webhook Connectivity
+### 2. Test Health Endpoint
 
 ```bash
-curl -X POST https://lemuria.example.com/health
+# Health check (always returns 200)
+curl https://lemuria.example.com/health
+
+# Readiness check (verifies Redis connectivity)
+curl https://lemuria.example.com/ready
 ```
 
 ### 3. Open a Test PR
@@ -256,15 +284,19 @@ curl -X POST https://lemuria.example.com/health
 
 ## Environment Variables
 
-Lemuria supports environment variable substitution in configuration:
+Lemuria supports `${VAR_NAME}` substitution in YAML configuration:
 
 | Variable | Description |
 |----------|-------------|
-| `GITHUB_WEBHOOK_SECRET` | GitHub webhook secret |
-| `GITHUB_APP_PRIVATE_KEY` | Path to or content of private key |
+| `GITHUB_WEBHOOK_SECRET` | GitHub webhook HMAC secret |
+| `GITHUB_APP_PRIVATE_KEY` | Path to or content of GitHub App private key |
 | `ARGOCD_TOKEN` | Argo CD API token |
 | `REDIS_PASSWORD` | Redis password |
-| `SESSION_SECRET` | Session signing secret (for web UI) |
+| `SESSION_SECRET` | Session signing secret (for web UI auth) |
+| `GITHUB_OAUTH_CLIENT_ID` | GitHub OAuth client ID (for web UI) |
+| `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth client secret (for web UI) |
+| `OIDC_CLIENT_ID` | OIDC client ID (for web UI) |
+| `OIDC_CLIENT_SECRET` | OIDC client secret (for web UI) |
 
 ---
 
@@ -282,19 +314,20 @@ Lemuria supports environment variable substitution in configuration:
 ### Webhook Not Received
 
 1. Check GitHub webhook delivery status in App settings
-2. Verify webhook URL is accessible
+2. Verify webhook URL is accessible from GitHub
 3. Check Lemuria logs for incoming requests
 
 ### Plan Not Generated
 
-1. Verify `.lemuria.yaml` exists in the repository
+1. Verify `.lemuria.yaml` exists in the repository root
 2. Check path patterns match changed files
-3. Ensure Argo CD application exists
+3. Ensure Argo CD application exists and references the repository
 
 ### Sync Blocked
 
 1. Check if PR requires approval
 2. Verify plan is not stale (re-run `lemuria plan`)
-3. Check if auto-sync is enabled (must be disabled)
+3. Check if auto-sync is enabled on the application (must be disabled)
+4. Resolve any merge conflicts
 
 See [Troubleshooting](troubleshooting) for more details.
