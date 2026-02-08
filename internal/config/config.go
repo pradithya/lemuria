@@ -31,8 +31,8 @@ type GitHubConfig struct {
 // GitLabConfig holds GitLab connection settings.
 type GitLabConfig struct {
 	URL           string `koanf:"url"`            // GitLab base URL (default: https://gitlab.com)
-	Token         string `koanf:"token"`           // Personal/Group Access Token
-	WebhookSecret string `koanf:"webhook_secret"`  // Webhook secret token
+	Token         string `koanf:"token"`          // Personal/Group Access Token
+	WebhookSecret string `koanf:"webhook_secret"` // Webhook secret token
 }
 
 // ArgoCDConfig holds Argo CD connection settings.
@@ -78,7 +78,7 @@ type AuthConfig struct {
 
 // GitLabOAuthConfig holds GitLab OAuth settings.
 type GitLabOAuthConfig struct {
-	URL           string   `koanf:"url"`            // GitLab base URL
+	URL           string   `koanf:"url"` // GitLab base URL
 	ClientID      string   `koanf:"client_id"`
 	ClientSecret  string   `koanf:"client_secret"`
 	AllowedGroups []string `koanf:"allowed_groups"`

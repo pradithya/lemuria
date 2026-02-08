@@ -28,11 +28,11 @@ type PREvent struct {
 	Provider   VCSProvider `json:"provider"`
 	Type       EventType   `json:"type"`
 	Action     string      `json:"action"`
-	Repo       RepoInfo  `json:"repo"`
-	PR         PRInfo    `json:"pr"`
-	Comment    *Comment  `json:"comment,omitempty"`
-	Sender     UserInfo  `json:"sender"`
-	ReceivedAt time.Time `json:"receivedAt"`
+	Repo       RepoInfo    `json:"repo"`
+	PR         PRInfo      `json:"pr"`
+	Comment    *Comment    `json:"comment,omitempty"`
+	Sender     UserInfo    `json:"sender"`
+	ReceivedAt time.Time   `json:"receivedAt"`
 
 	// RepoConfig is the parsed .lemuria.yaml for this PR's branch.
 	// Populated lazily on first access; nil means not yet loaded or absent.

@@ -68,10 +68,10 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	}
 
 	s := &Server{
-		config:     cfg,
-		router:     chi.NewRouter(),
-		logger:     logger,
-		argoClient: argoClient,
+		config:      cfg,
+		router:      chi.NewRouter(),
+		logger:      logger,
+		argoClient:  argoClient,
 		lockManager: lockMgr,
 	}
 
