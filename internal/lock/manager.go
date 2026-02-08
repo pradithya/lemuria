@@ -26,8 +26,8 @@ type Manager interface {
 	// ListAll returns all current locks.
 	ListAll(ctx context.Context) ([]models.Lock, error)
 
-	// StorePlan stores the plan revision and source file for verification before sync.
-	StorePlan(ctx context.Context, application string, prNumber int, revision, sourceFile string) error
+	// StorePlan stores the plan revision, source file, and plan output for verification before sync.
+	StorePlan(ctx context.Context, application string, prNumber int, revision, sourceFile, planOutput string) error
 
 	// GetPlan retrieves the stored plan revision.
 	GetPlan(ctx context.Context, application string, prNumber int) (string, error)
