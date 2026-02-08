@@ -413,7 +413,16 @@ When `auto_merge: true`:
 Auto-merge only triggers when:
 - All syncs succeed (no errors, all phases are `Succeeded`)
 - Not a dry-run
-- `auto_merge: true` in server config
+- `auto_merge: true` is enabled
+
+### Auto-Merge Precedence
+
+Auto-merge is resolved in this order (highest priority first):
+
+1. **Repository-level** (`.lemuria.yaml` top-level `auto_merge`)
+2. **Server defaults** (`defaults.auto_merge` in `lemuria.yaml`)
+
+This means you can keep auto-merge disabled globally but enable it for specific repositories, or vice versa.
 
 ### Protected Branches
 

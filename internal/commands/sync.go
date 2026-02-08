@@ -136,7 +136,18 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	)
 
 	// Auto-merge if enabled and all syncs succeeded (not dry-run)
-	if allSucceeded && !cmd.DryRun && e.config.Defaults.AutoMerge {
+	// Resolution order: repo config (.lemuria.yaml) > server defaults
+	autoMerge := e.config.Defaults.AutoMerge
+	repoConfig := e.loadRepoConfig(ctx, event)
+	if repoConfig != nil && repoConfig.AutoMerge != nil {
+		autoMerge = *repoConfig.AutoMerge
+	}
+	e.logger.Debug("auto-merge resolved",
+		"auto_merge", autoMerge,
+		"all_succeeded", allSucceeded,
+	)
+
+	if allSucceeded && !cmd.DryRun && autoMerge {
 		e.logger.Debug("attempting auto-merge",
 			"repo", event.Repo.FullName,
 			"pr", event.PR.Number,
