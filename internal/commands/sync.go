@@ -409,6 +409,7 @@ func (e *Executor) renderSyncResults(results []syncResult) string {
 			entry.Phase = string(r.Result.Phase)
 			entry.Message = r.Result.Message
 			entry.Resources = r.Result.Resources
+			entry.HealthStatus = string(r.Result.HealthStatus)
 		}
 		entries[i] = entry
 	}
