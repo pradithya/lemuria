@@ -6,10 +6,10 @@ import (
 
 func TestPREventIsPROpen(t *testing.T) {
 	tests := []struct {
-		name  string
-		state string
+		name   string
+		state  string
 		merged bool
-		want  bool
+		want   bool
 	}{
 		{"open and not merged", "open", false, true},
 		{"open but merged", "open", true, false},
