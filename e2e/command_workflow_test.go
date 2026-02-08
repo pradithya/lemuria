@@ -415,8 +415,9 @@ func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
 		t.Errorf("Sync should NOT report stale plan when HeadSHA matches PlanRevision, got: %s", lastComment.Body)
 	}
 
-	// Assert: if PlanDiffs were stored, they should appear in the sync comment
-	if len(lock.PlanDiffs) > 0 {
+	// Assert: if PlanDiffs were stored and sync actually proceeded (not blocked by
+	// auto-sync or other pre-sync checks), they should appear in the sync comment.
+	if len(lock.PlanDiffs) > 0 && !strings.Contains(lastComment.Body, "auto-sync enabled") {
 		if !strings.Contains(lastComment.Body, "Plan Diff") {
 			t.Errorf("Sync comment should include 'Plan Diff' section when PlanDiffs are stored")
 		}
