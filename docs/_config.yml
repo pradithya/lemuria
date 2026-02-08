@@ -31,6 +31,13 @@ gh_edit_branch: "main"
 gh_edit_source: docs
 gh_edit_view_mode: "tree"
 
+# Default layout for all pages
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: "default"
+
 # Markdown settings
 markdown: kramdown
 kramdown:
