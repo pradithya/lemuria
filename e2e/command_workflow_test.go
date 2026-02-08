@@ -748,9 +748,14 @@ spec:
 }
 
 // TestE2ESyncMixedApps verifies sync with multiple apps in a single PR where:
-// - One app sources from the PR's git repo (git-sourced)
-// - One app sources from an external Helm chart repo (external-sourced)
-// Both should sync correctly with appropriate handling.
+// - One app sources from the PR's git repo (git-sourced, no SourceFile)
+// - One app sources from an external Helm chart repo (external-sourced, has SourceFile)
+// Both should sync correctly: the git app gets HeadSHA as revision, the Helm app
+// gets its spec updated and syncs without a git SHA revision.
+//
+// This test directly sets up locks via the lock manager to avoid the overhead of
+// diff generation (which can timeout for external Helm charts). The full plan+sync
+// flow for external source apps is tested in TestE2ESyncExternalSourceApp.
 func TestE2ESyncMixedApps(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
@@ -759,7 +764,7 @@ func TestE2ESyncMixedApps(t *testing.T) {
 	gitAppName := uniqueAppName("e2e-git-mix")
 	helmAppName := uniqueAppName("e2e-helm-mix")
 	repo := "test-owner/test-repo"
-	prNumber := 1300
+	prNumber := int(time.Now().UnixNano() % 90000) + 10000 // unique PR number to avoid stale lock collisions
 	headSHA := "abc123mixed"
 
 	// Create both apps
@@ -795,28 +800,48 @@ spec:
     server: https://kubernetes.default.svc
     namespace: e2e-test-apps`, helmAppName)
 
-	helmBaseYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: %s
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: https://argoproj.github.io/argo-helm
-    chart: argocd-apps
-    targetRevision: "1.4.1"
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, helmAppName)
+	// Step 1: Directly acquire locks and store plans (bypassing diff generation)
+	// Git app: lock with empty SourceFile (sources from PR repo)
+	_, err := lockManager.Lock(testCtx, models.LockRequest{
+		Application: gitAppName,
+		PRNumber:    prNumber,
+		Repo:        repo,
+		User:        "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Failed to lock git app: %v", err)
+	}
+	if err := lockManager.StorePlan(testCtx, gitAppName, prNumber, headSHA, ""); err != nil {
+		t.Fatalf("Failed to store plan for git app: %v", err)
+	}
 
+	// Helm app: lock with SourceFile set (external source, CR modified in PR)
+	_, err = lockManager.Lock(testCtx, models.LockRequest{
+		Application: helmAppName,
+		PRNumber:    prNumber,
+		Repo:        repo,
+		User:        "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Failed to lock Helm app: %v", err)
+	}
+	if err := lockManager.StorePlan(testCtx, helmAppName, prNumber, headSHA, helmCRFilePath); err != nil {
+		t.Fatalf("Failed to store plan for Helm app: %v", err)
+	}
+
+	// Verify locks via ListByPR
+	locks, err := lockManager.ListByPR(testCtx, repo, prNumber)
+	if err != nil {
+		t.Fatalf("ListByPR failed: %v", err)
+	}
+	if len(locks) < 2 {
+		t.Fatalf("Expected at least 2 locks from ListByPR, got %d", len(locks))
+	}
+	t.Logf("Locks acquired: %d apps for PR #%d", len(locks), prNumber)
+
+	// Step 2: Sync all locked apps
 	mockGH := NewMockGitHubClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	mockGH.ChangedFiles = []models.ChangedFile{
-		{Filename: "guestbook/deployment.yaml", Status: "modified"},
-		{Filename: helmCRFilePath, Status: "modified"},
-	}
-	mockGH.FileContents[helmCRFilePath+"@main"] = []byte(helmBaseYAML)
 	mockGH.FileContents[helmCRFilePath+"@feature-branch"] = []byte(helmHeadYAML)
 
 	cfg := &config.Config{
@@ -830,73 +855,6 @@ spec:
 	}
 	executor := newTestExecutor(mockGH, cfg)
 
-	// Step 1: Plan git-sourced app
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+gitAppName)
-	planCmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: gitAppName,
-	}
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan for git app failed: %v", err)
-	}
-
-	// Step 2: Plan Helm-sourced app (auto-detect will pick it up from CR changes)
-	mockGH.Reset()
-	planEvent2 := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+helmAppName)
-	planCmd2 := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: helmAppName,
-	}
-	if err := executor.Execute(testCtx, planCmd2, planEvent2); err != nil {
-		t.Fatalf("Plan for Helm app failed: %v", err)
-	}
-
-	// Verify both locks are acquired
-	gitLock, err := lockManager.Get(testCtx, gitAppName)
-	if err != nil || gitLock == nil {
-		t.Fatalf("Expected lock for git app: %v", err)
-	}
-	if gitLock.SourceFile != "" {
-		t.Errorf("Git app lock should have empty SourceFile, got %q", gitLock.SourceFile)
-	}
-
-	helmLock, err := lockManager.Get(testCtx, helmAppName)
-	if err != nil || helmLock == nil {
-		t.Fatalf("Expected lock for Helm app: %v", err)
-	}
-	// Note: When planning a specific app by name (-a flag), the app is fetched
-	// from ArgoCD directly, so SourceFile may not be set unless auto-detect was used.
-	t.Logf("Git lock: PlanRevision=%s, SourceFile=%q", gitLock.PlanRevision, gitLock.SourceFile)
-	t.Logf("Helm lock: PlanRevision=%s, SourceFile=%q", helmLock.PlanRevision, helmLock.SourceFile)
-
-	// Verify locks via ListByPR (the path used by sync)
-	locks, err := lockManager.ListByPR(testCtx, repo, prNumber)
-	if err != nil {
-		t.Fatalf("ListByPR failed: %v", err)
-	}
-	if len(locks) < 2 {
-		t.Fatalf("Expected at least 2 locks from ListByPR, got %d", len(locks))
-	}
-
-	foundGit := false
-	foundHelm := false
-	for _, l := range locks {
-		if l.Application == gitAppName {
-			foundGit = true
-		}
-		if l.Application == helmAppName {
-			foundHelm = true
-		}
-	}
-	if !foundGit {
-		t.Errorf("Expected lock for %s in ListByPR results", gitAppName)
-	}
-	if !foundHelm {
-		t.Errorf("Expected lock for %s in ListByPR results", helmAppName)
-	}
-
-	// Step 3: Sync all locked apps
-	mockGH.Reset()
 	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
 	syncCmd := &commands.Command{Name: commands.CommandSync}
 
@@ -925,103 +883,6 @@ spec:
 	if strings.Contains(lastComment.Body, "stale") {
 		t.Error("Sync should not report stale plan")
 	}
-}
-
-// TestE2ESyncSourceFilePersistedOnLock verifies that the SourceFile field
-// is correctly persisted on the lock after planning an app whose Application CR
-// was modified in the PR.
-func TestE2ESyncSourceFilePersistedOnLock(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping E2E command test in short mode")
-	}
-
-	appName := uniqueAppName("e2e-srcfile")
-	repo := "test-owner/test-repo"
-	prNumber := 1400
-	headSHA := "abc123srcfile"
-
-	createTestHelmChartApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
-	defer deleteTestApplication(testCtx, t, argoClient, appName)
-	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
-
-	defer cleanupForceUnlock(testCtx, t, appName)
-
-	crFilePath := "apps/" + appName + ".yaml"
-
-	crYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: %s
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: https://argoproj.github.io/argo-helm
-    chart: argocd-apps
-    targetRevision: "1.4.1"
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
-
-	mockGH := NewMockGitHubClient()
-	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	mockGH.ChangedFiles = []models.ChangedFile{
-		{Filename: crFilePath, Status: "modified"},
-	}
-	mockGH.FileContents[crFilePath+"@main"] = []byte(crYAML)
-	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(crYAML)
-
-	cfg := &config.Config{
-		ArgoCD: config.ArgoCDConfig{
-			DiffMode:       "branch",
-			TempAppTimeout: 90 * time.Second,
-		},
-		Defaults: config.DefaultsConfig{
-			RequireApproval: false,
-		},
-	}
-	executor := newTestExecutor(mockGH, cfg)
-
-	// Run plan in auto-detect mode — should detect the modified CR
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan")
-	planCmd := &commands.Command{Name: commands.CommandPlan}
-
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
-
-	// Assert: lock has SourceFile set via Get
-	lock, err := lockManager.Get(testCtx, appName)
-	if err != nil || lock == nil {
-		t.Fatalf("Expected lock to be acquired: %v", err)
-	}
-	if lock.SourceFile != crFilePath {
-		t.Errorf("Get: expected SourceFile %q, got %q", crFilePath, lock.SourceFile)
-	}
-	if lock.PlanRevision != headSHA {
-		t.Errorf("Get: expected PlanRevision %q, got %q", headSHA, lock.PlanRevision)
-	}
-
-	// Assert: SourceFile is also present via ListByPR (the path used by sync)
-	locks, err := lockManager.ListByPR(testCtx, repo, prNumber)
-	if err != nil {
-		t.Fatalf("ListByPR failed: %v", err)
-	}
-	found := false
-	for _, l := range locks {
-		if l.Application == appName {
-			found = true
-			if l.SourceFile != crFilePath {
-				t.Errorf("ListByPR: expected SourceFile %q, got %q", crFilePath, l.SourceFile)
-			}
-			break
-		}
-	}
-	if !found {
-		t.Errorf("Expected lock for %s in ListByPR results", appName)
-	}
-
-	t.Logf("SourceFile correctly persisted: %s", crFilePath)
 }
 
 // =============================================================================
