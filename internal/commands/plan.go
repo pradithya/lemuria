@@ -367,14 +367,19 @@ func formatPlanSummary(summary argocd.DiffSummary) string {
 
 // toPlanDiffEntries converts ManifestDiff entries to lightweight PlanDiffEntry,
 // stripping full YAML states to reduce storage size.
+// Only diffs with non-empty content are included, so plan_diffs contains
+// actionable per-resource changes that can be rendered consistently.
 func toPlanDiffEntries(diffs []models.ManifestDiff) []models.PlanDiffEntry {
-	entries := make([]models.PlanDiffEntry, len(diffs))
-	for i, d := range diffs {
-		entries[i] = models.PlanDiffEntry{
+	entries := make([]models.PlanDiffEntry, 0, len(diffs))
+	for _, d := range diffs {
+		if d.Diff == "" {
+			continue
+		}
+		entries = append(entries, models.PlanDiffEntry{
 			Resource: d.Resource,
 			Action:   d.Action,
 			Diff:     d.Diff,
-		}
+		})
 	}
 	return entries
 }

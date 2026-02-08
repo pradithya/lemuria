@@ -163,13 +163,15 @@ func (r *Renderer) renderResourceDiff(diff models.ManifestDiff) string {
 		actionIcon = "📝"
 	case models.DiffActionDelete:
 		actionIcon = "➖"
+	default:
+		actionIcon = "ℹ️"
 	}
 
 	sb.WriteString(fmt.Sprintf("#### %s %s\n\n", actionIcon, diff.Resource.String()))
 
 	if diff.Diff != "" {
 		sb.WriteString("```diff\n")
-		sb.WriteString(diff.Diff)
+		sb.WriteString(sanitizeDiffForMarkdown(diff.Diff))
 		if !strings.HasSuffix(diff.Diff, "\n") {
 			sb.WriteString("\n")
 		}
@@ -289,13 +291,15 @@ func (r *Renderer) renderPlanDiffs(diffs []models.PlanDiffEntry) string {
 			actionIcon = "📝"
 		case models.DiffActionDelete:
 			actionIcon = "➖"
+		default:
+			actionIcon = "ℹ️"
 		}
 
 		sb.WriteString(fmt.Sprintf("#### %s %s\n\n", actionIcon, d.Resource.String()))
 
 		if d.Diff != "" {
 			sb.WriteString("```diff\n")
-			sb.WriteString(d.Diff)
+			sb.WriteString(sanitizeDiffForMarkdown(d.Diff))
 			if !strings.HasSuffix(d.Diff, "\n") {
 				sb.WriteString("\n")
 			}
@@ -306,6 +310,12 @@ func (r *Renderer) renderPlanDiffs(diffs []models.PlanDiffEntry) string {
 	sb.WriteString("</details>\n\n")
 
 	return sb.String()
+}
+
+// sanitizeDiffForMarkdown escapes triple-backtick sequences in diff content
+// to prevent breaking markdown fenced code blocks.
+func sanitizeDiffForMarkdown(s string) string {
+	return strings.ReplaceAll(s, "```", "` ` `")
 }
 
 // resourceStatusIcon returns an emoji for the given sync status.
