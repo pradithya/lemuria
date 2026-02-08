@@ -2,16 +2,25 @@ package models
 
 import "time"
 
+// PlanDiffEntry is a lightweight representation of a manifest diff stored with the lock.
+// It omits full YAML states (BaseState, LiveState, TargetState) to reduce storage size.
+type PlanDiffEntry struct {
+	Resource ResourceKey `json:"resource"`
+	Action   DiffAction  `json:"action"`
+	Diff     string      `json:"diff"`
+}
+
 // Lock represents an application lock held by a PR.
 type Lock struct {
-	Application  string    `json:"application"`
-	PRNumber     int       `json:"pr_number"`
-	Repo         string    `json:"repo"`
-	User         string    `json:"user"`
-	LockedAt     time.Time `json:"locked_at"`
-	PlanRevision string    `json:"plan_revision"`
-	SourceFile   string    `json:"source_file,omitempty"`
-	PlanOutput   string    `json:"plan_output,omitempty"`
+	Application  string          `json:"application"`
+	PRNumber     int             `json:"pr_number"`
+	Repo         string          `json:"repo"`
+	User         string          `json:"user"`
+	LockedAt     time.Time       `json:"locked_at"`
+	PlanRevision string          `json:"plan_revision"`
+	SourceFile   string          `json:"source_file,omitempty"`
+	PlanOutput   string          `json:"plan_output,omitempty"`
+	PlanDiffs    []PlanDiffEntry `json:"plan_diffs,omitempty"`
 }
 
 // LockRequest is used when attempting to acquire a lock.

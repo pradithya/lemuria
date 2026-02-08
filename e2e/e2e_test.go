@@ -461,7 +461,7 @@ func TestStorePlan(t *testing.T) {
 	revision := "abc123def456"
 
 	// Store plan
-	err := lockManager.StorePlan(testCtx, appName, prNumber, revision, "", "")
+	err := lockManager.StorePlan(testCtx, appName, prNumber, revision, "", "", nil)
 	if err != nil {
 		t.Fatalf("Failed to store plan: %v", err)
 	}
@@ -475,6 +475,128 @@ func TestStorePlan(t *testing.T) {
 	if storedRevision != revision {
 		t.Errorf("Expected revision %s, got %s", revision, storedRevision)
 	}
+}
+
+func TestStorePlanWithDiffs(t *testing.T) {
+	appName := "test-plan-diffs-" + time.Now().Format("150405")
+	repo := "test/repo"
+	prNumber := 457
+	revision := "def456abc789"
+
+	// Acquire lock first (StorePlan updates the lock object)
+	_, err := lockManager.Lock(testCtx, models.LockRequest{
+		Application: appName,
+		PRNumber:    prNumber,
+		Repo:        repo,
+		User:        "testuser",
+	})
+	if err != nil {
+		t.Fatalf("Failed to acquire lock: %v", err)
+	}
+	defer func() { _ = lockManager.ForceUnlock(testCtx, appName) }()
+
+	// Store plan with diffs
+	diffs := []models.PlanDiffEntry{
+		{
+			Resource: models.ResourceKey{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "nginx",
+				Namespace:  "default",
+			},
+			Action: models.DiffActionUpdate,
+			Diff:   "- replicas: 1\n+ replicas: 3\n",
+		},
+		{
+			Resource: models.ResourceKey{
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Name:       "app-config",
+				Namespace:  "default",
+			},
+			Action: models.DiffActionCreate,
+			Diff:   "+ apiVersion: v1\n+ kind: ConfigMap\n+ metadata:\n+   name: app-config\n",
+		},
+	}
+
+	err = lockManager.StorePlan(testCtx, appName, prNumber, revision, "apps/nginx.yaml", "1 to create, 1 to update", diffs)
+	if err != nil {
+		t.Fatalf("Failed to store plan with diffs: %v", err)
+	}
+
+	// Retrieve via GetPlan (revision only)
+	storedRevision, err := lockManager.GetPlan(testCtx, appName, prNumber)
+	if err != nil {
+		t.Fatalf("Failed to get plan: %v", err)
+	}
+	if storedRevision != revision {
+		t.Errorf("Expected revision %s, got %s", revision, storedRevision)
+	}
+
+	// Retrieve via Get (full lock with diffs)
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to get lock: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("Expected lock to exist")
+	}
+	if lock.PlanRevision != revision {
+		t.Errorf("Expected PlanRevision %q, got %q", revision, lock.PlanRevision)
+	}
+	if lock.SourceFile != "apps/nginx.yaml" {
+		t.Errorf("Expected SourceFile %q, got %q", "apps/nginx.yaml", lock.SourceFile)
+	}
+	if lock.PlanOutput != "1 to create, 1 to update" {
+		t.Errorf("Expected PlanOutput %q, got %q", "1 to create, 1 to update", lock.PlanOutput)
+	}
+
+	// Verify PlanDiffs were stored
+	if len(lock.PlanDiffs) != 2 {
+		t.Fatalf("Expected 2 PlanDiffs, got %d", len(lock.PlanDiffs))
+	}
+
+	// Check first diff
+	d0 := lock.PlanDiffs[0]
+	if d0.Resource.Kind != "Deployment" || d0.Resource.Name != "nginx" {
+		t.Errorf("Expected first diff to be Deployment/nginx, got %s/%s", d0.Resource.Kind, d0.Resource.Name)
+	}
+	if d0.Action != models.DiffActionUpdate {
+		t.Errorf("Expected first diff action %q, got %q", models.DiffActionUpdate, d0.Action)
+	}
+	if d0.Diff == "" {
+		t.Error("Expected first diff to have non-empty Diff string")
+	}
+
+	// Check second diff
+	d1 := lock.PlanDiffs[1]
+	if d1.Resource.Kind != "ConfigMap" || d1.Resource.Name != "app-config" {
+		t.Errorf("Expected second diff to be ConfigMap/app-config, got %s/%s", d1.Resource.Kind, d1.Resource.Name)
+	}
+	if d1.Action != models.DiffActionCreate {
+		t.Errorf("Expected second diff action %q, got %q", models.DiffActionCreate, d1.Action)
+	}
+
+	// Verify diffs are also returned via ListByPR
+	locks, err := lockManager.ListByPR(testCtx, repo, prNumber)
+	if err != nil {
+		t.Fatalf("Failed to list locks by PR: %v", err)
+	}
+	found := false
+	for _, l := range locks {
+		if l.Application == appName {
+			found = true
+			if len(l.PlanDiffs) != 2 {
+				t.Errorf("ListByPR: expected 2 PlanDiffs, got %d", len(l.PlanDiffs))
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Expected to find lock for %s in ListByPR results", appName)
+	}
+
+	t.Logf("PlanDiffs stored and retrieved successfully: %d entries", len(lock.PlanDiffs))
 }
 
 // =============================================================================
@@ -554,7 +676,7 @@ func TestFullPlanWorkflow(t *testing.T) {
 	t.Logf("Got %d diffs", len(diffs))
 
 	// Step 4: Store plan
-	err = lockManager.StorePlan(testCtx, app.Name, prNumber, revision, "", "")
+	err = lockManager.StorePlan(testCtx, app.Name, prNumber, revision, "", "", nil)
 	if err != nil {
 		t.Fatalf("Failed to store plan: %v", err)
 	}

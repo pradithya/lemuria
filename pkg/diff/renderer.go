@@ -163,13 +163,15 @@ func (r *Renderer) renderResourceDiff(diff models.ManifestDiff) string {
 		actionIcon = "📝"
 	case models.DiffActionDelete:
 		actionIcon = "➖"
+	default:
+		actionIcon = "ℹ️"
 	}
 
 	sb.WriteString(fmt.Sprintf("#### %s %s\n\n", actionIcon, diff.Resource.String()))
 
 	if diff.Diff != "" {
 		sb.WriteString("```diff\n")
-		sb.WriteString(diff.Diff)
+		sb.WriteString(sanitizeDiffForMarkdown(diff.Diff))
 		if !strings.HasSuffix(diff.Diff, "\n") {
 			sb.WriteString("\n")
 		}
@@ -216,6 +218,11 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 			sb.WriteString(fmt.Sprintf("📋 **Planned changes:** %s\n\n", result.PlanOutput))
 		}
 
+		// Plan diffs (detailed per-resource diffs from plan)
+		if len(result.PlanDiffs) > 0 {
+			sb.WriteString(r.renderPlanDiffs(result.PlanDiffs))
+		}
+
 		// Per-resource sync results
 		if len(result.Resources) > 0 {
 			sb.WriteString(r.renderResourceTable(result.Resources))
@@ -237,6 +244,7 @@ type SyncResultEntry struct {
 	Message      string
 	Error        error
 	PlanOutput   string
+	PlanDiffs    []models.PlanDiffEntry
 	Resources    []models.ResourceResult
 	HealthStatus string
 }
@@ -265,6 +273,67 @@ func (r *Renderer) renderResourceTable(resources []models.ResourceResult) string
 	sb.WriteString("\n</details>\n\n")
 
 	return sb.String()
+}
+
+// renderPlanDiffs formats plan diff entries as a collapsible section.
+func (r *Renderer) renderPlanDiffs(diffs []models.PlanDiffEntry) string {
+	var sb strings.Builder
+
+	sb.WriteString("<details>\n")
+	sb.WriteString(fmt.Sprintf("<summary>Plan Diff (%d resources changed)</summary>\n\n", len(diffs)))
+
+	for _, d := range diffs {
+		var actionIcon string
+		switch d.Action {
+		case models.DiffActionCreate:
+			actionIcon = "➕"
+		case models.DiffActionUpdate:
+			actionIcon = "📝"
+		case models.DiffActionDelete:
+			actionIcon = "➖"
+		default:
+			actionIcon = "ℹ️"
+		}
+
+		sb.WriteString(fmt.Sprintf("#### %s %s\n\n", actionIcon, d.Resource.String()))
+
+		if d.Diff != "" {
+			sb.WriteString("```diff\n")
+			sb.WriteString(sanitizeDiffForMarkdown(d.Diff))
+			if !strings.HasSuffix(d.Diff, "\n") {
+				sb.WriteString("\n")
+			}
+			sb.WriteString("```\n\n")
+		}
+	}
+
+	sb.WriteString("</details>\n\n")
+
+	return sb.String()
+}
+
+// sanitizeDiffForMarkdown escapes runs of 3 or more backticks in diff content
+// to prevent breaking markdown fenced code blocks. A zero-width space is inserted
+// after the second backtick to break any fence-like sequence.
+func sanitizeDiffForMarkdown(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	count := 0
+	for _, r := range s {
+		if r == '`' {
+			count++
+			b.WriteRune(r)
+			if count == 2 {
+				// Insert zero-width space after the second consecutive backtick
+				// so that any run of 3+ backticks is broken.
+				b.WriteRune('\u200B')
+			}
+		} else {
+			count = 0
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // resourceStatusIcon returns an emoji for the given sync status.

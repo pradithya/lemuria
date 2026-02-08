@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/org/lemuria/internal/config"
+)
 
 // EventType represents the type of GitHub webhook event.
 type EventType string
@@ -20,6 +24,12 @@ type PREvent struct {
 	Comment    *Comment  `json:"comment,omitempty"`
 	Sender     UserInfo  `json:"sender"`
 	ReceivedAt time.Time `json:"receivedAt"`
+
+	// RepoConfig is the parsed .lemuria.yaml for this PR's branch.
+	// Populated lazily on first access; nil means not yet loaded or absent.
+	RepoConfig *config.RepoConfig `json:"-"`
+	// repoConfigLoaded tracks whether RepoConfig has been fetched (to distinguish nil config from not-yet-loaded).
+	RepoConfigLoaded bool `json:"-"`
 }
 
 // RepoInfo contains repository information from the event.
