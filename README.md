@@ -251,7 +251,6 @@ make docker-build     # Build Docker image
 
 ```bash
 make test             # Run unit tests with race detection + coverage
-make test-e2e-short   # Run e2e tests in unit mode (no infrastructure)
 ```
 
 Unit tests use a table-driven approach and cover command parsing, webhook validation/parsing, config loading, path matching, diff formatting, and model behavior. Run specific package tests with:

@@ -339,7 +339,6 @@ make docker-build     # Build Docker image with version/commit tags
 # Test
 make test             # Unit tests with race detection + coverage
 make test-e2e         # E2E tests (requires e2e-setup)
-make test-e2e-short   # E2E tests in unit mode (no infrastructure)
 make e2e-setup        # Create k3d cluster + Argo CD + Redis
 make e2e-teardown     # Delete k3d cluster
 
