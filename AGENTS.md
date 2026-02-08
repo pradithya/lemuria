@@ -279,13 +279,6 @@ make helm-test-all
 
 Runs Helm lint and unit tests. Requires the `helm-unittest` plugin (installed via `make tools`).
 
-### Test Coverage
-
-- `e2e/e2e_test.go` - ArgoCD client, Redis locks, integration workflows
-- `e2e/command_workflow_test.go` - Full plan/sync/unlock command workflows
-- `e2e/commands_test.go` - Command parsing
-- `e2e/webhook_test.go` - Webhook validation, event parsing
-- `e2e/diff_test.go` - Diff rendering
 
 ## Common Tasks
 
@@ -296,7 +289,8 @@ Runs Helm lint and unit tests. Requires the `helm-unittest` plugin (installed vi
 3. Create handler file `internal/commands/mycmd.go` with execution logic
 4. Add case to `Executor.Execute()` in `executor.go`
 5. Update help text in `internal/commands/help.go`
-6. Add tests to `e2e/commands_test.go`
+6. Add parser tests to `internal/commands/parser_test.go` (table-driven)
+7. Add e2e tests to `e2e/commands_test.go`
 
 ### Adding API Endpoints
 

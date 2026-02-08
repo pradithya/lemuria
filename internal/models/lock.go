@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
 
 // PlanDiffEntry is a lightweight representation of a manifest diff stored with the lock.
 // It omits full YAML states (BaseState, LiveState, TargetState) to reduce storage size.
@@ -51,7 +54,7 @@ func (l *Lock) Key() string {
 
 // PlanKey returns the Redis key for storing plan output.
 func PlanKey(application string, prNumber int) string {
-	return "lemuria:plan:" + application + ":" + string(rune(prNumber))
+	return "lemuria:plan:" + application + ":" + strconv.Itoa(prNumber)
 }
 
 // LockStatus represents the current state of locks for a PR.
