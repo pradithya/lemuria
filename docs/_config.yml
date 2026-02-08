@@ -3,22 +3,32 @@ description: GitOps Pull Request Automation for Argo CD
 baseurl: "/lemuria"
 url: "https://pradithya.github.io"
 
+# Theme
+theme: just-the-docs
+color_scheme: light
+
+# Search
+search_enabled: true
+search.heading_level: 3
+search.previews: 3
+
 # Navigation
-nav:
-  - title: Home
-    url: /
-  - title: Getting Started
-    url: /getting-started
-  - title: Configuration
-    url: /configuration
-  - title: Authentication
-    url: /authentication
-  - title: Commands
-    url: /commands
-  - title: Workflow
-    url: /workflow
-  - title: Troubleshooting
-    url: /troubleshooting
+nav_enabled: true
+heading_anchors: true
+
+# Auxiliary links (top-right)
+aux_links:
+  "GitHub":
+    - "https://github.com/pradithya/lemuria"
+aux_links_new_tab: true
+
+# Footer: "Edit this page on GitHub" link
+gh_edit_link: true
+gh_edit_link_text: "Edit this page on GitHub"
+gh_edit_repository: "https://github.com/pradithya/lemuria"
+gh_edit_branch: "main"
+gh_edit_source: docs
+gh_edit_view_mode: "tree"
 
 # Markdown settings
 markdown: kramdown
