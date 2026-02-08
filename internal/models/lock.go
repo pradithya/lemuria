@@ -10,6 +10,7 @@ type Lock struct {
 	User         string    `json:"user"`
 	LockedAt     time.Time `json:"locked_at"`
 	PlanRevision string    `json:"plan_revision"`
+	SourceFile   string    `json:"source_file,omitempty"`
 	PlanOutput   string    `json:"plan_output,omitempty"`
 }
 

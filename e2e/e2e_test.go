@@ -461,7 +461,7 @@ func TestStorePlan(t *testing.T) {
 	revision := "abc123def456"
 
 	// Store plan
-	err := lockManager.StorePlan(testCtx, appName, prNumber, revision)
+	err := lockManager.StorePlan(testCtx, appName, prNumber, revision, "")
 	if err != nil {
 		t.Fatalf("Failed to store plan: %v", err)
 	}
@@ -554,7 +554,7 @@ func TestFullPlanWorkflow(t *testing.T) {
 	t.Logf("Got %d diffs", len(diffs))
 
 	// Step 4: Store plan
-	err = lockManager.StorePlan(testCtx, app.Name, prNumber, revision)
+	err = lockManager.StorePlan(testCtx, app.Name, prNumber, revision, "")
 	if err != nil {
 		t.Fatalf("Failed to store plan: %v", err)
 	}

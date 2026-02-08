@@ -120,6 +120,37 @@ func (c *Client) post(ctx context.Context, path string, query url.Values, payloa
 	return nil
 }
 
+// put performs a PUT request with JSON body.
+func (c *Client) put(ctx context.Context, path string, query url.Values, payload, result interface{}) error {
+	var body io.Reader
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encoding payload: %w", err)
+		}
+		body = strings.NewReader(string(data))
+	}
+
+	resp, err := c.request(ctx, http.MethodPut, path, query, body)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	if result != nil {
+		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+			return fmt.Errorf("decoding response: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // delete performs a DELETE request.
 func (c *Client) delete(ctx context.Context, path string, query url.Values) error {
 	resp, err := c.request(ctx, http.MethodDelete, path, query, nil)

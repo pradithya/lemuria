@@ -201,6 +201,14 @@ func NormalizeRepoURL(u string) string {
 	return u
 }
 
+// UpdateApplicationSpec updates only the spec of an existing application.
+func (c *Client) UpdateApplicationSpec(ctx context.Context, name string, spec v1alpha1.ApplicationSpec) error {
+	if err := c.put(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/spec", nil, &spec, nil); err != nil {
+		return fmt.Errorf("updating application spec %s: %w", name, err)
+	}
+	return nil
+}
+
 // GetApplicationHistory returns the deployment history for an application.
 func (c *Client) GetApplicationHistory(ctx context.Context, name string) ([]v1alpha1.RevisionHistory, error) {
 	var resp v1alpha1.Application

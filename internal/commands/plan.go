@@ -302,7 +302,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	)
 
 	// Store plan output for later sync verification
-	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA); err != nil {
+	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile); err != nil {
 		e.logger.Warn("failed to store plan", "app", app.Name, "error", err)
 	}
 

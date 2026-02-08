@@ -82,11 +82,11 @@ func boolPtr(b bool) *bool {
 
 func TestAppRequiresApproval(t *testing.T) {
 	tests := []struct {
-		name         string
+		name          string
 		serverRequire bool
-		repoConfig   *config.RepoConfig
-		appName      string
-		want         bool
+		repoConfig    *config.RepoConfig
+		appName       string
+		want          bool
 	}{
 		// --- Server defaults only (no repo config) ---
 		{
@@ -360,6 +360,76 @@ func TestIsApprovalRequired(t *testing.T) {
 			got := exec.isApprovalRequired(tt.repoConfig, tt.locks)
 			if got != tt.want {
 				t.Errorf("isApprovalRequired() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAppSourcesFromRepo(t *testing.T) {
+	tests := []struct {
+		name    string
+		app     models.Application
+		repoURL string
+		want    bool
+	}{
+		{
+			name: "single source matches PR repo",
+			app: models.Application{
+				Name:    "my-app",
+				RepoURL: "https://github.com/org/repo",
+			},
+			repoURL: "https://github.com/org/repo",
+			want:    true,
+		},
+		{
+			name: "single source matches PR repo with .git suffix",
+			app: models.Application{
+				Name:    "my-app",
+				RepoURL: "https://github.com/org/repo.git",
+			},
+			repoURL: "https://github.com/org/repo",
+			want:    true,
+		},
+		{
+			name: "single source external Helm chart",
+			app: models.Application{
+				Name:    "helm-app",
+				RepoURL: "https://argoproj.github.io/argo-helm",
+			},
+			repoURL: "https://github.com/org/repo",
+			want:    false,
+		},
+		{
+			name: "multi-source with one matching PR repo",
+			app: models.Application{
+				Name: "multi-app",
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/org/repo", Path: "manifests"},
+					{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd"},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			want:    true,
+		},
+		{
+			name: "multi-source with no matching PR repo",
+			app: models.Application{
+				Name: "external-multi",
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://charts.bitnami.com/bitnami", Chart: "redis"},
+					{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd"},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := appSourcesFromRepo(tt.app, tt.repoURL)
+			if got != tt.want {
+				t.Errorf("appSourcesFromRepo() = %v, want %v", got, tt.want)
 			}
 		})
 	}
