@@ -15,19 +15,18 @@ Common issues and solutions when using Lemuria.
 ### Webhooks Not Received
 
 **Symptoms:**
-- No plan comment on PR
+- No plan comment on PR/MR
 - No reaction on commands
 
 **Solutions:**
 
-1. **Check webhook delivery in GitHub**
-   - Go to GitHub App settings → Advanced → Recent Deliveries
-   - Look for failed deliveries (red X)
+1. **Check webhook delivery**
+   - **GitHub:** Go to GitHub App settings → Advanced → Recent Deliveries. Look for failed deliveries (red X).
+   - **GitLab:** Go to Project → Settings → Webhooks → Edit. Check "Recent events" for failures.
 
 2. **Verify webhook URL**
-   ```
-   https://lemuria.example.com/webhook
-   ```
+   - GitHub: `https://lemuria.example.com/webhook`
+   - GitLab: `https://lemuria.example.com/webhook/gitlab`
 
 3. **Check Lemuria logs**
    ```bash
@@ -35,23 +34,29 @@ Common issues and solutions when using Lemuria.
    ```
 
 4. **Verify webhook secret matches**
-   - GitHub App webhook secret
-   - `github.webhook_secret` in config
+   - **GitHub:** `github.webhook_secret` must match the GitHub App webhook secret
+   - **GitLab:** `gitlab.webhook_secret` must match the webhook's secret token
 
 5. **Check network/firewall**
-   - Lemuria must be accessible from GitHub
+   - Lemuria must be accessible from your VCS provider
    - Check ingress configuration
 
-### Webhook Signature Invalid
+### Webhook Signature/Token Invalid
 
 **Symptoms:**
 - 401 Unauthorized in webhook delivery
 
-**Solutions:**
+**Solutions (GitHub):**
 
-1. Verify `webhook_secret` matches GitHub App
+1. Verify `github.webhook_secret` matches the GitHub App webhook secret
 2. Check for leading/trailing whitespace
 3. Regenerate webhook secret in GitHub App
+
+**Solutions (GitLab):**
+
+1. Verify `gitlab.webhook_secret` matches the webhook's secret token
+2. Check the `X-Gitlab-Token` header is being sent
+3. Re-create the webhook with the correct secret token
 
 ---
 
@@ -299,13 +304,19 @@ Locks have a 7-day TTL by default. If a PR is abandoned:
 
 ## Authentication Issues
 
-### "User not in allowed organization"
+### "User not in allowed organization" / "User not a member of allowed groups"
 
-**Solutions:**
+**Solutions (GitHub):**
 
 1. Verify user is org member
 2. Check `allowed_orgs` spelling
 3. For private orgs, ensure OAuth app has access
+
+**Solutions (GitLab):**
+
+1. Verify user is a member of the configured group
+2. Check `allowed_groups` spelling (use full path, e.g., `mygroup/subgroup`)
+3. Ensure the OAuth application has `read_user` and `read_api` scopes
 
 ### "Invalid redirect URI"
 
@@ -316,6 +327,7 @@ Ensure callback URLs match exactly:
 | Provider | Callback URL |
 |----------|--------------|
 | GitHub | `https://lemuria.example.com/auth/github/callback` |
+| GitLab | `https://lemuria.example.com/auth/gitlab/callback` |
 | OIDC | `https://lemuria.example.com/auth/oidc/callback` |
 
 ### Session Expired
@@ -492,6 +504,9 @@ kubectl logs -n argocd deployment/argocd-server
 ```bash
 # GitHub API
 curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user
+
+# GitLab API
+curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" https://gitlab.com/api/v4/user
 
 # Argo CD API
 curl -k -H "Authorization: Bearer $ARGOCD_TOKEN" \

@@ -6,7 +6,7 @@ nav_order: 4
 
 # Authentication
 
-Lemuria supports multiple authentication providers for the web UI, including GitHub OAuth, generic OIDC (Okta, Auth0, Azure AD, etc.), and basic auth for development.
+Lemuria supports multiple authentication providers for the web UI, including GitHub OAuth, GitLab OAuth, generic OIDC (Okta, Auth0, Azure AD, etc.), and basic auth for development.
 
 ---
 
@@ -15,6 +15,7 @@ Lemuria supports multiple authentication providers for the web UI, including Git
 | Provider | Use Case | Features |
 |----------|----------|----------|
 | **GitHub OAuth** | GitHub-centric organizations | Org/team restrictions |
+| **GitLab OAuth** | GitLab-centric organizations | Group restrictions |
 | **OIDC** | Enterprise SSO | Works with any OIDC provider, domain restrictions |
 | **Basic Auth** | Local development | Simple username/password |
 
@@ -105,6 +106,65 @@ allowed_teams:
   - "myorg/platform-team"    # myorg organization, platform-team
   - "myorg/devops"           # myorg organization, devops team
 ```
+
+---
+
+## GitLab OAuth
+
+Authenticate users via GitLab OAuth and optionally restrict access to group members.
+
+### Step 1: Create an OAuth Application
+
+1. Go to **GitLab** → **Settings** → **Applications** (user, group, or instance level)
+2. Click **New application**
+3. Configure:
+
+| Field | Value |
+|-------|-------|
+| **Name** | Lemuria |
+| **Redirect URI** | `https://lemuria.example.com/auth/gitlab/callback` |
+| **Scopes** | `read_user`, `read_api` |
+
+4. Note the **Application ID** and **Secret**
+
+### Step 2: Configure Lemuria
+
+```yaml
+auth:
+  enabled: true
+  session_secret: "${SESSION_SECRET}"
+
+  gitlab:
+    url: "https://gitlab.com"         # Your GitLab instance URL
+    client_id: "${GITLAB_OAUTH_CLIENT_ID}"
+    client_secret: "${GITLAB_OAUTH_CLIENT_SECRET}"
+
+    # Optional: Restrict to group members
+    allowed_groups:
+      - "mygroup"
+      - "mygroup/subgroup"
+```
+
+### Configuration Options
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | string | GitLab instance URL (default: `https://gitlab.com`) |
+| `client_id` | string | OAuth Application ID |
+| `client_secret` | string | OAuth Application Secret |
+| `allowed_groups` | []string | Restrict to members of these groups |
+
+### Group Format
+
+Groups are specified by their full path:
+
+```yaml
+allowed_groups:
+  - "mygroup"                # Top-level group
+  - "mygroup/subgroup"       # Nested subgroup
+```
+
+For self-managed GitLab instances, set `url` to your instance URL (e.g., `https://gitlab.example.com`).
 
 ---
 
@@ -358,6 +418,13 @@ auth:
     allowed_orgs:
       - "myorg"
 
+  gitlab:
+    url: "https://gitlab.com"
+    client_id: "${GITLAB_CLIENT_ID}"
+    client_secret: "${GITLAB_CLIENT_SECRET}"
+    allowed_groups:
+      - "mygroup"
+
   oidc:
     name: "Company SSO"
     issuer_url: "https://login.example.com"
@@ -405,6 +472,8 @@ These endpoints are available when authentication is enabled:
 | `/auth/providers` | GET | No | List available auth providers |
 | `/auth/github/login` | GET | No | Initiate GitHub OAuth flow |
 | `/auth/github/callback` | GET | No | GitHub OAuth callback |
+| `/auth/gitlab/login` | GET | No | Initiate GitLab OAuth flow |
+| `/auth/gitlab/callback` | GET | No | GitLab OAuth callback |
 | `/auth/oidc/login` | GET | No | Initiate OIDC login flow |
 | `/auth/oidc/callback` | GET | No | OIDC callback |
 | `/auth/basic/login` | POST | No | Basic auth login |
@@ -429,6 +498,7 @@ These endpoints are available when authentication is enabled:
 
 Ensure callback URL matches exactly:
 - GitHub: `https://lemuria.example.com/auth/github/callback`
+- GitLab: `https://lemuria.example.com/auth/gitlab/callback`
 - OIDC: `https://lemuria.example.com/auth/oidc/callback`
 
 ### "User not in allowed organization"

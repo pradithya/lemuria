@@ -16,7 +16,7 @@ Before installing Lemuria, ensure you have:
 
 - **Argo CD** v2.0+ running in your cluster
 - **Redis** instance for distributed locking and session storage
-- **GitHub App** credentials (see [Creating a GitHub App](#creating-a-github-app))
+- **GitHub App** credentials (see [Creating a GitHub App](#creating-a-github-app)) and/or **GitLab access token** (see [Configuring GitLab](#configuring-gitlab))
 - **kubectl** access to your Kubernetes cluster
 - **Helm** 3.16+ (for Helm-based installation)
 
@@ -116,6 +116,45 @@ Subscribe to these webhook events:
 
 ---
 
+## Configuring GitLab
+
+Lemuria integrates with GitLab using a personal or group access token and webhook secret.
+
+### Step 1: Create an Access Token
+
+1. Go to **GitLab** → **Settings** → **Access Tokens** (user, group, or project level)
+2. Create a token with the following scopes:
+   - `api` — Full API access (for reading MR details, posting comments, managing branches)
+3. Note the generated token
+
+### Step 2: Configure a Webhook
+
+1. Go to your **GitLab project** → **Settings** → **Webhooks**
+2. Configure:
+
+| Field | Value |
+|-------|-------|
+| **URL** | `https://your-lemuria-url/webhook/gitlab` |
+| **Secret token** | Generate a secure secret |
+| **Trigger** | Merge request events, Comments |
+
+3. Click **Add webhook**
+
+### Step 3: Configure Lemuria
+
+Add the GitLab section to your `lemuria.yaml`:
+
+```yaml
+gitlab:
+  url: "https://gitlab.com"              # Your GitLab instance URL
+  token: "${GITLAB_TOKEN}"               # Access token from Step 1
+  webhook_secret: "${GITLAB_WEBHOOK_SECRET}"  # Secret from Step 2
+```
+
+For self-managed GitLab instances, set `url` to your instance URL (e.g., `https://gitlab.example.com`).
+
+---
+
 ## Basic Configuration
 
 Create a configuration file `lemuria.yaml`:
@@ -127,10 +166,17 @@ server:
   base_url: "https://lemuria.example.com"
   log_level: "info"           # debug, info, warn, error
 
+## For GitHub:
 github:
   webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
   app_id: 123456
   app_private_key: "/app/secrets/github-app.pem"
+
+## For GitLab (can be used alongside or instead of GitHub):
+gitlab:
+  url: "https://gitlab.com"              # GitLab instance URL (default: https://gitlab.com)
+  token: "${GITLAB_TOKEN}"               # Personal or Group Access Token
+  webhook_secret: "${GITLAB_WEBHOOK_SECRET}"
 
 argocd:
   server_url: "https://argocd.example.com"
@@ -290,11 +336,15 @@ Lemuria supports `${VAR_NAME}` substitution in YAML configuration:
 |----------|-------------|
 | `GITHUB_WEBHOOK_SECRET` | GitHub webhook HMAC secret |
 | `GITHUB_APP_PRIVATE_KEY` | Path to or content of GitHub App private key |
+| `GITLAB_TOKEN` | GitLab personal/group access token |
+| `GITLAB_WEBHOOK_SECRET` | GitLab webhook secret token |
 | `ARGOCD_TOKEN` | Argo CD API token |
 | `REDIS_PASSWORD` | Redis password |
 | `SESSION_SECRET` | Session signing secret (for web UI auth) |
 | `GITHUB_OAUTH_CLIENT_ID` | GitHub OAuth client ID (for web UI) |
 | `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth client secret (for web UI) |
+| `GITLAB_OAUTH_CLIENT_ID` | GitLab OAuth client ID (for web UI) |
+| `GITLAB_OAUTH_CLIENT_SECRET` | GitLab OAuth client secret (for web UI) |
 | `OIDC_CLIENT_ID` | OIDC client ID (for web UI) |
 | `OIDC_CLIENT_SECRET` | OIDC client secret (for web UI) |
 

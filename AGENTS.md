@@ -4,9 +4,9 @@ This document provides context and guidelines for AI agents working on the Lemur
 
 ## Project Overview
 
-Lemuria is a GitHub PR automation tool for Argo CD, inspired by Atlantis (Terraform PR automation). It processes GitHub webhook events, interacts with Argo CD to generate manifest diffs, and posts results as PR comments. Users can then approve and trigger deployments directly from PRs.
+Lemuria is a VCS PR/MR automation tool for Argo CD, inspired by Atlantis (Terraform PR automation). It supports both GitHub and GitLab as VCS providers. It processes webhook events, interacts with Argo CD to generate manifest diffs, and posts results as PR/MR comments. Users can then approve and trigger deployments directly from PRs/MRs.
 
-**Core workflow:** GitHub PR event → webhook → detect affected apps → fetch manifests → compute diff → post PR comment → user comments `lemuria sync` → trigger Argo CD sync → release lock.
+**Core workflow:** VCS PR/MR event → webhook → detect affected apps → fetch manifests → compute diff → post PR/MR comment → user comments `lemuria sync` → trigger Argo CD sync → release lock.
 
 ## Technology Stack
 
@@ -14,6 +14,7 @@ Lemuria is a GitHub PR automation tool for Argo CD, inspired by Atlantis (Terraf
 - **Web Framework**: Chi router (`github.com/go-chi/chi/v5`)
 - **CLI Framework**: `github.com/urfave/cli/v3`
 - **GitHub Client**: `github.com/google/go-github/v60` with GitHub App auth via `ghinstallation/v2`
+- **GitLab Client**: `gitlab.com/gitlab-org/api/client-go` with personal/group access token auth
 - **Argo CD**: REST API client for `github.com/argoproj/argo-cd/v3` (v3.3.0)
 - **Redis**: `github.com/redis/go-redis/v9` for distributed locks and session storage
 - **Diff**: `github.com/pmezard/go-difflib` for manifest comparison
@@ -40,6 +41,7 @@ lemuria/
 │   ├── auth/                    # Authentication & authorization
 │   │   ├── auth.go              # Provider interface, UserFromRequest() context helper
 │   │   ├── github.go            # GitHub OAuth provider (org/team restrictions)
+│   │   ├── gitlab.go            # GitLab OAuth provider (group restrictions)
 │   │   ├── oidc.go              # Generic OIDC provider (domain restrictions)
 │   │   ├── basic.go             # Basic auth provider (dev/testing only)
 │   │   ├── rbac.go              # Role resolver: pattern-based role assignments
@@ -54,7 +56,7 @@ lemuria/
 │   │   ├── rollback.go          # Rollback: revert to previous Argo CD deployment history
 │   │   ├── help.go              # Help: post available commands as PR comment
 │   │   ├── appdetect.go         # Match changed files to configured application paths
-│   │   └── github_iface.go      # GitHub client interface (for testability)
+│   │   └── vcs_iface.go         # VCS client interface (GitHub/GitLab, for testability)
 │   ├── config/                  # Configuration management
 │   │   ├── config.go            # All config structs (Config, ServerConfig, GitHubConfig, etc.)
 │   │   │                        # DefaultConfig() returns sensible defaults
@@ -64,6 +66,12 @@ lemuria/
 │   │   ├── client.go            # GitHub App auth via ghinstallation, per-installation client creation
 │   │   ├── comments.go          # Create, update, delete, find PR comments
 │   │   └── files.go             # List changed files in a PR
+│   ├── gitlab/                  # GitLab API operations
+│   │   ├── client.go            # GitLab access token auth, MR operations (get, merge, approve)
+│   │   ├── comments.go          # MR note CRUD, plan comment invalidation, award emoji reactions
+│   │   └── files.go             # List MR diffs, fetch file content, get repo config
+│   ├── vcs/                     # VCS-agnostic utilities
+│   │   └── helpers.go           # Path matching, file filtering, YAML detection
 │   ├── lock/                    # Distributed application locking
 │   │   ├── manager.go           # Interface: Lock, Unlock, ForceUnlock, GetLock, ListAll, ListByPR, Ping
 │   │   └── redis.go             # Redis implementation
@@ -79,16 +87,18 @@ lemuria/
 │   ├── server/                  # HTTP server
 │   │   ├── server.go            # Server struct, New() wires all dependencies, Run() starts listener
 │   │   ├── routes.go            # All route definitions + handler implementations
-│   │   │                        # Public: /webhook, /health, /healthz, /ready
-│   │   │                        # Auth: /auth/{providers,github/*,oidc/*,basic/*,logout,me}
+│   │   │                        # Public: /webhook, /webhook/gitlab, /health, /healthz, /ready
+│   │   │                        # Auth: /auth/{providers,github/*,gitlab/*,oidc/*,basic/*,logout,me}
 │   │   │                        # API: /api/v1/{status,locks,users} (auth-gated)
 │   │   │                        # Admin: DELETE /api/v1/locks/{app}, GET/PUT /api/v1/users
 │   │   └── static.go            # Serve embedded frontend assets from static/ directory
-│   └── webhook/                 # GitHub webhook processing
-│       ├── handler.go           # Validates → parses → processes asynchronously (goroutine)
+│   └── webhook/                 # Webhook processing (GitHub + GitLab)
+│       ├── handler.go           # GitHub: validates → parses → processes asynchronously (goroutine)
 │       │                        # Returns 200 immediately, processes in background
 │       ├── parser.go            # Parse GitHub events: pull_request, issue_comment, pull_request_review
-│       └── validator.go         # HMAC-SHA256 signature validation (X-Hub-Signature-256)
+│       ├── validator.go         # GitHub HMAC-SHA256 signature validation (X-Hub-Signature-256)
+│       ├── gitlab_handler.go    # GitLab: validates token → parses → processes asynchronously
+│       └── gitlab_parser.go     # Parse GitLab events: Merge Request Hook, Note Hook
 ├── pkg/diff/                    # Public diff utilities
 │   ├── renderer.go              # Convert DiffResult → markdown for PR comments
 │   │                            # Handles: create/update/delete actions, new/deleted apps, errors
@@ -123,7 +133,7 @@ lemuria/
 │   ├── automerge_test.go        # Auto-merge logic
 │   ├── rollback_test.go         # Rollback functionality
 │   ├── helpers_test.go          # Test utilities
-│   └── mock_github_test.go      # GitHub API mock server
+│   └── mock_vcs_test.go         # VCS API mock (GitHub/GitLab)
 ├── config/test.yaml             # Test/dev configuration
 ├── docs/                        # Jekyll documentation site
 ├── static/                      # Embedded frontend build output (generated by `make build-frontend`)
@@ -136,15 +146,29 @@ lemuria/
 
 ### Request Processing Flow
 
+**GitHub:**
 ```
-GitHub Webhook POST
-  → validator.go: HMAC-SHA256 signature check
+GitHub Webhook POST /webhook
+  → validator.go: HMAC-SHA256 signature check (X-Hub-Signature-256)
   → parser.go: parse event type (pull_request | issue_comment | pull_request_review)
   → handler.go: return 200 immediately, spawn goroutine for async processing
   → executor.go: route to appropriate command handler
   → plan.go / sync.go / unlock.go / rollback.go: execute command
   → github/comments.go: post result as PR comment
 ```
+
+**GitLab:**
+```
+GitLab Webhook POST /webhook/gitlab
+  → gitlab_handler.go: constant-time token check (X-Gitlab-Token)
+  → gitlab_parser.go: parse event type (Merge Request Hook | Note Hook)
+  → gitlab_handler.go: return 200 immediately, spawn goroutine for async processing
+  → executor.go: route to appropriate command handler (same as GitHub)
+  → plan.go / sync.go / unlock.go / rollback.go: execute command
+  → gitlab/comments.go: post result as MR note
+```
+
+The command executor is VCS-agnostic — it uses the `VCSClient` interface (`commands/vcs_iface.go`) so the same command logic works for both GitHub and GitLab.
 
 ### Error Handling
 
@@ -187,7 +211,7 @@ GitHub Webhook POST
 
 ### Authentication & Authorization
 
-- Three providers: GitHub OAuth, OIDC, Basic Auth
+- Four providers: GitHub OAuth, GitLab OAuth, OIDC, Basic Auth
 - Redis-backed session store with configurable TTL (default 24h)
 - Cookie-based sessions with CSRF protection
 - Two roles: `admin` and `user` (configurable default)
@@ -366,11 +390,15 @@ make clean            # Remove build artifacts
 |----------|-------------|---------|
 | `GITHUB_WEBHOOK_SECRET` | GitHub webhook HMAC secret | `github.webhook_secret` |
 | `GITHUB_APP_PRIVATE_KEY` | GitHub App private key (PEM) | `github.app_private_key` |
+| `GITLAB_TOKEN` | GitLab personal/group access token | `gitlab.token` |
+| `GITLAB_WEBHOOK_SECRET` | GitLab webhook secret token | `gitlab.webhook_secret` |
 | `ARGOCD_TOKEN` | Argo CD API token | `argocd.token` |
 | `REDIS_PASSWORD` | Redis password | `redis.password` |
 | `SESSION_SECRET` | Session encryption secret | `auth.session_secret` |
 | `GITHUB_OAUTH_CLIENT_ID` | GitHub OAuth client ID | `auth.github.client_id` |
 | `GITHUB_OAUTH_CLIENT_SECRET` | GitHub OAuth client secret | `auth.github.client_secret` |
+| `GITLAB_OAUTH_CLIENT_ID` | GitLab OAuth client ID | `auth.gitlab.client_id` |
+| `GITLAB_OAUTH_CLIENT_SECRET` | GitLab OAuth client secret | `auth.gitlab.client_secret` |
 | `OIDC_CLIENT_ID` | OIDC client ID | `auth.oidc.client_id` |
 | `OIDC_CLIENT_SECRET` | OIDC client secret | `auth.oidc.client_secret` |
 
@@ -392,7 +420,7 @@ make clean            # Remove build artifacts
 - Format with `gofmt` and `goimports` (`make fmt`)
 - Lint with `golangci-lint` (`make lint`)
 - Prefer explicit error handling; never use `panic` for expected errors
-- Use interfaces for testability (see `lock.Manager`, `commands.github_iface.go`)
+- Use interfaces for testability (see `lock.Manager`, `commands.vcs_iface.go`)
 - Keep HTTP handlers thin; business logic belongs in `commands/` or dedicated packages
 - Use `slog` for all logging with structured key-value pairs
 - Context propagation: pass `context.Context` through all layers
