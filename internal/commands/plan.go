@@ -284,15 +284,17 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	})
 	// Compute a concise plan summary from diffs (empty if diff failed).
 	var planSummary string
+	var planDiffs []models.PlanDiffEntry
 	if err == nil && len(diffs) > 0 {
 		summary := argocd.SummarizeDiffs(diffs)
 		planSummary = formatPlanSummary(summary)
+		planDiffs = toPlanDiffEntries(diffs)
 	}
 
 	// Store plan revision for later sync verification.
 	// This is stored regardless of diff outcome so that sync can proceed
 	// even if the diff fails (e.g., temp app timeout for external Helm charts).
-	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary); err != nil {
+	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
 		e.logger.Warn("failed to store plan", "app", app.Name, "error", err)
 	}
 
@@ -361,6 +363,20 @@ func formatPlanSummary(summary argocd.DiffSummary) string {
 		return "No changes detected"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// toPlanDiffEntries converts ManifestDiff entries to lightweight PlanDiffEntry,
+// stripping full YAML states to reduce storage size.
+func toPlanDiffEntries(diffs []models.ManifestDiff) []models.PlanDiffEntry {
+	entries := make([]models.PlanDiffEntry, len(diffs))
+	for i, d := range diffs {
+		entries[i] = models.PlanDiffEntry{
+			Resource: d.Resource,
+			Action:   d.Action,
+			Diff:     d.Diff,
+		}
+	}
+	return entries
 }
 
 // postComment creates a new Lemuria comment on the PR.

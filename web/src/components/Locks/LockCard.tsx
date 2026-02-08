@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useUnlockApp } from '../../hooks/useLocks';
-import type { Lock } from '../../types';
+import type { Lock, PlanDiffEntry } from '../../types';
 
 interface LockCardProps {
   lock: Lock;
@@ -76,8 +76,69 @@ export function LockCard({ lock }: LockCardProps) {
           Revision: {lock.plan_revision.substring(0, 7)}
         </div>
       )}
+
+      {lock.plan_diffs && lock.plan_diffs.length > 0 && (
+        <PlanDiffSection diffs={lock.plan_diffs} />
+      )}
     </div>
   );
+}
+
+function PlanDiffSection({ diffs }: { diffs: PlanDiffEntry[] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="mt-3 border-t border-gray-100 pt-3">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center text-sm text-gray-600 hover:text-gray-900"
+      >
+        <svg
+          className={`w-4 h-4 mr-1 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+        Plan Diff ({diffs.length} resource{diffs.length !== 1 ? 's' : ''} changed)
+      </button>
+
+      {expanded && (
+        <div className="mt-2 space-y-3">
+          {diffs.map((d, i) => (
+            <div key={i} className="text-sm">
+              <div className="flex items-center space-x-2 font-medium text-gray-700">
+                <span>{actionIcon(d.action)}</span>
+                <span>{formatResourceKey(d.resource)}</span>
+              </div>
+              {d.diff && (
+                <pre className="mt-1 p-2 bg-gray-50 rounded text-xs overflow-x-auto whitespace-pre-wrap border border-gray-200">
+                  {d.diff}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function actionIcon(action: string): string {
+  switch (action) {
+    case 'create': return '+';
+    case 'update': return '~';
+    case 'delete': return '-';
+    default: return '?';
+  }
+}
+
+function formatResourceKey(r: { kind: string; name: string; namespace?: string }): string {
+  if (r.namespace) {
+    return `${r.namespace}/${r.kind}/${r.name}`;
+  }
+  return `${r.kind}/${r.name}`;
 }
 
 function getTimeAgo(date: Date): string {

@@ -168,6 +168,7 @@ type syncResult struct {
 	Result      *models.SyncResult
 	Error       error
 	PlanOutput  string
+	PlanDiffs   []models.PlanDiffEntry
 }
 
 // syncApplication triggers a sync for a single application.
@@ -183,6 +184,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 	result := syncResult{
 		Application: l.Application,
 		PlanOutput:  l.PlanOutput,
+		PlanDiffs:   l.PlanDiffs,
 	}
 
 	// Determine if the app sources from the PR repo
@@ -414,6 +416,7 @@ func (e *Executor) renderSyncResults(results []syncResult) string {
 		entry := diff.SyncResultEntry{
 			Application: r.Application,
 			PlanOutput:  r.PlanOutput,
+			PlanDiffs:   r.PlanDiffs,
 			Error:       r.Error,
 		}
 		if r.Result != nil {
