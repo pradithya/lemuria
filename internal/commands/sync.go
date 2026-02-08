@@ -3,11 +3,11 @@ package commands
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/pkg/diff"
 )
 
 // executeSync runs the sync command.
@@ -156,6 +156,7 @@ type syncResult struct {
 	Application string
 	Result      *models.SyncResult
 	Error       error
+	PlanOutput  string
 }
 
 // syncApplication triggers a sync for a single application.
@@ -170,6 +171,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 
 	result := syncResult{
 		Application: l.Application,
+		PlanOutput:  l.PlanOutput,
 	}
 
 	// Determine if the app sources from the PR repo
@@ -396,36 +398,21 @@ func (e *Executor) appRequiresApproval(repoConfig *config.RepoConfig, appName st
 
 // renderSyncResults formats sync results as a markdown comment.
 func (e *Executor) renderSyncResults(results []syncResult) string {
-	var sb strings.Builder
-	sb.WriteString("## Lemuria Sync\n\n")
-
-	allSucceeded := true
-	for _, r := range results {
-		sb.WriteString(fmt.Sprintf("### Application: `%s`\n\n", r.Application))
-
-		if r.Error != nil {
-			sb.WriteString(fmt.Sprintf("❌ **Error:** %s\n\n", r.Error.Error()))
-			allSucceeded = false
-			continue
+	entries := make([]diff.SyncResultEntry, len(results))
+	for i, r := range results {
+		entry := diff.SyncResultEntry{
+			Application: r.Application,
+			PlanOutput:  r.PlanOutput,
+			Error:       r.Error,
 		}
-
-		switch r.Result.Phase {
-		case models.SyncPhaseSucceeded:
-			sb.WriteString("✅ **Sync successful**\n\n")
-		case models.SyncPhaseRunning:
-			sb.WriteString("⏳ **Sync in progress**\n\n")
-		case models.SyncPhaseFailed, models.SyncPhaseError:
-			sb.WriteString(fmt.Sprintf("❌ **Sync failed:** %s\n\n", r.Result.Message))
-			allSucceeded = false
+		if r.Result != nil {
+			entry.Phase = string(r.Result.Phase)
+			entry.Message = r.Result.Message
+			entry.Resources = r.Result.Resources
 		}
+		entries[i] = entry
 	}
-
-	if allSucceeded {
-		sb.WriteString("---\n")
-		sb.WriteString("🎉 All applications synced successfully!\n")
-	}
-
-	return sb.String()
+	return e.renderer.RenderSync(entries)
 }
 
 // autoMergePR merges the PR and optionally deletes the source branch.

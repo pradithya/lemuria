@@ -136,8 +136,21 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 	var resp struct {
 		Status struct {
 			OperationState struct {
-				Phase   string `json:"phase"`
-				Message string `json:"message"`
+				Phase      string `json:"phase"`
+				Message    string `json:"message"`
+				SyncResult struct {
+					Revision  string `json:"revision"`
+					Resources []struct {
+						Group     string `json:"group"`
+						Version   string `json:"version"`
+						Kind      string `json:"kind"`
+						Namespace string `json:"namespace"`
+						Name      string `json:"name"`
+						Status    string `json:"status"`
+						Message   string `json:"message"`
+						HookType  string `json:"hookType,omitempty"`
+					} `json:"resources"`
+				} `json:"syncResult"`
 			} `json:"operationState"`
 		} `json:"status"`
 	}
@@ -146,11 +159,35 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 		return nil, fmt.Errorf("syncing application %s: %w", name, err)
 	}
 
-	return &models.SyncResult{
+	result := &models.SyncResult{
 		Application: name,
 		Phase:       models.SyncPhase(resp.Status.OperationState.Phase),
 		Message:     resp.Status.OperationState.Message,
-	}, nil
+		Revision:    resp.Status.OperationState.SyncResult.Revision,
+	}
+
+	for _, r := range resp.Status.OperationState.SyncResult.Resources {
+		// Skip hook resources (PreSync, PostSync, SyncFail)
+		if r.HookType != "" {
+			continue
+		}
+		apiVersion := r.Version
+		if r.Group != "" {
+			apiVersion = r.Group + "/" + r.Version
+		}
+		result.Resources = append(result.Resources, models.ResourceResult{
+			Resource: models.ResourceKey{
+				APIVersion: apiVersion,
+				Kind:       r.Kind,
+				Name:       r.Name,
+				Namespace:  r.Namespace,
+			},
+			Status:  r.Status,
+			Message: r.Message,
+		})
+	}
+
+	return result, nil
 }
 
 // SyncOptions configures a sync operation.
