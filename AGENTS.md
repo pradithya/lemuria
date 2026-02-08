@@ -207,38 +207,85 @@ GitHub Webhook POST
 ### Unit Tests
 
 ```bash
-make test             # or: go test -v -race -coverprofile=coverage.out ./internal/... ./pkg/...
+make test-unit
 ```
 
-Unit test files:
-- `internal/argocd/diff_test.go` — Diff computation
-- `internal/argocd/parser_test.go` — Manifest JSON parsing
-- `internal/argocd/tempapp_test.go` — Temporary app CR creation
-- `internal/auth/oidc_test.go` — OIDC provider
-- `internal/commands/sync_test.go` — Sync command logic
+Runs all unit tests under `./internal/...` and `./pkg/...` with race detection and coverage.
 
 ### E2E Tests
 
-Require k3d cluster with Argo CD and Redis:
+E2E tests require a k3d cluster with ArgoCD and Redis. They live in the `e2e/` directory.
+
+#### Prerequisites
+
+- Docker (e.g., Rancher Desktop, Docker Desktop)
+- k3d (`curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash`)
+- kubectl
+- helm
+
+#### Setup Infrastructure
 
 ```bash
-make e2e-setup        # Create cluster + install dependencies
-make test-e2e         # Run e2e tests (10m timeout)
-make e2e-teardown     # Cleanup
-make test-e2e-short   # Run in short/unit mode (no infrastructure needed)
+make e2e-setup
 ```
 
-E2E test coverage:
-- `e2e_test.go` — Core integration (Argo CD client, Redis locks)
-- `commands_test.go` — Command parsing
-- `command_workflow_test.go` — Full plan → sync workflows
-- `webhook_test.go` — Webhook validation & event parsing
-- `diff_test.go` — Diff rendering
-- `appdetect_test.go` — Application detection from changed files
-- `approval_test.go` — Approval enforcement
-- `automerge_test.go` — Auto-merge after sync
-- `rollback_test.go` — Rollback functionality
-- `mock_github_test.go` — Mock GitHub API server for testing
+This runs `e2e/scripts/setup.sh` which:
+1. Creates a k3d cluster named `lemuria-e2e`
+2. Installs ArgoCD v2.10.0 into the `argocd` namespace
+3. Installs Redis into the `redis` namespace
+4. Sets up port-forwards (ArgoCD on `localhost:8081`, Redis on `localhost:6379`)
+5. Generates an ArgoCD API token
+6. Creates test applications from `e2e/manifests/`
+7. Writes `e2e/.env` with connection details (read by `e2e/e2e_test.go:TestMain`)
+
+#### Run E2E Tests
+
+```bash
+make test-e2e
+```
+
+This runs `cd e2e && go test -v -timeout 10m ./...`.
+
+To run a specific test:
+
+```bash
+cd e2e && go test -v -timeout 10m -run "TestName" ./...
+```
+
+#### Teardown
+
+```bash
+make e2e-teardown
+```
+
+Kills port-forwards, deletes the k3d cluster, and cleans up credential files.
+
+#### Troubleshooting
+
+- **ArgoCD pods in CrashLoopBackOff**: Tear down and re-setup (`make e2e-teardown && make e2e-setup`).
+- **Port-forward died**: Re-establish manually:
+  ```bash
+  kubectl port-forward svc/argocd-server -n argocd 8081:80 &
+  kubectl port-forward svc/redis -n redis 6379:6379 &
+  ```
+- **Stale test apps/locks from previous runs**: Tests use `uniqueAppName()` to generate unique app names per run. If leftover apps from crashed runs accumulate, tear down and re-setup.
+- **Tests timing out**: The full suite runs within a 10-minute timeout. Individual tests involving ArgoCD diff generation (temp app creation) can take 90-120 seconds each.
+
+### Helm Chart Tests
+
+```bash
+make helm-test-all
+```
+
+Runs Helm lint and unit tests. Requires the `helm-unittest` plugin (installed via `make tools`).
+
+### Test Coverage
+
+- `e2e/e2e_test.go` - ArgoCD client, Redis locks, integration workflows
+- `e2e/command_workflow_test.go` - Full plan/sync/unlock command workflows
+- `e2e/commands_test.go` - Command parsing
+- `e2e/webhook_test.go` - Webhook validation, event parsing
+- `e2e/diff_test.go` - Diff rendering
 
 ## Common Tasks
 

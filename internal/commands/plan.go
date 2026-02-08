@@ -281,6 +281,13 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		BaseAppSpec:  baseAppSpec,
 		HeadAppSpec:  headAppSpec,
 	})
+	// Store plan revision for later sync verification.
+	// This is stored regardless of diff outcome so that sync can proceed
+	// even if the diff fails (e.g., temp app timeout for external Helm charts).
+	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile); err != nil {
+		e.logger.Warn("failed to store plan", "app", app.Name, "error", err)
+	}
+
 	if err != nil {
 		e.logger.Debug("failed to generate diff",
 			"app", app.Name,
@@ -300,11 +307,6 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		"updated", result.Summary.Updated,
 		"deleted", result.Summary.Deleted,
 	)
-
-	// Store plan output for later sync verification
-	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile); err != nil {
-		e.logger.Warn("failed to store plan", "app", app.Name, "error", err)
-	}
 
 	return result
 }
