@@ -249,14 +249,14 @@ func (c *Client) watchApplication(ctx context.Context, name string) (<-chan watc
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("watch API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	ch := make(chan watchEvent)
 	go func() {
 		defer close(ch)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		decoder := json.NewDecoder(resp.Body)
 		for {
