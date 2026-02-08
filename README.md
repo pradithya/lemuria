@@ -21,31 +21,6 @@ Lemuria enables teams to preview, approve, and sync Argo CD applications through
 - **Web UI** — View locks, application status, and manage users
 - **Multiple Auth Methods** — GitHub OAuth, OIDC, and basic auth with RBAC
 
-## Architecture
-
-```
-┌─────────────┐     webhook      ┌─────────────┐     REST API    ┌──────────┐
-│   GitHub    │ ───────────────> │   Lemuria   │ ──────────────> │ Argo CD  │
-│   PR Event  │                  │   Server    │                 │  Server  │
-└─────────────┘                  └─────────────┘                 └──────────┘
-       ^                               │
-       │                               │
-       └───────── PR comments ─────────┘
-                                       │
-                                       v
-                                 ┌──────────┐
-                                 │  Redis   │
-                                 │ (locks & │
-                                 │ sessions)│
-                                 └──────────┘
-```
-
-**How it works:**
-1. GitHub sends webhook events (PR opened, comment created, review submitted) to Lemuria
-2. Lemuria identifies affected Argo CD applications by matching changed files to configured paths
-3. For `plan`: fetches manifests from Argo CD, computes diffs, posts results as PR comments
-4. For `sync`: acquires a lock, triggers Argo CD sync, reports status, optionally auto-merges
-5. Redis manages distributed locks (7-day TTL) and web UI session state
 
 ## Quick Start
 
@@ -276,7 +251,15 @@ make docker-build     # Build Docker image
 
 ```bash
 make test             # Run unit tests with race detection + coverage
-make test-e2e-short   # Run e2e tests in unit mode (no infrastructure)
+```
+
+Unit tests use a table-driven approach and cover command parsing, webhook validation/parsing, config loading, path matching, diff formatting, and model behavior. Run specific package tests with:
+
+```bash
+go test -v ./internal/commands/...   # Command parser, executor helpers, sync requirements
+go test -v ./internal/webhook/...    # HMAC validation, event parsing
+go test -v ./internal/config/...     # Config defaults, repo config, repo allowlisting
+go test -v ./pkg/diff/...            # Diff rendering, output formatting
 ```
 
 #### E2E Tests (requires k3d + Argo CD)
@@ -403,25 +386,6 @@ lemuria/
 | `/api/v1/locks/{app}` | DELETE | Force unlock app (admin only) |
 | `/api/v1/users` | GET | List users (admin only) |
 | `/api/v1/users/{id}/role` | PUT | Update user role (admin only) |
-
-## CI/CD Pipeline
-
-The GitHub Actions pipeline (`.github/workflows/ci.yaml`) includes:
-
-| Job | Trigger | Description |
-|-----|---------|-------------|
-| `lint-backend` | PR + push | golangci-lint + formatting check |
-| `lint-frontend` | PR + push | TypeScript type-check |
-| `test-backend` | PR + push | Unit tests with coverage (Codecov) |
-| `test-frontend` | PR + push | Frontend build validation |
-| `test-e2e` | PR + push | E2E tests with k3d + Argo CD |
-| `test-helm-chart` | PR + push | Helm lint + unit tests + chart-testing |
-| `secrets-scan` | Push + weekly | Gitleaks secrets detection |
-| `build-docker-pr` | PR | Docker build dry-run |
-| `build-and-push` | main + tags | Build and push to GHCR |
-| `publish-helm-chart` | main + tags | Package and push Helm chart to OCI registry |
-| `deploy` | main + tags | Deploy to Kubernetes via Tailscale |
-| `release` | v* tags | Create GitHub Release with changelog |
 
 ## License
 
