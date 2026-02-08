@@ -13,14 +13,6 @@ type PlanDiffEntry struct {
 	Diff     string      `json:"diff"`
 }
 
-// PlanDiffEntry is a lightweight representation of a manifest diff stored with the lock.
-// It omits full YAML states (BaseState, LiveState, TargetState) to reduce storage size.
-type PlanDiffEntry struct {
-	Resource ResourceKey `json:"resource"`
-	Action   DiffAction  `json:"action"`
-	Diff     string      `json:"diff"`
-}
-
 // Lock represents an application lock held by a PR.
 type Lock struct {
 	Application  string          `json:"application"`
