@@ -90,7 +90,9 @@ function PlanDiffSection({ diffs }: { diffs: PlanDiffEntry[] }) {
   return (
     <div className="mt-3 border-t border-gray-100 pt-3">
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
         className="flex items-center text-sm text-gray-600 hover:text-gray-900"
       >
         <svg
