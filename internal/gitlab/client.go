@@ -78,19 +78,21 @@ func (c *Client) IsPRApproved(ctx context.Context, owner, repo string, number in
 func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, number int, title, message, method string) error {
 	opts := &gogitlab.AcceptMergeRequestOptions{}
 
-	if title != "" {
-		opts.MergeCommitMessage = gogitlab.Ptr(title)
-	}
+	// Prefer message over title for the commit message.
+	var commitMessage string
 	if message != "" {
-		opts.MergeCommitMessage = gogitlab.Ptr(message)
+		commitMessage = message
+	} else if title != "" {
+		commitMessage = title
+	}
+
+	if commitMessage != "" {
+		opts.MergeCommitMessage = gogitlab.Ptr(commitMessage)
 	}
 	if method == "squash" {
 		opts.Squash = gogitlab.Ptr(true)
-		if title != "" {
-			opts.SquashCommitMessage = gogitlab.Ptr(title)
-		}
-		if message != "" {
-			opts.SquashCommitMessage = gogitlab.Ptr(message)
+		if commitMessage != "" {
+			opts.SquashCommitMessage = gogitlab.Ptr(commitMessage)
 		}
 	}
 

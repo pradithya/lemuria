@@ -136,34 +136,48 @@ func (p *GitLabProvider) getUserInfo(ctx context.Context, token *oauth2.Token) (
 }
 
 // getUserGroups fetches the user's group memberships from GitLab.
+// It paginates through all pages to ensure groups are not missed.
 func (p *GitLabProvider) getUserGroups(ctx context.Context, token *oauth2.Token) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", p.baseURL+"/api/v4/groups?min_access_level=10", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	var result []string
+	page := 1
 
-	resp, err := p.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
+	for {
+		url := fmt.Sprintf("%s/api/v4/groups?min_access_level=10&per_page=100&page=%d", p.baseURL, page)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token.AccessToken)
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to get groups")
-	}
+		resp, err := p.httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
 
-	var groups []struct {
-		FullPath string `json:"full_path"`
-	}
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("failed to get groups (status %d)", resp.StatusCode)
+		}
 
-	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
-		return nil, err
-	}
+		var groups []struct {
+			FullPath string `json:"full_path"`
+		}
 
-	result := make([]string, len(groups))
-	for i, g := range groups {
-		result[i] = g.FullPath
+		if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+			_ = resp.Body.Close()
+			return nil, err
+		}
+		_ = resp.Body.Close()
+
+		if len(groups) == 0 {
+			break
+		}
+
+		for _, g := range groups {
+			result = append(result, g.FullPath)
+		}
+
+		page++
 	}
 
 	return result, nil

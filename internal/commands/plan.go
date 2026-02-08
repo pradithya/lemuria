@@ -172,6 +172,8 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		Application: app.Name,
 		PRNumber:    event.PR.Number,
 		Repo:        event.Repo.FullName,
+		RepoURL:     event.Repo.HTMLURL,
+		Provider:    string(event.Provider),
 		User:        event.Sender.Login,
 	})
 	if err != nil {

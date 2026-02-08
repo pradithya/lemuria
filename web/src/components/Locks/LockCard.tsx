@@ -144,11 +144,14 @@ function formatResourceKey(r: { kind: string; name: string; namespace?: string }
 }
 
 function getPRUrl(lock: Lock): string {
-  if (lock.repo_url) {
-    if (lock.repo_url.includes('gitlab')) {
-      return `${lock.repo_url}/-/merge_requests/${lock.pr_number}`;
+  if (lock.provider === 'gitlab') {
+    if (lock.repo_url) {
+      return `${lock.repo_url.replace(/\/+$/, '')}/-/merge_requests/${lock.pr_number}`;
     }
-    return `${lock.repo_url}/pull/${lock.pr_number}`;
+    return `https://gitlab.com/${lock.repo}/-/merge_requests/${lock.pr_number}`;
+  }
+  if (lock.repo_url) {
+    return `${lock.repo_url.replace(/\/+$/, '')}/pull/${lock.pr_number}`;
   }
   return `https://github.com/${lock.repo}/pull/${lock.pr_number}`;
 }

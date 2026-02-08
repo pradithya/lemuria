@@ -19,6 +19,7 @@ type Lock struct {
 	PRNumber     int             `json:"pr_number"`
 	Repo         string          `json:"repo"`
 	RepoURL      string          `json:"repo_url,omitempty"`
+	Provider     string          `json:"provider,omitempty"`
 	User         string          `json:"user"`
 	LockedAt     time.Time       `json:"locked_at"`
 	PlanRevision string          `json:"plan_revision"`
@@ -32,6 +33,8 @@ type LockRequest struct {
 	Application string
 	PRNumber    int
 	Repo        string
+	RepoURL     string
+	Provider    string
 	User        string
 }
 
