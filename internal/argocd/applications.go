@@ -211,7 +211,7 @@ type watchEvent struct {
 					Message    string `json:"message"`
 					SyncResult struct {
 						Revision  string               `json:"revision"`
-						Resources []syncResourceResult  `json:"resources"`
+						Resources []syncResourceResult `json:"resources"`
 					} `json:"syncResult"`
 				} `json:"operationState"`
 			} `json:"status"`

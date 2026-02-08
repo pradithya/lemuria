@@ -764,7 +764,7 @@ func TestE2ESyncMixedApps(t *testing.T) {
 	gitAppName := uniqueAppName("e2e-git-mix")
 	helmAppName := uniqueAppName("e2e-helm-mix")
 	repo := "test-owner/test-repo"
-	prNumber := int(time.Now().UnixNano() % 90000) + 10000 // unique PR number to avoid stale lock collisions
+	prNumber := int(time.Now().UnixNano()%90000) + 10000 // unique PR number to avoid stale lock collisions
 	headSHA := "abc123mixed"
 
 	// Create both apps

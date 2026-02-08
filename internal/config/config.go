@@ -112,6 +112,7 @@ type RepoConfig struct {
 	Version          int                  `koanf:"version"`
 	Autoplan         *bool                `koanf:"autoplan"`
 	RequireApproval  *bool                `koanf:"require_approval"`
+	AutoMerge        *bool                `koanf:"auto_merge"`
 	Applications     []ApplicationMapping `koanf:"applications"`
 	SyncRequirements []SyncRequirement    `koanf:"sync_requirements"`
 }
