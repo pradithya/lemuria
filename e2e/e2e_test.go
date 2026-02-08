@@ -295,7 +295,7 @@ func TestGetApplicationDiffV2(t *testing.T) {
 		Mode:         argocd.DiffModeLive,
 		TargetBranch: "HEAD",
 		PRNumber:     0,
-		PRRepo:       "test/repo",
+		PRRepo:       "https://github.com/test/repo",
 		Timeout:      2 * time.Minute,
 	})
 	if err != nil {
@@ -666,7 +666,7 @@ func TestFullPlanWorkflow(t *testing.T) {
 		Mode:         argocd.DiffModeLive,
 		TargetBranch: revision,
 		PRNumber:     prNumber,
-		PRRepo:       repo,
+		PRRepo:       "https://github.com/" + repo,
 		Timeout:      2 * time.Minute,
 	})
 	if err != nil {

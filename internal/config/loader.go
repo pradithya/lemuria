@@ -80,16 +80,32 @@ func LoadRepoConfig(data []byte) (*RepoConfig, error) {
 func validate(cfg *Config) error {
 	var errs []string
 
-	if cfg.GitHub.WebhookSecret == "" {
-		errs = append(errs, "github.webhook_secret is required")
+	// At least one VCS provider must be configured
+	hasGitHub := cfg.HasGitHub()
+	hasGitLab := cfg.HasGitLab()
+
+	if !hasGitHub && !hasGitLab {
+		errs = append(errs, "at least one VCS provider (github or gitlab) must be configured")
 	}
 
-	if cfg.GitHub.AppID == 0 {
-		errs = append(errs, "github.app_id is required")
+	// Validate GitHub config if partially configured
+	if hasGitHub {
+		if cfg.GitHub.WebhookSecret == "" {
+			errs = append(errs, "github.webhook_secret is required when github is configured")
+		}
+		if cfg.GitHub.AppID == 0 {
+			errs = append(errs, "github.app_id is required when github is configured")
+		}
+		if cfg.GitHub.AppPrivateKey == "" {
+			errs = append(errs, "github.app_private_key is required when github is configured")
+		}
 	}
 
-	if cfg.GitHub.AppPrivateKey == "" {
-		errs = append(errs, "github.app_private_key is required")
+	// Validate GitLab config if partially configured
+	if hasGitLab {
+		if cfg.GitLab.WebhookSecret == "" {
+			errs = append(errs, "gitlab.webhook_secret is required when gitlab is configured")
+		}
 	}
 
 	if cfg.ArgoCD.ServerURL == "" {

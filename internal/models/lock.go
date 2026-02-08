@@ -18,6 +18,7 @@ type Lock struct {
 	Application  string          `json:"application"`
 	PRNumber     int             `json:"pr_number"`
 	Repo         string          `json:"repo"`
+	RepoURL      string          `json:"repo_url,omitempty"`
 	User         string          `json:"user"`
 	LockedAt     time.Time       `json:"locked_at"`
 	PlanRevision string          `json:"plan_revision"`

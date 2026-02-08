@@ -6,7 +6,15 @@ import (
 	"github.com/org/lemuria/internal/config"
 )
 
-// EventType represents the type of GitHub webhook event.
+// VCSProvider identifies the version control system hosting the repository.
+type VCSProvider string
+
+const (
+	VCSProviderGitHub VCSProvider = "github"
+	VCSProviderGitLab VCSProvider = "gitlab"
+)
+
+// EventType represents the type of webhook event.
 type EventType string
 
 const (
@@ -17,8 +25,9 @@ const (
 
 // PREvent represents a parsed pull request webhook event.
 type PREvent struct {
-	Type       EventType `json:"type"`
-	Action     string    `json:"action"`
+	Provider   VCSProvider `json:"provider"`
+	Type       EventType   `json:"type"`
+	Action     string      `json:"action"`
 	Repo       RepoInfo  `json:"repo"`
 	PR         PRInfo    `json:"pr"`
 	Comment    *Comment  `json:"comment,omitempty"`
@@ -116,4 +125,22 @@ func (e *PREvent) ShouldUnlockAll() bool {
 
 	// Release locks on PR close or merge
 	return e.Action == "closed"
+}
+
+// PullRequestDetail holds provider-agnostic pull request details.
+type PullRequestDetail struct {
+	Number    int
+	Title     string
+	State     string
+	Draft     bool
+	Merged    bool
+	Mergeable bool
+	HeadSHA   string
+	HeadRef   string
+	BaseRef   string
+}
+
+// CommentResult holds the result of posting a comment.
+type CommentResult struct {
+	ID int64
 }

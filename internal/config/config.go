@@ -6,6 +6,7 @@ import "time"
 type Config struct {
 	Server   ServerConfig   `koanf:"server"`
 	GitHub   GitHubConfig   `koanf:"github"`
+	GitLab   GitLabConfig   `koanf:"gitlab"`
 	ArgoCD   ArgoCDConfig   `koanf:"argocd"`
 	Redis    RedisConfig    `koanf:"redis"`
 	Defaults DefaultsConfig `koanf:"defaults"`
@@ -25,6 +26,13 @@ type GitHubConfig struct {
 	WebhookSecret string `koanf:"webhook_secret"`
 	AppID         int64  `koanf:"app_id"`
 	AppPrivateKey string `koanf:"app_private_key"`
+}
+
+// GitLabConfig holds GitLab connection settings.
+type GitLabConfig struct {
+	URL           string `koanf:"url"`            // GitLab base URL (default: https://gitlab.com)
+	Token         string `koanf:"token"`           // Personal/Group Access Token
+	WebhookSecret string `koanf:"webhook_secret"`  // Webhook secret token
 }
 
 // ArgoCDConfig holds Argo CD connection settings.
@@ -62,9 +70,18 @@ type AuthConfig struct {
 	CookieSecure    bool               `koanf:"cookie_secure"`
 	DefaultRole     string             `koanf:"default_role"`
 	GitHub          *GitHubOAuthConfig `koanf:"github"`
+	GitLab          *GitLabOAuthConfig `koanf:"gitlab"`
 	OIDC            *OIDCConfig        `koanf:"oidc"`
 	Basic           *BasicAuthConfig   `koanf:"basic"`
 	RoleAssignments []RoleAssignment   `koanf:"role_assignments"`
+}
+
+// GitLabOAuthConfig holds GitLab OAuth settings.
+type GitLabOAuthConfig struct {
+	URL           string   `koanf:"url"`            // GitLab base URL
+	ClientID      string   `koanf:"client_id"`
+	ClientSecret  string   `koanf:"client_secret"`
+	AllowedGroups []string `koanf:"allowed_groups"`
 }
 
 // BasicAuthConfig holds basic auth settings for local development.
@@ -177,6 +194,21 @@ func (c *Config) HasOIDC() bool {
 // HasBasicAuth returns true if basic auth is configured.
 func (c *Config) HasBasicAuth() bool {
 	return c.Auth.Basic != nil && len(c.Auth.Basic.Users) > 0
+}
+
+// HasGitHub returns true if GitHub is configured.
+func (c *Config) HasGitHub() bool {
+	return c.GitHub.AppID != 0 && c.GitHub.AppPrivateKey != ""
+}
+
+// HasGitLab returns true if GitLab is configured.
+func (c *Config) HasGitLab() bool {
+	return c.GitLab.Token != ""
+}
+
+// HasGitLabOAuth returns true if GitLab OAuth is configured.
+func (c *Config) HasGitLabOAuth() bool {
+	return c.Auth.GitLab != nil && c.Auth.GitLab.ClientID != ""
 }
 
 // LockTTL returns the default lock TTL (7 days).

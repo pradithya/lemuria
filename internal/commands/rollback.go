@@ -15,7 +15,7 @@ import (
 func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *models.PREvent) error {
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
-		if err := e.github.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
+		if err := e.vcs.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
 			e.logger.Warn("failed to add reaction", "error", err)
 		}
 	}
@@ -93,7 +93,7 @@ type rollbackResult struct {
 func (e *Executor) checkRollbackRequirements(ctx context.Context, event *models.PREvent) error {
 	// Check if PR is approved (if required)
 	if e.config.Defaults.RequireApproval {
-		approved, err := e.github.IsPRApproved(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+		approved, err := e.vcs.IsPRApproved(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 		if err != nil {
 			return fmt.Errorf("checking PR approval: %w", err)
 		}

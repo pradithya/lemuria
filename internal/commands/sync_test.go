@@ -8,62 +8,60 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-github/v60/github"
-
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
 
-// mockGitHubForSync is a minimal GitHubClient mock for sync requirement tests.
-type mockGitHubForSync struct {
+// mockVCSForSync is a minimal VCSClient mock for sync requirement tests.
+type mockVCSForSync struct {
 	repoConfigData []byte
 	prApproved     bool
 	prMergeable    bool
 }
 
-func (m *mockGitHubForSync) GetChangedFiles(context.Context, string, string, int) ([]models.ChangedFile, error) {
+func (m *mockVCSForSync) GetChangedFiles(context.Context, string, string, int) ([]models.ChangedFile, error) {
 	return nil, nil
 }
 
-func (m *mockGitHubForSync) GetRepoConfig(context.Context, string, string, string) ([]byte, error) {
+func (m *mockVCSForSync) GetRepoConfig(context.Context, string, string, string) ([]byte, error) {
 	if m.repoConfigData == nil {
 		return nil, fmt.Errorf(".lemuria.yaml not found")
 	}
 	return m.repoConfigData, nil
 }
 
-func (m *mockGitHubForSync) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
+func (m *mockVCSForSync) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (m *mockGitHubForSync) GetPR(context.Context, string, string, int) (*github.PullRequest, error) {
-	return &github.PullRequest{
-		State:     github.String("open"),
-		Mergeable: github.Bool(m.prMergeable),
+func (m *mockVCSForSync) GetPR(context.Context, string, string, int) (*models.PullRequestDetail, error) {
+	return &models.PullRequestDetail{
+		State:     "open",
+		Mergeable: m.prMergeable,
 	}, nil
 }
 
-func (m *mockGitHubForSync) IsPRApproved(context.Context, string, string, int) (bool, error) {
+func (m *mockVCSForSync) IsPRApproved(context.Context, string, string, int) (bool, error) {
 	return m.prApproved, nil
 }
 
-func (m *mockGitHubForSync) PostComment(context.Context, string, string, int, string, bool) (*github.IssueComment, error) {
-	return &github.IssueComment{ID: github.Int64(1)}, nil
+func (m *mockVCSForSync) PostComment(context.Context, string, string, int, string, bool) (*models.CommentResult, error) {
+	return &models.CommentResult{ID: 1}, nil
 }
 
-func (m *mockGitHubForSync) AddReaction(context.Context, string, string, int64, string) error {
+func (m *mockVCSForSync) AddReaction(context.Context, string, string, int64, string) error {
 	return nil
 }
 
-func (m *mockGitHubForSync) InvalidatePlanComments(context.Context, string, string, int) error {
+func (m *mockVCSForSync) InvalidatePlanComments(context.Context, string, string, int) error {
 	return nil
 }
 
-func (m *mockGitHubForSync) MergePullRequest(context.Context, string, string, int, string, string, string) error {
+func (m *mockVCSForSync) MergePullRequest(context.Context, string, string, int, string, string, string) error {
 	return nil
 }
 
-func (m *mockGitHubForSync) DeleteBranch(context.Context, string, string, string) error {
+func (m *mockVCSForSync) DeleteBranch(context.Context, string, string, string) error {
 	return nil
 }
 
@@ -91,10 +89,10 @@ func (m *mockLockManagerForSync) GetPlan(context.Context, string, int) (string, 
 func (m *mockLockManagerForSync) Ping(context.Context) error { return nil }
 func (m *mockLockManagerForSync) Close() error               { return nil }
 
-func newSyncTestExecutor(gh GitHubClient, cfg *config.Config) *Executor {
+func newSyncTestExecutor(vcsClient VCSClient, cfg *config.Config) *Executor {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	return &Executor{
-		github: gh,
+		vcs:    vcsClient,
 		lock:   &mockLockManagerForSync{},
 		config: cfg,
 		logger: logger,
@@ -553,7 +551,7 @@ func TestCheckSyncRequirements(t *testing.T) {
 				repoConfigData = []byte(tt.repoConfigYAML)
 			}
 
-			mock := &mockGitHubForSync{
+			mock := &mockVCSForSync{
 				repoConfigData: repoConfigData,
 				prApproved:     tt.prApproved,
 				prMergeable:    tt.prMergeable,

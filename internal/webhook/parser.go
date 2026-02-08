@@ -74,8 +74,9 @@ func parsePullRequestEvent(payload []byte) (*models.PREvent, error) {
 	updatedAt, _ := time.Parse(time.RFC3339, raw.PullRequest.UpdatedAt)
 
 	return &models.PREvent{
-		Type:   models.EventTypePullRequest,
-		Action: raw.Action,
+		Provider: models.VCSProviderGitHub,
+		Type:     models.EventTypePullRequest,
+		Action:   raw.Action,
 		Repo: models.RepoInfo{
 			Owner:    raw.Repository.Owner.Login,
 			Name:     raw.Repository.Name,
@@ -159,8 +160,9 @@ func parseIssueCommentEvent(payload []byte) (*models.PREvent, error) {
 	createdAt, _ := time.Parse(time.RFC3339, raw.Comment.CreatedAt)
 
 	return &models.PREvent{
-		Type:   models.EventTypeIssueComment,
-		Action: raw.Action,
+		Provider: models.VCSProviderGitHub,
+		Type:     models.EventTypeIssueComment,
+		Action:   raw.Action,
 		Repo: models.RepoInfo{
 			Owner:    raw.Repository.Owner.Login,
 			Name:     raw.Repository.Name,
@@ -243,8 +245,9 @@ func parsePullRequestReviewEvent(payload []byte) (*models.PREvent, error) {
 	}
 
 	return &models.PREvent{
-		Type:   models.EventTypePullRequestReview,
-		Action: raw.Action,
+		Provider: models.VCSProviderGitHub,
+		Type:     models.EventTypePullRequestReview,
+		Action:   raw.Action,
 		Repo: models.RepoInfo{
 			Owner:    raw.Repository.Owner.Login,
 			Name:     raw.Repository.Name,

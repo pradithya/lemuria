@@ -22,7 +22,7 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
-		if err := e.github.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
+		if err := e.vcs.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
 			e.logger.Warn("failed to add reaction", "error", err)
 		}
 	}
@@ -194,7 +194,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 		return result
 	}
 
-	repoURL := fmt.Sprintf("https://github.com/%s", event.Repo.FullName)
+	repoURL := event.Repo.HTMLURL
 	fromPRRepo := appSourcesFromRepo(*app, repoURL)
 
 	// If the Application CR was modified in the PR, update the live app's spec
@@ -206,7 +206,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 			"source_file", l.SourceFile,
 		)
 
-		headContent, err := e.github.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, l.SourceFile, event.PR.HeadRef)
+		headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, l.SourceFile, event.PR.HeadRef)
 		if err != nil {
 			result.Error = fmt.Errorf("reading application CR from head branch: %w", err)
 			return result
@@ -306,7 +306,7 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 
 	if requireApproval {
 		e.logger.Debug("checking PR approval status")
-		approved, err := e.github.IsPRApproved(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+		approved, err := e.vcs.IsPRApproved(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 		if err != nil {
 			e.logger.Debug("failed to check PR approval",
 				"error", err,
@@ -323,7 +323,7 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 
 	// Check if PR is mergeable
 	e.logger.Debug("checking PR mergeable status")
-	pr, err := e.github.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+	pr, err := e.vcs.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 	if err != nil {
 		e.logger.Debug("failed to get PR status",
 			"error", err,
@@ -331,10 +331,10 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 		return fmt.Errorf("getting PR status: %w", err)
 	}
 
-	mergeable := pr.GetMergeable()
+	mergeable := pr.Mergeable
 	e.logger.Debug("PR mergeable status",
 		"mergeable", mergeable,
-		"state", pr.GetState(),
+		"state", pr.State,
 	)
 
 	if !mergeable {
@@ -422,7 +422,7 @@ func (e *Executor) autoMergePR(ctx context.Context, event *models.PREvent) error
 	}
 
 	// Merge the PR
-	if err := e.github.MergePullRequest(
+	if err := e.vcs.MergePullRequest(
 		ctx,
 		event.Repo.Owner,
 		event.Repo.Name,
@@ -444,7 +444,7 @@ func (e *Executor) autoMergePR(ctx context.Context, event *models.PREvent) error
 	if e.config.Defaults.DeleteSourceBranch {
 		branch := event.PR.HeadRef
 		if !IsProtectedBranch(branch) {
-			if err := e.github.DeleteBranch(ctx, event.Repo.Owner, event.Repo.Name, branch); err != nil {
+			if err := e.vcs.DeleteBranch(ctx, event.Repo.Owner, event.Repo.Name, branch); err != nil {
 				e.logger.Warn("failed to delete source branch",
 					"branch", branch,
 					"error", err,

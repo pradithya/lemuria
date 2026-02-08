@@ -24,13 +24,13 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
-		if err := e.github.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
+		if err := e.vcs.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
 			e.logger.Warn("failed to add reaction", "error", err)
 		}
 	}
 
 	// Invalidate old plan comments before generating new ones
-	if err := e.github.InvalidatePlanComments(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number); err != nil {
+	if err := e.vcs.InvalidatePlanComments(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number); err != nil {
 		e.logger.Warn("failed to invalidate old plan comments", "error", err)
 	}
 
@@ -54,7 +54,7 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 		apps = []models.Application{*app}
 	} else if cmd.All {
 		// All applications for this repo
-		repoURL := fmt.Sprintf("https://github.com/%s", event.Repo.FullName)
+		repoURL := event.Repo.HTMLURL
 		e.logger.Debug("finding all applications for repo",
 			"repo_url", repoURL,
 		)
@@ -221,7 +221,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		)
 
 		// Read base branch version
-		baseContent, err := e.github.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.BaseRef)
+		baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.BaseRef)
 		if err != nil {
 			e.logger.Warn("failed to read application CR from base branch, falling back to live spec",
 				"app", app.Name,
@@ -242,7 +242,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		}
 
 		// Read head branch version
-		headContent, err := e.github.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.HeadRef)
+		headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.HeadRef)
 		if err != nil {
 			e.logger.Warn("failed to read application CR from head branch, falling back to live spec",
 				"app", app.Name,
@@ -277,7 +277,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		BaseBranch:   event.PR.BaseRef,
 		TargetBranch: event.PR.HeadRef,
 		PRNumber:     event.PR.Number,
-		PRRepo:       event.Repo.FullName,
+		PRRepo:       event.Repo.HTMLURL,
 		Timeout:      timeout,
 		BaseAppSpec:  baseAppSpec,
 		HeadAppSpec:  headAppSpec,
@@ -386,13 +386,13 @@ func toPlanDiffEntries(diffs []models.ManifestDiff) []models.PlanDiffEntry {
 
 // postComment creates a new Lemuria comment on the PR.
 func (e *Executor) postComment(ctx context.Context, event *models.PREvent, appName, body string) error {
-	_, err := e.github.PostComment(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number, body, false)
+	_, err := e.vcs.PostComment(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number, body, false)
 	return err
 }
 
 // postPlanComment creates a new plan comment on the PR (can be invalidated on new changes).
 func (e *Executor) postPlanComment(ctx context.Context, event *models.PREvent, body string) error {
-	_, err := e.github.PostComment(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number, body, true)
+	_, err := e.vcs.PostComment(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number, body, true)
 	return err
 }
 
