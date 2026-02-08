@@ -1,4 +1,4 @@
-.PHONY: build build-frontend build-backend test test-unit test-e2e test-e2e-short e2e-setup e2e-teardown clean docker-build run run-redis run-backend run-frontend stop \
+.PHONY: build build-frontend build-backend test test-unit test-e2e e2e-setup e2e-teardown clean docker-build run run-redis run-backend run-frontend stop \
         k8s-deploy k8s-delete k8s-status k8s-logs k8s-port-forward k8s-restart \
         k3d-create k3d-delete k3d-build k3d-deploy k3d-all \
         helm-lint helm-template helm-template-ci helm-test helm-test-install helm-package helm-deploy helm-delete helm-dep \
@@ -60,10 +60,6 @@ test-unit:
 # Run e2e tests (requires setup first)
 test-e2e:
 	cd e2e && go test -v -timeout 10m ./...
-
-# Run e2e tests in short mode (unit mode, no infrastructure required)
-test-e2e-short:
-	go test -v -short ./e2e/...
 
 # Setup e2e test infrastructure
 e2e-setup:
@@ -362,7 +358,6 @@ help:
 	@echo "Testing:"
 	@echo "  make test           - Run unit tests"
 	@echo "  make test-e2e       - Run e2e tests (requires e2e-setup)"
-	@echo "  make test-e2e-short - Run e2e tests in short/unit mode"
 	@echo "  make e2e-setup      - Setup k3d cluster with Argo CD and Redis"
 	@echo "  make e2e-teardown   - Teardown e2e test infrastructure"
 	@echo "  make e2e            - Setup, run e2e tests (no auto-teardown)"
