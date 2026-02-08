@@ -163,6 +163,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 	e.logger.Debug("starting sync for application",
 		"app", l.Application,
 		"revision", event.PR.HeadSHA,
+		"source_file", l.SourceFile,
 		"prune", cmd.Prune,
 		"dry_run", cmd.DryRun,
 	)
@@ -171,11 +172,64 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 		Application: l.Application,
 	}
 
-	opts := &argocd.SyncOptions{
-		Revision: event.PR.HeadSHA,
-		Prune:    cmd.Prune,
-		DryRun:   cmd.DryRun,
+	// Determine if the app sources from the PR repo
+	app, err := e.argocd.GetApplication(ctx, l.Application)
+	if err != nil {
+		result.Error = fmt.Errorf("getting application %s: %w", l.Application, err)
+		return result
 	}
+
+	repoURL := fmt.Sprintf("https://github.com/%s", event.Repo.FullName)
+	fromPRRepo := appSourcesFromRepo(*app, repoURL)
+
+	// If the Application CR was modified in the PR, update the live app's spec
+	// before syncing. This handles cases where the PR modifies Helm values,
+	// chart versions, or other spec fields in the Application CR file.
+	if l.SourceFile != "" {
+		e.logger.Debug("updating application spec from PR head branch",
+			"app", l.Application,
+			"source_file", l.SourceFile,
+		)
+
+		headContent, err := e.github.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, l.SourceFile, event.PR.HeadRef)
+		if err != nil {
+			result.Error = fmt.Errorf("reading application CR from head branch: %w", err)
+			return result
+		}
+
+		parsed, err := argocd.ParseRawApplicationFromYAML(headContent, l.Application)
+		if err != nil {
+			result.Error = fmt.Errorf("parsing application CR from head branch: %w", err)
+			return result
+		}
+
+		if err := e.argocd.UpdateApplicationSpec(ctx, l.Application, parsed.Spec); err != nil {
+			result.Error = fmt.Errorf("updating application spec: %w", err)
+			return result
+		}
+
+		e.logger.Debug("application spec updated from PR",
+			"app", l.Application,
+		)
+	}
+
+	opts := &argocd.SyncOptions{
+		Prune:  cmd.Prune,
+		DryRun: cmd.DryRun,
+	}
+
+	// Only set revision for apps sourcing from the PR repo.
+	// External sources (e.g., Helm chart repos) should use the revision
+	// already configured in the app spec.
+	if fromPRRepo {
+		opts.Revision = event.PR.HeadSHA
+	}
+
+	e.logger.Debug("triggering sync",
+		"app", l.Application,
+		"revision", opts.Revision,
+		"from_pr_repo", fromPRRepo,
+	)
 
 	syncResult, err := e.argocd.SyncApplication(ctx, l.Application, opts)
 	if err != nil {
@@ -206,6 +260,17 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 	}
 
 	return result
+}
+
+// appSourcesFromRepo returns true if any of the app's sources reference the given repository URL.
+func appSourcesFromRepo(app models.Application, repoURL string) bool {
+	normalized := argocd.NormalizeRepoURL(repoURL)
+	for _, u := range app.GetRepoURLs() {
+		if argocd.NormalizeRepoURL(u) == normalized {
+			return true
+		}
+	}
+	return false
 }
 
 // checkSyncRequirements verifies all requirements are met before sync.
