@@ -113,12 +113,12 @@ type UserInfo struct {
 
 // ChangedFile represents a file changed in a PR.
 type ChangedFile struct {
-	Filename  string `json:"filename"`
+	Filename  string     `json:"filename"`
 	Status    FileStatus `json:"status"` // added, removed, modified, renamed
-	Additions int    `json:"additions"`
-	Deletions int    `json:"deletions"`
-	Changes   int    `json:"changes"`
-	Patch     string `json:"patch,omitempty"`
+	Additions int        `json:"additions"`
+	Deletions int        `json:"deletions"`
+	Changes   int        `json:"changes"`
+	Patch     string     `json:"patch,omitempty"`
 }
 
 // IsPROpen returns true if the PR is in an open state.
