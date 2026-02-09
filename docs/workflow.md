@@ -438,7 +438,7 @@ These branches are never auto-deleted (even when `delete_source_branch: true`):
 
 Lemuria responds to these webhook events:
 
-### GitHub Events (`POST /webhook`)
+### GitHub Events (`POST /webhook/github`)
 
 | Event | Action | Lemuria Behavior |
 |-------|--------|------------------|

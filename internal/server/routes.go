@@ -19,8 +19,8 @@ func (s *Server) setupRoutes() {
 	s.router.Get("/ready", s.handleReady)
 
 	// Webhook endpoints (validated by signature/token, not session)
-	if s.webhookHandler != nil {
-		s.router.Post("/webhook", s.webhookHandler.Handle)
+	if s.githubWebhookHandler != nil {
+		s.router.Post("/webhook/github", s.githubWebhookHandler.Handle)
 	}
 	if s.gitlabWebhookHandler != nil {
 		s.router.Post("/webhook/gitlab", s.gitlabWebhookHandler.Handle)

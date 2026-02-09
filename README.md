@@ -379,7 +379,7 @@ lemuria/
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/webhook` | POST | GitHub webhook receiver (HMAC-validated) |
+| `/webhook/github` | POST | GitHub webhook receiver (HMAC-validated) |
 | `/webhook/gitlab` | POST | GitLab webhook receiver (token-validated) |
 | `/health` | GET | Health check (always returns 200) |
 | `/healthz` | GET | Health check (alias) |

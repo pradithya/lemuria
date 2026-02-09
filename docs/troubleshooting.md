@@ -25,7 +25,7 @@ Common issues and solutions when using Lemuria.
    - **GitLab:** Go to Project → Settings → Webhooks → Edit. Check "Recent events" for failures.
 
 2. **Verify webhook URL**
-   - GitHub: `https://lemuria.example.com/webhook`
+   - GitHub: `https://lemuria.example.com/webhook/github`
    - GitLab: `https://lemuria.example.com/webhook/gitlab`
 
 3. **Check Lemuria logs**

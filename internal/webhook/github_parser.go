@@ -8,8 +8,8 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
-// ParseEvent parses a GitHub webhook event into a PREvent.
-func ParseEvent(eventType string, payload []byte) (*models.PREvent, error) {
+// ParseGitHubEvent parses a GitHub webhook event into a PREvent.
+func ParseGitHubEvent(eventType string, payload []byte) (*models.PREvent, error) {
 	switch eventType {
 	case "pull_request":
 		return parsePullRequestEvent(payload)

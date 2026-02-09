@@ -176,9 +176,9 @@ func TestEventParsing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event, err := webhook.ParseEvent(tt.eventType, []byte(tt.payload))
+			event, err := webhook.ParseGitHubEvent(tt.eventType, []byte(tt.payload))
 			if err != nil {
-				t.Fatalf("ParseEvent error: %v", err)
+				t.Fatalf("ParseGitHubEvent error: %v", err)
 			}
 
 			if tt.wantNil {

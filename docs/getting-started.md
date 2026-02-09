@@ -80,7 +80,7 @@ Lemuria uses a GitHub App for webhook integration and PR interaction.
 |-------|-------|
 | **GitHub App name** | `Lemuria` (or your preferred name) |
 | **Homepage URL** | Your Lemuria instance URL |
-| **Webhook URL** | `https://your-lemuria-url/webhook` |
+| **Webhook URL** | `https://your-lemuria-url/webhook/github` |
 | **Webhook secret** | Generate a secure secret |
 
 ### Step 2: Configure Permissions

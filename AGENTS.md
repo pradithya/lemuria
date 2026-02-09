@@ -87,7 +87,7 @@ lemuria/
 │   ├── server/                  # HTTP server
 │   │   ├── server.go            # Server struct, New() wires all dependencies, Run() starts listener
 │   │   ├── routes.go            # All route definitions + handler implementations
-│   │   │                        # Public: /webhook, /webhook/gitlab, /health, /healthz, /ready
+│   │   │                        # Public: /webhook/github, /webhook/gitlab, /health, /healthz, /ready
 │   │   │                        # Auth: /auth/{providers,github/*,gitlab/*,oidc/*,basic/*,logout,me}
 │   │   │                        # API: /api/v1/{status,locks,users} (auth-gated)
 │   │   │                        # Admin: DELETE /api/v1/locks/{app}, GET/PUT /api/v1/users

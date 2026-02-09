@@ -35,7 +35,7 @@ type Server struct {
 	// VCS providers and their handlers
 	githubClient         *github.Client
 	gitlabClient         *gitlab.Client
-	webhookHandler       *webhook.Handler       // GitHub webhook handler
+	githubWebhookHandler *webhook.GitHubHandler // GitHub webhook handler
 	gitlabWebhookHandler *webhook.GitLabHandler // GitLab webhook handler
 	argoClient           *argocd.Client
 	lockManager          lock.Manager
@@ -83,7 +83,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		}
 		s.githubClient = ghClient
 		s.githubExecutor = commands.NewExecutor(ghClient, argoClient, lockMgr, cfg, logger)
-		s.webhookHandler = webhook.NewHandler(cfg, ghClient, s.githubExecutor, logger)
+		s.githubWebhookHandler = webhook.NewGitHubHandler(cfg, ghClient, s.githubExecutor, logger)
 		logger.Info("GitHub provider initialized")
 	}
 
