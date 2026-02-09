@@ -4,6 +4,7 @@
         helm-lint helm-template helm-template-ci helm-test helm-test-install helm-package helm-deploy helm-delete helm-dep \
         tools install-tools \
         deps lint fmt fmt-check generate frontend-deps frontend-type-check frontend-build \
+        license-check license-fix \
         help
 
 # Build variables
@@ -94,6 +95,7 @@ deps:
 # Tool versions (pinned for reproducibility)
 GOLANGCI_LINT_VERSION ?= v2.8.0
 GOIMPORTS_VERSION ?= v0.28.0
+ADDLICENSE_VERSION ?= v1.1.1
 HELM_UNITTEST_VERSION ?= v0.5.2
 
 # Install all development tools
@@ -107,6 +109,8 @@ install-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(GOBIN) $(GOLANGCI_LINT_VERSION)
 	@echo "  Installing goimports $(GOIMPORTS_VERSION)..."
 	@go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
+	@echo "  Installing addlicense $(ADDLICENSE_VERSION)..."
+	@go install github.com/google/addlicense@$(ADDLICENSE_VERSION)
 	@echo ""
 	@echo "Installing Helm plugins..."
 	@if helm plugin list 2>/dev/null | grep -q unittest; then \
@@ -139,6 +143,14 @@ fmt-check:
 		exit 1; \
 	fi
 	@echo "All files are properly formatted"
+
+# Check license headers (for CI)
+license-check:
+	addlicense -check -l apache -c "Lemuria Authors" -ignore 'vendor/**' -ignore 'node_modules/**' -ignore 'web/dist/**' -ignore 'static/**' -ignore 'charts/**' .
+
+# Add missing license headers
+license-fix:
+	addlicense -l apache -c "Lemuria Authors" -ignore 'vendor/**' -ignore 'node_modules/**' -ignore 'web/dist/**' -ignore 'static/**' -ignore 'charts/**' .
 
 # Generate mocks (if needed in future)
 generate:
@@ -396,6 +408,8 @@ help:
 	@echo "  make lint           - Run linter"
 	@echo "  make fmt            - Format code"
 	@echo "  make fmt-check      - Check code formatting (for CI)"
+	@echo "  make license-check  - Check license headers (for CI)"
+	@echo "  make license-fix    - Add missing license headers"
 	@echo ""
 	@echo "Options:"
 	@echo "  CONFIG=path/to/config.yaml  - Use custom config (default: config/test.yaml)"
