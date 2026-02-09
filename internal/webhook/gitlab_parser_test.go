@@ -366,6 +366,113 @@ func TestParseGitLabEvent(t *testing.T) {
 			},
 		},
 		{
+			name:      "note on MR does not set PR.Author from comment user",
+			eventType: "Note Hook",
+			payload: `{
+				"object_attributes": {
+					"id": 1001,
+					"note": "checking author",
+					"noteable_type": "MergeRequest",
+					"created_at": "2024-06-01 12:00:00 UTC"
+				},
+				"merge_request": {
+					"iid": 50,
+					"title": "Author test MR",
+					"state": "opened",
+					"source_branch": "feature",
+					"target_branch": "main",
+					"last_commit": {"id": "aut123"},
+					"url": "https://gitlab.com/g/p/-/merge_requests/50"
+				},
+				"project": {
+					"name": "p",
+					"path_with_namespace": "g/p",
+					"web_url": "https://gitlab.com/g/p",
+					"git_http_url": "https://gitlab.com/g/p.git"
+				},
+				"user": {"username": "commenter", "id": 99}
+			}`,
+			wantType: models.EventTypeIssueComment,
+			check: func(t *testing.T, event *models.PREvent) {
+				// PR.Author should be empty — the webhook user is the comment author, not the MR author
+				if event.PR.Author.Login != "" {
+					t.Errorf("PR.Author.Login = %q, want empty", event.PR.Author.Login)
+				}
+				// Comment.Author and Sender should be the comment user
+				if event.Comment.Author.Login != "commenter" {
+					t.Errorf("Comment.Author.Login = %q, want %q", event.Comment.Author.Login, "commenter")
+				}
+				if event.Sender.Login != "commenter" {
+					t.Errorf("Sender.Login = %q, want %q", event.Sender.Login, "commenter")
+				}
+			},
+		},
+		{
+			name:      "merge request with http_url_to_repo fallback",
+			eventType: "Merge Request Hook",
+			payload: `{
+				"object_attributes": {
+					"iid": 40,
+					"title": "Fallback URL MR",
+					"state": "opened",
+					"action": "open",
+					"draft": false,
+					"source_branch": "feature",
+					"target_branch": "main",
+					"last_commit": {"id": "fb123"},
+					"url": "https://gitlab.example.com/group/repo/-/merge_requests/40",
+					"updated_at": "2024-06-01 12:00:00 UTC"
+				},
+				"project": {
+					"name": "repo",
+					"path_with_namespace": "group/repo",
+					"web_url": "https://gitlab.example.com/group/repo",
+					"http_url_to_repo": "https://gitlab.example.com/group/repo.git"
+				},
+				"user": {"username": "dev", "id": 1}
+			}`,
+			wantType: models.EventTypePullRequest,
+			check: func(t *testing.T, event *models.PREvent) {
+				if event.Repo.CloneURL != "https://gitlab.example.com/group/repo.git" {
+					t.Errorf("Repo.CloneURL = %q, want %q", event.Repo.CloneURL, "https://gitlab.example.com/group/repo.git")
+				}
+			},
+		},
+		{
+			name:      "note with http_url_to_repo fallback",
+			eventType: "Note Hook",
+			payload: `{
+				"object_attributes": {
+					"id": 1002,
+					"note": "test",
+					"noteable_type": "MergeRequest",
+					"created_at": "2024-06-01 12:00:00 UTC"
+				},
+				"merge_request": {
+					"iid": 41,
+					"title": "Note fallback URL",
+					"state": "opened",
+					"source_branch": "feature",
+					"target_branch": "main",
+					"last_commit": {"id": "nfb123"},
+					"url": "https://gitlab.example.com/group/repo/-/merge_requests/41"
+				},
+				"project": {
+					"name": "repo",
+					"path_with_namespace": "group/repo",
+					"web_url": "https://gitlab.example.com/group/repo",
+					"http_url_to_repo": "https://gitlab.example.com/group/repo.git"
+				},
+				"user": {"username": "dev", "id": 1}
+			}`,
+			wantType: models.EventTypeIssueComment,
+			check: func(t *testing.T, event *models.PREvent) {
+				if event.Repo.CloneURL != "https://gitlab.example.com/group/repo.git" {
+					t.Errorf("Repo.CloneURL = %q, want %q", event.Repo.CloneURL, "https://gitlab.example.com/group/repo.git")
+				}
+			},
+		},
+		{
 			name:      "note on merge request with draft MR",
 			eventType: "Note Hook",
 			payload: `{

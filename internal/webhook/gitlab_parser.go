@@ -46,6 +46,7 @@ func parseMergeRequestEvent(payload []byte) (*models.PREvent, error) {
 			PathWithNamespace string `json:"path_with_namespace"`
 			WebURL            string `json:"web_url"`
 			GitHTTPURL        string `json:"git_http_url"`
+			HTTPURLToRepo     string `json:"http_url_to_repo"`
 			Namespace         string `json:"namespace"`
 		} `json:"project"`
 		User struct {
@@ -74,6 +75,12 @@ func parseMergeRequestEvent(payload []byte) (*models.PREvent, error) {
 
 	updatedAt, _ := time.Parse("2006-01-02 15:04:05 UTC", raw.ObjectAttributes.UpdatedAt)
 
+	// Prefer git_http_url, fall back to http_url_to_repo
+	cloneURL := raw.Project.GitHTTPURL
+	if cloneURL == "" {
+		cloneURL = raw.Project.HTTPURLToRepo
+	}
+
 	return &models.PREvent{
 		Provider: models.VCSProviderGitLab,
 		Type:     models.EventTypePullRequest,
@@ -82,7 +89,7 @@ func parseMergeRequestEvent(payload []byte) (*models.PREvent, error) {
 			Owner:    owner,
 			Name:     name,
 			FullName: raw.Project.PathWithNamespace,
-			CloneURL: raw.Project.GitHTTPURL,
+			CloneURL: cloneURL,
 			HTMLURL:  raw.Project.WebURL,
 		},
 		PR: models.PRInfo{
@@ -140,6 +147,7 @@ func parseNoteEvent(payload []byte) (*models.PREvent, error) {
 			PathWithNamespace string `json:"path_with_namespace"`
 			WebURL            string `json:"web_url"`
 			GitHTTPURL        string `json:"git_http_url"`
+			HTTPURLToRepo     string `json:"http_url_to_repo"`
 			Namespace         string `json:"namespace"`
 		} `json:"project"`
 		User struct {
@@ -167,6 +175,12 @@ func parseNoteEvent(payload []byte) (*models.PREvent, error) {
 	// Normalize state
 	state := normalizeGitLabState(raw.MergeRequest.State)
 
+	// Prefer git_http_url, fall back to http_url_to_repo
+	cloneURL := raw.Project.GitHTTPURL
+	if cloneURL == "" {
+		cloneURL = raw.Project.HTTPURLToRepo
+	}
+
 	return &models.PREvent{
 		Provider: models.VCSProviderGitLab,
 		Type:     models.EventTypeIssueComment,
@@ -175,7 +189,7 @@ func parseNoteEvent(payload []byte) (*models.PREvent, error) {
 			Owner:    owner,
 			Name:     name,
 			FullName: raw.Project.PathWithNamespace,
-			CloneURL: raw.Project.GitHTTPURL,
+			CloneURL: cloneURL,
 			HTMLURL:  raw.Project.WebURL,
 		},
 		PR: models.PRInfo{
@@ -187,11 +201,6 @@ func parseNoteEvent(payload []byte) (*models.PREvent, error) {
 			HeadSHA: raw.MergeRequest.LastCommit.ID,
 			HeadRef: raw.MergeRequest.SourceBranch,
 			BaseRef: raw.MergeRequest.TargetBranch,
-			Author: models.UserInfo{
-				Login:     raw.User.Username,
-				ID:        raw.User.ID,
-				AvatarURL: raw.User.AvatarURL,
-			},
 			HTMLURL: raw.MergeRequest.URL,
 		},
 		Comment: &models.Comment{

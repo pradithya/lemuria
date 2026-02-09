@@ -94,8 +94,8 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 				parsed.Deleted = append(parsed.Deleted, app)
 			}
 
-		case models.FileStatusModified:
-			// Modified file - check for added/removed applications within the file
+		case models.FileStatusModified, models.FileStatusRenamed:
+			// Modified or renamed file - check for added/removed applications within the file
 			e.logger.Debug("analyzing modified file for application changes",
 				"file", file.Filename,
 			)
