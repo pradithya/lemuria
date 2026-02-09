@@ -19,6 +19,7 @@ import (
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/github"
+	"github.com/org/lemuria/internal/gitlab"
 	"github.com/org/lemuria/internal/lock"
 	"github.com/org/lemuria/internal/models"
 	"github.com/org/lemuria/internal/webhook"
@@ -26,15 +27,20 @@ import (
 
 // Server is the main HTTP server for Lemuria.
 type Server struct {
-	config         *config.Config
-	router         *chi.Mux
-	httpServer     *http.Server
-	logger         *slog.Logger
-	webhookHandler *webhook.Handler
-	githubClient   *github.Client
-	argoClient     *argocd.Client
-	lockManager    lock.Manager
-	cmdExecutor    *commands.Executor
+	config     *config.Config
+	router     *chi.Mux
+	httpServer *http.Server
+	logger     *slog.Logger
+
+	// VCS providers and their handlers
+	githubClient         *github.Client
+	gitlabClient         *gitlab.Client
+	githubWebhookHandler *webhook.GitHubHandler // GitHub webhook handler
+	gitlabWebhookHandler *webhook.GitLabHandler // GitLab webhook handler
+	argoClient           *argocd.Client
+	lockManager          lock.Manager
+	githubExecutor       *commands.Executor // executor using GitHub VCS client
+	gitlabExecutor       *commands.Executor // executor using GitLab VCS client
 
 	// Auth components (nil if auth disabled)
 	redisClient         *redis.Client
@@ -42,18 +48,13 @@ type Server struct {
 	roleResolver        *auth.ConfigRoleResolver
 	authMiddleware      *auth.Middleware
 	githubOAuthProvider *auth.GitHubProvider
+	gitlabOAuthProvider *auth.GitLabProvider
 	oidcProvider        *auth.OIDCProvider
 	basicAuthProvider   *auth.BasicProvider
 }
 
 // New creates a new Server instance.
 func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
-	// Initialize GitHub client
-	ghClient, err := github.NewClient(cfg.GitHub)
-	if err != nil {
-		return nil, fmt.Errorf("creating GitHub client: %w", err)
-	}
-
 	// Initialize Argo CD client
 	argoClient, err := argocd.NewClient(cfg.ArgoCD)
 	if err != nil {
@@ -66,21 +67,36 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("creating lock manager: %w", err)
 	}
 
-	// Initialize command executor
-	cmdExecutor := commands.NewExecutor(ghClient, argoClient, lockMgr, cfg, logger)
-
-	// Initialize webhook handler
-	webhookHandler := webhook.NewHandler(cfg, ghClient, cmdExecutor, logger)
-
 	s := &Server{
-		config:         cfg,
-		router:         chi.NewRouter(),
-		logger:         logger,
-		webhookHandler: webhookHandler,
-		githubClient:   ghClient,
-		argoClient:     argoClient,
-		lockManager:    lockMgr,
-		cmdExecutor:    cmdExecutor,
+		config:      cfg,
+		router:      chi.NewRouter(),
+		logger:      logger,
+		argoClient:  argoClient,
+		lockManager: lockMgr,
+	}
+
+	// Initialize GitHub provider if configured
+	if cfg.HasGitHub() {
+		ghClient, err := github.NewClient(cfg.GitHub)
+		if err != nil {
+			return nil, fmt.Errorf("creating GitHub client: %w", err)
+		}
+		s.githubClient = ghClient
+		s.githubExecutor = commands.NewExecutor(ghClient, argoClient, lockMgr, cfg, logger)
+		s.githubWebhookHandler = webhook.NewGitHubHandler(cfg, ghClient, s.githubExecutor, logger)
+		logger.Info("GitHub provider initialized")
+	}
+
+	// Initialize GitLab provider if configured
+	if cfg.HasGitLab() {
+		glClient, err := gitlab.NewClient(cfg.GitLab)
+		if err != nil {
+			return nil, fmt.Errorf("creating GitLab client: %w", err)
+		}
+		s.gitlabClient = glClient
+		s.gitlabExecutor = commands.NewExecutor(glClient, argoClient, lockMgr, cfg, logger)
+		s.gitlabWebhookHandler = webhook.NewGitLabHandler(cfg, glClient, s.gitlabExecutor, logger)
+		logger.Info("GitLab provider initialized")
 	}
 
 	// Initialize auth components if enabled
@@ -153,6 +169,12 @@ func (s *Server) setupAuth(cfg *config.Config) error {
 	if cfg.HasGitHubOAuth() {
 		s.githubOAuthProvider = auth.NewGitHubProvider(cfg.Auth.GitHub, cfg.Server.BaseURL)
 		s.logger.Info("GitHub OAuth provider initialized")
+	}
+
+	// Initialize GitLab OAuth provider if configured
+	if cfg.HasGitLabOAuth() {
+		s.gitlabOAuthProvider = auth.NewGitLabProvider(cfg.Auth.GitLab, cfg.Server.BaseURL)
+		s.logger.Info("GitLab OAuth provider initialized")
 	}
 
 	// Initialize OIDC provider if configured

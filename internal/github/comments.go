@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/google/go-github/v60/github"
+
+	"github.com/org/lemuria/internal/models"
 )
 
 const (
@@ -145,7 +147,7 @@ func (c *Client) AddReaction(ctx context.Context, owner, repo string, commentID 
 }
 
 // PostComment creates a new comment on a PR (never updates existing).
-func (c *Client) PostComment(ctx context.Context, owner, repo string, number int, body string, isPlan bool) (*github.IssueComment, error) {
+func (c *Client) PostComment(ctx context.Context, owner, repo string, number int, body string, isPlan bool) (*models.CommentResult, error) {
 	// Add markers to body
 	markers := CommentMarker
 	if isPlan {
@@ -153,7 +155,14 @@ func (c *Client) PostComment(ctx context.Context, owner, repo string, number int
 	}
 	markedBody := markers + "\n" + body
 
-	return c.CreateComment(ctx, owner, repo, number, markedBody)
+	comment, err := c.CreateComment(ctx, owner, repo, number, markedBody)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.CommentResult{
+		ID: comment.GetID(),
+	}, nil
 }
 
 // InvalidatePlanComments marks all existing plan comments on a PR as stale.

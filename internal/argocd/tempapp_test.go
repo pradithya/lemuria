@@ -51,7 +51,7 @@ func TestBuildTempAppSpec_WithGitSourcedOverride(t *testing.T) {
 		OriginalAppName: "my-app",
 		TargetBranch:    "feature/update-values",
 		PRNumber:        42,
-		PRRepo:          "org/repo",
+		PRRepo:          "https://github.com/org/repo",
 		Suffix:          "head",
 	}
 
@@ -144,7 +144,7 @@ func TestBuildTempAppSpec_WithLiveSpec(t *testing.T) {
 		OriginalAppName: "my-app",
 		TargetBranch:    "feature/xyz",
 		PRNumber:        10,
-		PRRepo:          "org/repo",
+		PRRepo:          "https://github.com/org/repo",
 		Suffix:          "base",
 	}
 

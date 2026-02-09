@@ -80,16 +80,32 @@ func LoadRepoConfig(data []byte) (*RepoConfig, error) {
 func validate(cfg *Config) error {
 	var errs []string
 
-	if cfg.GitHub.WebhookSecret == "" {
-		errs = append(errs, "github.webhook_secret is required")
+	// Detect whether any GitHub or GitLab fields are set (partial or full config).
+	githubPartial := cfg.GitHub.AppID != 0 || cfg.GitHub.AppPrivateKey != "" || cfg.GitHub.WebhookSecret != ""
+	gitlabPartial := cfg.GitLab.Token != "" || cfg.GitLab.WebhookSecret != "" || cfg.GitLab.URL != ""
+
+	if !githubPartial && !gitlabPartial {
+		errs = append(errs, "at least one VCS provider (github or gitlab) must be configured")
 	}
 
-	if cfg.GitHub.AppID == 0 {
-		errs = append(errs, "github.app_id is required")
+	// Validate GitHub config if any GitHub fields are set
+	if githubPartial {
+		if cfg.GitHub.WebhookSecret == "" {
+			errs = append(errs, "github.webhook_secret is required when github is configured")
+		}
+		if cfg.GitHub.AppID == 0 {
+			errs = append(errs, "github.app_id is required when github is configured")
+		}
+		if cfg.GitHub.AppPrivateKey == "" {
+			errs = append(errs, "github.app_private_key is required when github is configured")
+		}
 	}
 
-	if cfg.GitHub.AppPrivateKey == "" {
-		errs = append(errs, "github.app_private_key is required")
+	// Validate GitLab config if any GitLab fields are set
+	if gitlabPartial {
+		if cfg.GitLab.Token == "" {
+			errs = append(errs, "gitlab.token is required when gitlab is configured")
+		}
 	}
 
 	if cfg.ArgoCD.ServerURL == "" {

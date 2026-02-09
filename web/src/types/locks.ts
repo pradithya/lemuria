@@ -15,6 +15,8 @@ export interface Lock {
   application: string;
   pr_number: number;
   repo: string;
+  repo_url?: string;
+  provider?: string;
   user: string;
   locked_at: string;
   plan_revision: string;

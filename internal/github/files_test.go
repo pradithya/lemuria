@@ -91,11 +91,11 @@ func TestMatchesPath(t *testing.T) {
 
 func TestFilterFilesByPatterns(t *testing.T) {
 	allFiles := []models.ChangedFile{
-		{Filename: "apps/frontend/deployment.yaml", Status: "modified"},
-		{Filename: "apps/backend/deployment.yaml", Status: "modified"},
-		{Filename: "apps/backend/service.yaml", Status: "added"},
-		{Filename: "README.md", Status: "modified"},
-		{Filename: "base/kustomization.yaml", Status: "modified"},
+		{Filename: "apps/frontend/deployment.yaml", Status: models.FileStatusModified},
+		{Filename: "apps/backend/deployment.yaml", Status: models.FileStatusModified},
+		{Filename: "apps/backend/service.yaml", Status: models.FileStatusAdded},
+		{Filename: "README.md", Status: models.FileStatusModified},
+		{Filename: "base/kustomization.yaml", Status: models.FileStatusModified},
 	}
 
 	tests := []struct {

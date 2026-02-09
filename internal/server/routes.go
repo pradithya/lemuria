@@ -18,8 +18,13 @@ func (s *Server) setupRoutes() {
 	s.router.Get("/healthz", s.handleHealth)
 	s.router.Get("/ready", s.handleReady)
 
-	// GitHub webhook endpoint (validated by signature, not session)
-	s.router.Post("/webhook", s.webhookHandler.Handle)
+	// Webhook endpoints (validated by signature/token, not session)
+	if s.githubWebhookHandler != nil {
+		s.router.Post("/webhook/github", s.githubWebhookHandler.Handle)
+	}
+	if s.gitlabWebhookHandler != nil {
+		s.router.Post("/webhook/gitlab", s.gitlabWebhookHandler.Handle)
+	}
 
 	// Auth endpoints
 	s.router.Route("/auth", func(r chi.Router) {
@@ -32,6 +37,12 @@ func (s *Server) setupRoutes() {
 			if s.githubOAuthProvider != nil {
 				r.Get("/github/login", s.handleGitHubLogin)
 				r.Get("/github/callback", s.handleGitHubCallback)
+			}
+
+			// GitLab OAuth
+			if s.gitlabOAuthProvider != nil {
+				r.Get("/gitlab/login", s.handleGitLabLogin)
+				r.Get("/gitlab/callback", s.handleGitLabCallback)
 			}
 
 			// OIDC
@@ -181,6 +192,14 @@ func (s *Server) handleAuthProviders(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	if s.gitlabOAuthProvider != nil {
+		providers = append(providers, models.AuthProvider{
+			ID:       s.gitlabOAuthProvider.Name(),
+			Name:     s.gitlabOAuthProvider.DisplayName(),
+			LoginURL: "/auth/gitlab/login",
+		})
+	}
+
 	if s.oidcProvider != nil {
 		providers = append(providers, models.AuthProvider{
 			ID:       s.oidcProvider.Name(),
@@ -267,6 +286,79 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Info("user logged in via GitHub", "user", user.Login, "email", user.Email)
+
+	// Redirect to original URL
+	redirectURL := state.RedirectURL
+	if redirectURL == "" {
+		redirectURL = "/"
+	}
+	http.Redirect(w, r, redirectURL, http.StatusFound)
+}
+
+// handleGitLabLogin initiates GitLab OAuth flow.
+func (s *Server) handleGitLabLogin(w http.ResponseWriter, r *http.Request) {
+	redirectURL := r.URL.Query().Get("redirect")
+	if redirectURL == "" {
+		redirectURL = "/"
+	}
+
+	state, err := s.sessionStore.CreateState(r.Context(), redirectURL)
+	if err != nil {
+		s.logger.Error("failed to create OAuth state", "error", err)
+		respondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "failed to initiate login",
+		})
+		return
+	}
+
+	authURL := s.gitlabOAuthProvider.AuthURL(state.State)
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// handleGitLabCallback handles GitLab OAuth callback.
+func (s *Server) handleGitLabCallback(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	stateParam := r.URL.Query().Get("state")
+
+	if code == "" {
+		s.logger.Error("GitLab callback missing code")
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "missing authorization code",
+		})
+		return
+	}
+
+	// Validate state
+	state, err := s.sessionStore.ValidateState(r.Context(), stateParam)
+	if err != nil {
+		s.logger.Error("invalid OAuth state", "error", err)
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "invalid or expired state",
+		})
+		return
+	}
+
+	// Exchange code for user
+	user, err := s.gitlabOAuthProvider.Exchange(r.Context(), code)
+	if err != nil {
+		s.logger.Error("GitLab OAuth exchange failed", "error", err)
+		respondJSON(w, http.StatusUnauthorized, map[string]string{
+			"error": "authentication failed: " + err.Error(),
+		})
+		return
+	}
+
+	// Create session
+	_, err = s.authMiddleware.CreateSession(r.Context(), w, user)
+	if err != nil {
+		s.logger.Error("failed to create session", "error", err)
+		respondJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "failed to create session",
+		})
+		return
+	}
+
+	s.logger.Info("user logged in via GitLab", "user", user.Login, "email", user.Email)
 
 	// Redirect to original URL
 	redirectURL := state.RedirectURL

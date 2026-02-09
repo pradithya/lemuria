@@ -13,8 +13,8 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
-// Handler processes GitHub webhook events.
-type Handler struct {
+// GitHubHandler processes GitHub webhook events.
+type GitHubHandler struct {
 	config       *config.Config
 	githubClient *github.Client
 	cmdExecutor  *commands.Executor
@@ -22,9 +22,9 @@ type Handler struct {
 	validator    *Validator
 }
 
-// NewHandler creates a new webhook handler.
-func NewHandler(cfg *config.Config, gh *github.Client, executor *commands.Executor, logger *slog.Logger) *Handler {
-	return &Handler{
+// NewGitHubHandler creates a new GitHub webhook handler.
+func NewGitHubHandler(cfg *config.Config, gh *github.Client, executor *commands.Executor, logger *slog.Logger) *GitHubHandler {
+	return &GitHubHandler{
 		config:       cfg,
 		githubClient: gh,
 		cmdExecutor:  executor,
@@ -34,7 +34,7 @@ func NewHandler(cfg *config.Config, gh *github.Client, executor *commands.Execut
 }
 
 // Handle processes incoming GitHub webhook requests.
-func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
+func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Read request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -61,7 +61,7 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 	)
 
 	// Parse and handle the event
-	event, err := ParseEvent(eventType, body)
+	event, err := ParseGitHubEvent(eventType, body)
 	if err != nil {
 		h.logger.Error("failed to parse event", "error", err)
 		http.Error(w, "failed to parse event", http.StatusBadRequest)
@@ -97,7 +97,7 @@ func (h *Handler) Handle(w http.ResponseWriter, r *http.Request) {
 }
 
 // processEvent handles the webhook event based on its type.
-func (h *Handler) processEvent(ctx context.Context, event *models.PREvent) {
+func (h *GitHubHandler) processEvent(ctx context.Context, event *models.PREvent) {
 	h.logger.Info("processing event",
 		"type", event.Type,
 		"action", event.Action,
@@ -125,7 +125,7 @@ func (h *Handler) processEvent(ctx context.Context, event *models.PREvent) {
 }
 
 // handlePRClosed releases all locks held by the closed PR.
-func (h *Handler) handlePRClosed(ctx context.Context, event *models.PREvent) {
+func (h *GitHubHandler) handlePRClosed(ctx context.Context, event *models.PREvent) {
 	h.logger.Info("PR closed, releasing locks",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
@@ -142,7 +142,7 @@ func (h *Handler) handlePRClosed(ctx context.Context, event *models.PREvent) {
 }
 
 // handleAutoplan runs plan for affected applications.
-func (h *Handler) handleAutoplan(ctx context.Context, event *models.PREvent) {
+func (h *GitHubHandler) handleAutoplan(ctx context.Context, event *models.PREvent) {
 	h.logger.Info("running autoplan",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
@@ -158,9 +158,9 @@ func (h *Handler) handleAutoplan(ctx context.Context, event *models.PREvent) {
 }
 
 // handleComment parses and executes commands from PR comments.
-func (h *Handler) handleComment(ctx context.Context, event *models.PREvent) {
+func (h *GitHubHandler) handleComment(ctx context.Context, event *models.PREvent) {
 	// Only handle new comments
-	if event.Action != "created" {
+	if event.Action != models.PRActionCreated {
 		return
 	}
 
@@ -201,8 +201,8 @@ func (h *Handler) handleComment(ctx context.Context, event *models.PREvent) {
 }
 
 // enrichPRInfo fetches full PR details from GitHub and populates missing fields.
-func (h *Handler) enrichPRInfo(ctx context.Context, event *models.PREvent) error {
-	pr, err := h.githubClient.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+func (h *GitHubHandler) enrichPRInfo(ctx context.Context, event *models.PREvent) error {
+	pr, err := h.githubClient.GetPRRaw(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 	if err != nil {
 		return err
 	}
@@ -214,7 +214,7 @@ func (h *Handler) enrichPRInfo(ctx context.Context, event *models.PREvent) error
 	if pr.Base != nil {
 		event.PR.BaseRef = pr.Base.GetRef()
 	}
-	event.PR.State = pr.GetState()
+	event.PR.State = models.PRState(pr.GetState())
 	event.PR.Title = pr.GetTitle()
 	event.PR.Draft = pr.GetDraft()
 	event.PR.Merged = pr.GetMerged()

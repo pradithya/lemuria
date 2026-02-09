@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-github/v60/github"
 
 	"github.com/org/lemuria/internal/config"
+	"github.com/org/lemuria/internal/models"
 )
 
 // Client wraps the GitHub API client with Lemuria-specific functionality.
@@ -105,8 +106,29 @@ func (c *Client) GetRepoConfig(ctx context.Context, owner, repo, ref string) ([]
 	return []byte(decoded), nil
 }
 
-// GetPR fetches pull request details.
-func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error) {
+// GetPR fetches pull request details and returns a provider-agnostic PullRequestDetail.
+func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*models.PullRequestDetail, error) {
+	pr, err := c.GetPRRaw(ctx, owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.PullRequestDetail{
+		Number:    pr.GetNumber(),
+		Title:     pr.GetTitle(),
+		State:     models.PRState(pr.GetState()),
+		Draft:     pr.GetDraft(),
+		Merged:    pr.GetMerged(),
+		Mergeable: pr.GetMergeable(),
+		HeadSHA:   pr.GetHead().GetSHA(),
+		HeadRef:   pr.GetHead().GetRef(),
+		BaseRef:   pr.GetBase().GetRef(),
+	}, nil
+}
+
+// GetPRRaw fetches the raw GitHub PullRequest object.
+// Used by the webhook handler to enrich PR info with GitHub-specific fields.
+func (c *Client) GetPRRaw(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error) {
 	client, err := c.GetInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err

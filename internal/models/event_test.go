@@ -7,14 +7,14 @@ import (
 func TestPREventIsPROpen(t *testing.T) {
 	tests := []struct {
 		name   string
-		state  string
+		state  PRState
 		merged bool
 		want   bool
 	}{
-		{"open and not merged", "open", false, true},
-		{"open but merged", "open", true, false},
-		{"closed and not merged", "closed", false, false},
-		{"closed and merged", "closed", true, false},
+		{"open and not merged", PRStateOpen, false, true},
+		{"open but merged", PRStateOpen, true, false},
+		{"closed and not merged", PRStateClosed, false, false},
+		{"closed and merged", PRStateClosed, true, false},
 	}
 
 	for _, tt := range tests {
@@ -50,13 +50,13 @@ func TestPREventIsPRMerged(t *testing.T) {
 func TestPREventIsPRClosed(t *testing.T) {
 	tests := []struct {
 		name   string
-		state  string
+		state  PRState
 		merged bool
 		want   bool
 	}{
-		{"closed not merged", "closed", false, true},
-		{"closed and merged", "closed", true, false},
-		{"open", "open", false, false},
+		{"closed not merged", PRStateClosed, false, true},
+		{"closed and merged", PRStateClosed, true, false},
+		{"open", PRStateOpen, false, false},
 	}
 
 	for _, tt := range tests {
@@ -73,15 +73,15 @@ func TestPREventShouldAutoplan(t *testing.T) {
 	tests := []struct {
 		name      string
 		eventType EventType
-		action    string
+		action    PRAction
 		want      bool
 	}{
-		{"PR opened", EventTypePullRequest, "opened", true},
-		{"PR synchronize", EventTypePullRequest, "synchronize", true},
-		{"PR closed", EventTypePullRequest, "closed", false},
+		{"PR opened", EventTypePullRequest, PRActionOpened, true},
+		{"PR synchronize", EventTypePullRequest, PRActionSynchronize, true},
+		{"PR closed", EventTypePullRequest, PRActionClosed, false},
 		{"PR edited", EventTypePullRequest, "edited", false},
-		{"comment event", EventTypeIssueComment, "created", false},
-		{"review event", EventTypePullRequestReview, "submitted", false},
+		{"comment event", EventTypeIssueComment, PRActionCreated, false},
+		{"review event", EventTypePullRequestReview, PRActionSubmitted, false},
 	}
 
 	for _, tt := range tests {
@@ -98,13 +98,13 @@ func TestPREventShouldUnlockAll(t *testing.T) {
 	tests := []struct {
 		name      string
 		eventType EventType
-		action    string
+		action    PRAction
 		want      bool
 	}{
-		{"PR closed", EventTypePullRequest, "closed", true},
-		{"PR opened", EventTypePullRequest, "opened", false},
-		{"PR synchronize", EventTypePullRequest, "synchronize", false},
-		{"comment event", EventTypeIssueComment, "created", false},
+		{"PR closed", EventTypePullRequest, PRActionClosed, true},
+		{"PR opened", EventTypePullRequest, PRActionOpened, false},
+		{"PR synchronize", EventTypePullRequest, PRActionSynchronize, false},
+		{"comment event", EventTypeIssueComment, PRActionCreated, false},
 	}
 
 	for _, tt := range tests {

@@ -81,6 +81,8 @@ func (m *RedisManager) Lock(ctx context.Context, req models.LockRequest) (*model
 		Application: req.Application,
 		PRNumber:    req.PRNumber,
 		Repo:        req.Repo,
+		RepoURL:     req.RepoURL,
+		Provider:    req.Provider,
 		User:        req.User,
 		LockedAt:    time.Now(),
 	}

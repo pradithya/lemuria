@@ -36,7 +36,7 @@ type TempAppConfig struct {
 	OriginalAppName string                // Name of the original application
 	TargetBranch    string                // Branch to point to (e.g., "main" or "feature/xyz")
 	PRNumber        int                   // For naming and labeling
-	PRRepo          string                // Repository (e.g., "owner/repo") to identify which sources to update
+	PRRepo          string                // Full repository URL (e.g., "https://github.com/owner/repo") to identify which sources to update
 	Suffix          string                // "base" or "head"
 	AppSpecOverride *v1alpha1.Application // If set, use this spec instead of fetching from live ArgoCD
 }
@@ -201,7 +201,7 @@ func buildTempAppSpec(original *v1alpha1.Application, tempName string, cfg TempA
 	}
 
 	// Update source(s) to point to target branch
-	prRepoNormalized := NormalizeRepoURL("https://github.com/" + cfg.PRRepo)
+	prRepoNormalized := NormalizeRepoURL(cfg.PRRepo)
 
 	// Handle single source
 	if tempApp.Spec.Source != nil {
