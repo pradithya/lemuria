@@ -15,6 +15,7 @@
 package argocd
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -82,7 +83,7 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 }
 
 // get performs a GET request and decodes the JSON response.
-func (c *Client) get(ctx context.Context, path string, query url.Values, result interface{}) error {
+func (c *Client) get(ctx context.Context, path string, query url.Values, result any) error {
 	resp, err := c.request(ctx, http.MethodGet, path, query, nil)
 	if err != nil {
 		return err
@@ -104,14 +105,14 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, result 
 }
 
 // post performs a POST request with JSON body.
-func (c *Client) post(ctx context.Context, path string, query url.Values, payload, result interface{}) error {
+func (c *Client) post(ctx context.Context, path string, query url.Values, payload, result any) error {
 	var body io.Reader
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
 			return fmt.Errorf("encoding payload: %w", err)
 		}
-		body = strings.NewReader(string(data))
+		body = bytes.NewReader(data)
 	}
 
 	resp, err := c.request(ctx, http.MethodPost, path, query, body)
@@ -135,14 +136,14 @@ func (c *Client) post(ctx context.Context, path string, query url.Values, payloa
 }
 
 // put performs a PUT request with JSON body.
-func (c *Client) put(ctx context.Context, path string, query url.Values, payload, result interface{}) error {
+func (c *Client) put(ctx context.Context, path string, query url.Values, payload, result any) error {
 	var body io.Reader
 	if payload != nil {
 		data, err := json.Marshal(payload)
 		if err != nil {
 			return fmt.Errorf("encoding payload: %w", err)
 		}
-		body = strings.NewReader(string(data))
+		body = bytes.NewReader(data)
 	}
 
 	resp, err := c.request(ctx, http.MethodPut, path, query, body)

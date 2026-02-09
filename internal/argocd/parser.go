@@ -16,6 +16,7 @@ package argocd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -37,7 +38,7 @@ func ParseApplicationsFromYAML(content []byte, sourceFile string) ([]models.Appl
 	for {
 		var rawDoc any
 		err := decoder.Decode(&rawDoc)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -75,7 +76,7 @@ func ParseRawApplicationFromYAML(content []byte, appName string) (*v1alpha1.Appl
 	for {
 		var rawDoc any
 		err := decoder.Decode(&rawDoc)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

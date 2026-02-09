@@ -134,7 +134,7 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 
 // handleStatus returns the current server status.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"status":  "running",
 		"version": "0.1.0",
 	})
@@ -151,7 +151,7 @@ func (s *Server) handleListLocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"locks": locks,
 		"count": len(locks),
 	})
@@ -182,7 +182,7 @@ func (s *Server) handleDeleteLock(w http.ResponseWriter, r *http.Request) {
 }
 
 // respondJSON writes a JSON response.
-func respondJSON(w http.ResponseWriter, status int, data interface{}) {
+func respondJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
@@ -230,7 +230,7 @@ func (s *Server) handleAuthProviders(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"providers":    providers,
 		"auth_enabled": s.authMiddleware != nil,
 	})
@@ -502,7 +502,7 @@ func (s *Server) handleBasicLogin(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("user logged in via basic auth", "user", user.Login)
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"status": "authenticated",
 		"user":   user,
 	})
@@ -534,7 +534,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"user": user,
 	})
 }
@@ -563,7 +563,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 		users = append(users, user)
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"users": users,
 		"count": len(users),
 	})

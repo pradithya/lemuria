@@ -122,7 +122,7 @@ func TestOIDCProvider_buildUser(t *testing.T) {
 	tests := []struct {
 		name          string
 		subject       string
-		claims        map[string]interface{}
+		claims        map[string]any
 		usernameClaim string
 		emailClaim    string
 		groupsClaim   string
@@ -136,7 +136,7 @@ func TestOIDCProvider_buildUser(t *testing.T) {
 			subject:       "12345",
 			usernameClaim: "preferred_username",
 			emailClaim:    "email",
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"preferred_username": "johndoe",
 				"email":              "john@example.com",
 				"name":               "John Doe",
@@ -150,7 +150,7 @@ func TestOIDCProvider_buildUser(t *testing.T) {
 			subject:       "user-sub-123",
 			usernameClaim: "preferred_username",
 			emailClaim:    "email",
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"sub":   "user-sub-123",
 				"email": "john@example.com",
 			},
@@ -162,7 +162,7 @@ func TestOIDCProvider_buildUser(t *testing.T) {
 			subject:       "12345",
 			usernameClaim: "preferred_username",
 			emailClaim:    "email",
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"preferred_username": "johndoe",
 				"given_name":         "John",
 				"family_name":        "Doe",
@@ -176,9 +176,9 @@ func TestOIDCProvider_buildUser(t *testing.T) {
 			usernameClaim: "preferred_username",
 			emailClaim:    "email",
 			groupsClaim:   "groups",
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"preferred_username": "johndoe",
-				"groups":             []interface{}{"admin", "developers"},
+				"groups":             []any{"admin", "developers"},
 			},
 			wantLogin:  "johndoe",
 			wantGroups: []string{"admin", "developers"},
@@ -188,7 +188,7 @@ func TestOIDCProvider_buildUser(t *testing.T) {
 			subject:       "12345",
 			usernameClaim: "login",
 			emailClaim:    "email",
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"login": "custom_username",
 				"email": "custom@example.com",
 			},
@@ -200,7 +200,7 @@ func TestOIDCProvider_buildUser(t *testing.T) {
 			subject:       "12345",
 			usernameClaim: "preferred_username",
 			emailClaim:    "mail",
-			claims: map[string]interface{}{
+			claims: map[string]any{
 				"preferred_username": "johndoe",
 				"mail":               "john@custom.com",
 			},

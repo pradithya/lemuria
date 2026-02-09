@@ -24,8 +24,8 @@ func TestDefaultConfig(t *testing.T) {
 
 	tests := []struct {
 		name string
-		got  interface{}
-		want interface{}
+		got  any
+		want any
 	}{
 		{"server port", cfg.Server.Port, 4141},
 		{"server host", cfg.Server.Host, "0.0.0.0"},
