@@ -140,7 +140,7 @@ func TestGitHubHandlerHandle(t *testing.T) {
 			wantJSON:   "accepted",
 		},
 		{
-			name:       "pull_request_review accepted",
+			name: "pull_request_review accepted",
 			body: `{
 				"action": "submitted",
 				"review": {

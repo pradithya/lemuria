@@ -66,15 +66,15 @@ func TestGitLabHandlerHandle(t *testing.T) {
 	}`
 
 	tests := []struct {
-		name         string
+		name          string
 		webhookSecret string
-		token        string
-		body         string
-		eventType    string
-		allowedRepos []string
-		autoplan     bool
-		wantStatus   int
-		wantJSON     string
+		token         string
+		body          string
+		eventType     string
+		allowedRepos  []string
+		autoplan      bool
+		wantStatus    int
+		wantJSON      string
 	}{
 		{
 			name:          "invalid token returns 401",
