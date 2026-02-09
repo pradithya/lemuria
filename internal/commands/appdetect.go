@@ -304,16 +304,12 @@ type AppSetModification struct {
 
 // detectApplicationSetChanges analyzes PR files to detect ApplicationSet CR changes
 // and previews the resulting application additions/removals using the ArgoCD Generate API.
-func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *models.PREvent) (*ParsedApplicationSetChanges, error) {
+// It accepts the already-fetched changed files to avoid redundant VCS API calls.
+func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *models.PREvent, files []models.ChangedFile) (*ParsedApplicationSetChanges, error) {
 	e.logger.Debug("detecting applicationset changes from PR files",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 	)
-
-	files, err := e.vcs.GetChangedFiles(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
-	if err != nil {
-		return nil, fmt.Errorf("getting changed files: %w", err)
-	}
 
 	result := &ParsedApplicationSetChanges{}
 

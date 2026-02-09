@@ -337,7 +337,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		}
 
 		// Detect new/deleted applications from ApplicationSet CR changes
-		appSetChanges, appSetErr := e.detectApplicationSetChanges(ctx, event)
+		appSetChanges, appSetErr := e.detectApplicationSetChanges(ctx, event, files)
 		if appSetErr != nil {
 			e.logger.Warn("failed to detect applicationset changes from files", "error", appSetErr)
 		} else {
@@ -356,7 +356,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 			}
 
 			for _, app := range appSetChanges.DeletedApps {
-				if !containsAppByName(affected, app.Name) && !containsAppByName(parsed.Deleted, app.Name) {
+				if !containsAppByName(parsed.Deleted, app.Name) {
 					app.IsGeneratedApp = true
 					parsed.Deleted = append(parsed.Deleted, app)
 				}

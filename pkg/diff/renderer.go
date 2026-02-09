@@ -76,7 +76,12 @@ func (r *Renderer) RenderPlan(results []PlanResult, prNumber int) string {
 	// Render ApplicationSet groups
 	for _, appSetName := range appSetOrder {
 		group := appSetGroups[appSetName]
-		sb.WriteString(fmt.Sprintf("### ApplicationSet: `%s` (%d applications)\n\n", appSetName, len(group)))
+		count := len(group)
+		noun := "applications"
+		if count == 1 {
+			noun = "application"
+		}
+		sb.WriteString(fmt.Sprintf("### ApplicationSet: `%s` (%d %s)\n\n", appSetName, count, noun))
 		for _, result := range group {
 			sb.WriteString(r.renderAppPlan(result))
 			sb.WriteString("\n")

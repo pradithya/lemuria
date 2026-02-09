@@ -69,7 +69,10 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 					"app", cmd.Application,
 					"error", appSetErr,
 				)
-				return e.postError(ctx, event, fmt.Errorf("application %s not found: %w", cmd.Application, appErr))
+				return e.postError(ctx, event, fmt.Errorf(
+				"application %s lookup failed (application error: %v, applicationset error: %w)",
+				cmd.Application, appErr, appSetErr,
+			))
 			}
 			apps = expandedApps
 		} else {

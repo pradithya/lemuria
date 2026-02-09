@@ -80,13 +80,21 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 			e.logger.Debug("no direct lock match, trying applicationset name",
 				"app", cmd.Application,
 			)
-			for _, l := range locks {
-				app, err := e.argocd.GetApplication(ctx, l.Application)
-				if err != nil {
-					continue
+			apps, err := e.argocd.GetApplicationsByApplicationSet(ctx, cmd.Application)
+			if err != nil {
+				e.logger.Debug("failed to list applications for applicationset",
+					"applicationset", cmd.Application,
+					"error", err,
+				)
+			} else {
+				appNames := make(map[string]struct{}, len(apps))
+				for _, app := range apps {
+					appNames[app.Name] = struct{}{}
 				}
-				if app.ApplicationSetName == cmd.Application {
-					filtered = append(filtered, l)
+				for _, l := range locks {
+					if _, ok := appNames[l.Application]; ok {
+						filtered = append(filtered, l)
+					}
 				}
 			}
 		}

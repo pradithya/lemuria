@@ -542,7 +542,7 @@ func TestRenderPlanGrouping(t *testing.T) {
 			},
 			contains: []string{
 				"### ApplicationSet: `set-a` (2 applications)",
-				"### ApplicationSet: `set-b` (1 applications)",
+				"### ApplicationSet: `set-b` (1 application)",
 				"### Application: `set-a-1`",
 				"### Application: `set-a-2`",
 				"### Application: `set-b-1`",
