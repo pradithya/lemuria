@@ -45,10 +45,13 @@ func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*mo
 		return nil, fmt.Errorf("getting MR !%d: %w", number, err)
 	}
 
-	state := mr.State
-	merged := state == "merged"
+	rawState := mr.State
+	merged := rawState == "merged"
 	draft := mr.Draft
 	mergeable := mr.DetailedMergeStatus == "mergeable"
+
+	// Normalize GitLab state to canonical values used by the rest of the codebase.
+	state := normalizeState(rawState)
 
 	return &models.PullRequestDetail{
 		Number:    int(mr.IID),
@@ -102,6 +105,19 @@ func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, numbe
 	}
 
 	return nil
+}
+
+// normalizeState normalizes GitLab MR states ("opened", "merged", "closed")
+// to the canonical values ("open", "closed") used by the rest of the codebase.
+func normalizeState(state string) models.PRState {
+	switch state {
+	case "opened":
+		return models.PRStateOpen
+	case "merged":
+		return models.PRStateClosed
+	default:
+		return models.PRState(state)
+	}
 }
 
 // DeleteBranch deletes a branch from the repository.

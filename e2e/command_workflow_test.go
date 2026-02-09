@@ -38,7 +38,7 @@ func newPREvent(repo, owner, repoName string, prNumber int, headSHA, headRef, ba
 	event := &models.PREvent{
 		Provider: models.VCSProviderGitHub,
 		Type:     models.EventTypeIssueComment,
-		Action:   "created",
+		Action:   models.PRActionCreated,
 		Repo: models.RepoInfo{
 			Owner:    owner,
 			Name:     repoName,
@@ -47,7 +47,7 @@ func newPREvent(repo, owner, repoName string, prNumber int, headSHA, headRef, ba
 		},
 		PR: models.PRInfo{
 			Number:  prNumber,
-			State:   "open",
+			State:   models.PRStateOpen,
 			HeadSHA: headSHA,
 			HeadRef: headRef,
 			BaseRef: baseRef,
@@ -217,7 +217,7 @@ func TestE2EPlanDetectsModifiedExternalChartApp(t *testing.T) {
 
 	crFilePath := "bootstrap/" + appName + ".yaml"
 	mockGH.ChangedFiles = []models.ChangedFile{
-		{Filename: crFilePath, Status: "modified"},
+		{Filename: crFilePath, Status: models.FileStatusModified},
 	}
 
 	// Base version (current Helm values)
@@ -725,7 +725,7 @@ spec:
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	mockGH.ChangedFiles = []models.ChangedFile{
-		{Filename: crFilePath, Status: "modified"},
+		{Filename: crFilePath, Status: models.FileStatusModified},
 	}
 	mockGH.FileContents[crFilePath+"@main"] = []byte(baseYAML)
 	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(headYAML)
@@ -1208,7 +1208,7 @@ func TestE2EUnlockAll(t *testing.T) {
 	// Run UnlockAll (simulating PR close)
 	closeEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "")
 	closeEvent.Type = models.EventTypePullRequest
-	closeEvent.Action = "closed"
+	closeEvent.Action = models.PRActionClosed
 
 	err = executor.UnlockAll(testCtx, closeEvent)
 	if err != nil {

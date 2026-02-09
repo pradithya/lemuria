@@ -214,7 +214,7 @@ func TestGitLabEventParsing(t *testing.T) {
 		payload    string
 		wantNil    bool
 		wantType   models.EventType
-		wantAction string
+		wantAction models.PRAction
 		wantPR     int
 		wantRepo   string
 		wantOwner  string
@@ -253,7 +253,7 @@ func TestGitLabEventParsing(t *testing.T) {
 				}
 			}`,
 			wantType:   models.EventTypePullRequest,
-			wantAction: "opened",
+			wantAction: models.PRActionOpened,
 			wantPR:     10,
 			wantRepo:   "mygroup/myproject",
 			wantOwner:  "mygroup",
@@ -283,7 +283,7 @@ func TestGitLabEventParsing(t *testing.T) {
 				"user": {"username": "testuser", "id": 1}
 			}`,
 			wantType:   models.EventTypePullRequest,
-			wantAction: "synchronize",
+			wantAction: models.PRActionSynchronize,
 			wantPR:     11,
 			wantRepo:   "mygroup/myproject",
 			wantOwner:  "mygroup",
@@ -313,7 +313,7 @@ func TestGitLabEventParsing(t *testing.T) {
 				"user": {"username": "testuser", "id": 1}
 			}`,
 			wantType:   models.EventTypePullRequest,
-			wantAction: "closed",
+			wantAction: models.PRActionClosed,
 			wantPR:     12,
 			wantRepo:   "mygroup/myproject",
 			wantOwner:  "mygroup",
@@ -343,7 +343,7 @@ func TestGitLabEventParsing(t *testing.T) {
 				"user": {"username": "testuser", "id": 1}
 			}`,
 			wantType:   models.EventTypePullRequest,
-			wantAction: "closed",
+			wantAction: models.PRActionClosed,
 			wantPR:     13,
 			wantRepo:   "mygroup/myproject",
 			wantOwner:  "mygroup",
@@ -378,7 +378,7 @@ func TestGitLabEventParsing(t *testing.T) {
 				"user": {"username": "commenter", "id": 5}
 			}`,
 			wantType:   models.EventTypeIssueComment,
-			wantAction: "created",
+			wantAction: models.PRActionCreated,
 			wantPR:     20,
 			wantRepo:   "mygroup/myproject",
 			wantOwner:  "mygroup",
@@ -435,7 +435,7 @@ func TestGitLabEventParsing(t *testing.T) {
 				"user": {"username": "testuser", "id": 1}
 			}`,
 			wantType:   models.EventTypePullRequest,
-			wantAction: "opened",
+			wantAction: models.PRActionOpened,
 			wantPR:     14,
 			wantRepo:   "mygroup/myproject",
 			wantOwner:  "mygroup",

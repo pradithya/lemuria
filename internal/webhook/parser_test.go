@@ -47,8 +47,8 @@ func TestParseEvent(t *testing.T) {
 			}`,
 			wantType: models.EventTypePullRequest,
 			check: func(t *testing.T, event *models.PREvent) {
-				if event.Action != "opened" {
-					t.Errorf("Action = %q, want %q", event.Action, "opened")
+				if event.Action != models.PRActionOpened {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionOpened)
 				}
 				if event.PR.Number != 42 {
 					t.Errorf("PR.Number = %d, want %d", event.PR.Number, 42)
@@ -166,8 +166,8 @@ func TestParseEvent(t *testing.T) {
 			}`,
 			wantType: models.EventTypePullRequestReview,
 			check: func(t *testing.T, event *models.PREvent) {
-				if event.Action != "submitted" {
-					t.Errorf("Action = %q, want %q", event.Action, "submitted")
+				if event.Action != models.PRActionSubmitted {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionSubmitted)
 				}
 				if event.PR.Number != 42 {
 					t.Errorf("PR.Number = %d, want %d", event.PR.Number, 42)

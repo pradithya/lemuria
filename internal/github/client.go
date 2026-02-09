@@ -116,7 +116,7 @@ func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*mo
 	return &models.PullRequestDetail{
 		Number:    pr.GetNumber(),
 		Title:     pr.GetTitle(),
-		State:     pr.GetState(),
+		State:     models.PRState(pr.GetState()),
 		Draft:     pr.GetDraft(),
 		Merged:    pr.GetMerged(),
 		Mergeable: pr.GetMergeable(),

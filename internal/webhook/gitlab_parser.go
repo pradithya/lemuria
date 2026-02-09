@@ -70,7 +70,7 @@ func parseMergeRequestEvent(payload []byte) (*models.PREvent, error) {
 	merged := raw.ObjectAttributes.Action == "merge"
 
 	// Extract owner and name from path_with_namespace (e.g., "group/subgroup/project")
-	owner, name := splitPathWithNamespace(raw.ObjectAttributes.Action, raw.Project.PathWithNamespace, raw.Project.Name)
+	owner, name := splitPathWithNamespace(raw.Project.PathWithNamespace, raw.Project.Name)
 
 	updatedAt, _ := time.Parse("2006-01-02 15:04:05 UTC", raw.ObjectAttributes.UpdatedAt)
 
@@ -160,7 +160,7 @@ func parseNoteEvent(payload []byte) (*models.PREvent, error) {
 	}
 
 	// Extract owner and name from path_with_namespace
-	owner, name := splitPathWithNamespace("", raw.Project.PathWithNamespace, raw.Project.Name)
+	owner, name := splitPathWithNamespace(raw.Project.PathWithNamespace, raw.Project.Name)
 
 	createdAt, _ := time.Parse("2006-01-02 15:04:05 UTC", raw.ObjectAttributes.CreatedAt)
 
@@ -170,7 +170,7 @@ func parseNoteEvent(payload []byte) (*models.PREvent, error) {
 	return &models.PREvent{
 		Provider: models.VCSProviderGitLab,
 		Type:     models.EventTypeIssueComment,
-		Action:   "created",
+		Action:   models.PRActionCreated,
 		Repo: models.RepoInfo{
 			Owner:    owner,
 			Name:     name,
@@ -215,40 +215,40 @@ func parseNoteEvent(payload []byte) (*models.PREvent, error) {
 
 // mapGitLabMRAction maps GitLab merge request actions to normalized actions
 // that match the GitHub-style actions used by the rest of the codebase.
-func mapGitLabMRAction(action string) string {
+func mapGitLabMRAction(action string) models.PRAction {
 	switch action {
 	case "open":
-		return "opened"
+		return models.PRActionOpened
 	case "update":
-		return "synchronize"
+		return models.PRActionSynchronize
 	case "close":
-		return "closed"
+		return models.PRActionClosed
 	case "merge":
-		return "closed"
+		return models.PRActionClosed
 	default:
-		return action
+		return models.PRAction(action)
 	}
 }
 
 // normalizeGitLabState normalizes GitLab MR states to the canonical states
 // used throughout the codebase ("open" or "closed").
-func normalizeGitLabState(state string) string {
+func normalizeGitLabState(state string) models.PRState {
 	switch state {
 	case "opened":
-		return "open"
+		return models.PRStateOpen
 	case "merged":
-		return "closed"
+		return models.PRStateClosed
 	case "closed":
-		return "closed"
+		return models.PRStateClosed
 	default:
-		return state
+		return models.PRState(state)
 	}
 }
 
 // splitPathWithNamespace extracts owner (namespace/group) and project name
 // from GitLab's path_with_namespace (e.g., "group/subgroup/project").
 // The project name portion is the last segment; everything before it is the owner.
-func splitPathWithNamespace(_ string, pathWithNamespace, projectName string) (owner, name string) {
+func splitPathWithNamespace(pathWithNamespace, projectName string) (owner, name string) {
 	name = projectName
 	// path_with_namespace = "group/subgroup/project"
 	// owner = "group/subgroup", name = "project"

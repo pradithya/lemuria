@@ -108,7 +108,7 @@ func (m *MockVCSClient) GetPR(_ context.Context, _, _ string, _ int) (*models.Pu
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return &models.PullRequestDetail{
-		State:     "open",
+		State:     models.PRStateOpen,
 		Mergeable: m.PRMergeable,
 	}, nil
 }

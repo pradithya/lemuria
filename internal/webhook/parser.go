@@ -76,7 +76,7 @@ func parsePullRequestEvent(payload []byte) (*models.PREvent, error) {
 	return &models.PREvent{
 		Provider: models.VCSProviderGitHub,
 		Type:     models.EventTypePullRequest,
-		Action:   raw.Action,
+		Action:   models.PRAction(raw.Action),
 		Repo: models.RepoInfo{
 			Owner:    raw.Repository.Owner.Login,
 			Name:     raw.Repository.Name,
@@ -88,7 +88,7 @@ func parsePullRequestEvent(payload []byte) (*models.PREvent, error) {
 			Number:    raw.PullRequest.Number,
 			Title:     raw.PullRequest.Title,
 			Body:      raw.PullRequest.Body,
-			State:     raw.PullRequest.State,
+			State:     models.PRState(raw.PullRequest.State),
 			Draft:     raw.PullRequest.Draft,
 			Merged:    raw.PullRequest.Merged,
 			Mergeable: raw.PullRequest.Mergeable,
@@ -162,7 +162,7 @@ func parseIssueCommentEvent(payload []byte) (*models.PREvent, error) {
 	return &models.PREvent{
 		Provider: models.VCSProviderGitHub,
 		Type:     models.EventTypeIssueComment,
-		Action:   raw.Action,
+		Action:   models.PRAction(raw.Action),
 		Repo: models.RepoInfo{
 			Owner:    raw.Repository.Owner.Login,
 			Name:     raw.Repository.Name,
@@ -247,7 +247,7 @@ func parsePullRequestReviewEvent(payload []byte) (*models.PREvent, error) {
 	return &models.PREvent{
 		Provider: models.VCSProviderGitHub,
 		Type:     models.EventTypePullRequestReview,
-		Action:   raw.Action,
+		Action:   models.PRAction(raw.Action),
 		Repo: models.RepoInfo{
 			Owner:    raw.Repository.Owner.Login,
 			Name:     raw.Repository.Name,
@@ -258,7 +258,7 @@ func parsePullRequestReviewEvent(payload []byte) (*models.PREvent, error) {
 		PR: models.PRInfo{
 			Number:  raw.PullRequest.Number,
 			Title:   raw.PullRequest.Title,
-			State:   raw.PullRequest.State,
+			State:   models.PRState(raw.PullRequest.State),
 			Draft:   raw.PullRequest.Draft,
 			Merged:  raw.PullRequest.Merged,
 			HeadSHA: raw.PullRequest.Head.SHA,

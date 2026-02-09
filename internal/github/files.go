@@ -29,7 +29,7 @@ func (c *Client) GetChangedFiles(ctx context.Context, owner, repo string, number
 		for _, f := range files {
 			allFiles = append(allFiles, models.ChangedFile{
 				Filename:  f.GetFilename(),
-				Status:    f.GetStatus(),
+				Status:    models.FileStatus(f.GetStatus()),
 				Additions: f.GetAdditions(),
 				Deletions: f.GetDeletions(),
 				Changes:   f.GetChanges(),

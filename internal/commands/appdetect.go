@@ -46,7 +46,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 		)
 
 		switch file.Status {
-		case "added":
+		case models.FileStatusAdded:
 			// New file - parse for new applications
 			e.logger.Debug("parsing added file for new applications",
 				"file", file.Filename,
@@ -70,7 +70,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 				parsed.New = append(parsed.New, app)
 			}
 
-		case "removed":
+		case models.FileStatusRemoved:
 			// Deleted file - parse from base branch for deleted applications
 			e.logger.Debug("parsing removed file for deleted applications",
 				"file", file.Filename,
@@ -94,7 +94,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 				parsed.Deleted = append(parsed.Deleted, app)
 			}
 
-		case "modified":
+		case models.FileStatusModified:
 			// Modified file - check for added/removed applications within the file
 			e.logger.Debug("analyzing modified file for application changes",
 				"file", file.Filename,

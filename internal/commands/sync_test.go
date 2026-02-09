@@ -36,7 +36,7 @@ func (m *mockVCSForSync) GetFileContent(context.Context, string, string, string,
 
 func (m *mockVCSForSync) GetPR(context.Context, string, string, int) (*models.PullRequestDetail, error) {
 	return &models.PullRequestDetail{
-		State:     "open",
+		State:     models.PRStateOpen,
 		Mergeable: m.prMergeable,
 	}, nil
 }

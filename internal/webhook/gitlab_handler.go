@@ -167,7 +167,7 @@ func (h *GitLabHandler) handleAutoplan(ctx context.Context, event *models.PREven
 // handleComment parses and executes commands from MR comments.
 func (h *GitLabHandler) handleComment(ctx context.Context, event *models.PREvent) {
 	// Only handle new comments
-	if event.Action != "created" {
+	if event.Action != models.PRActionCreated {
 		return
 	}
 

@@ -160,7 +160,7 @@ func (h *Handler) handleAutoplan(ctx context.Context, event *models.PREvent) {
 // handleComment parses and executes commands from PR comments.
 func (h *Handler) handleComment(ctx context.Context, event *models.PREvent) {
 	// Only handle new comments
-	if event.Action != "created" {
+	if event.Action != models.PRActionCreated {
 		return
 	}
 
@@ -214,7 +214,7 @@ func (h *Handler) enrichPRInfo(ctx context.Context, event *models.PREvent) error
 	if pr.Base != nil {
 		event.PR.BaseRef = pr.Base.GetRef()
 	}
-	event.PR.State = pr.GetState()
+	event.PR.State = models.PRState(pr.GetState())
 	event.PR.Title = pr.GetTitle()
 	event.PR.Draft = pr.GetDraft()
 	event.PR.Merged = pr.GetMerged()

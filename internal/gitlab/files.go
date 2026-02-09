@@ -47,17 +47,17 @@ func (c *Client) GetChangedFiles(ctx context.Context, owner, repo string, number
 }
 
 // diffStatus determines the change status from a GitLab merge request diff.
-func diffStatus(d *gogitlab.MergeRequestDiff) string {
+func diffStatus(d *gogitlab.MergeRequestDiff) models.FileStatus {
 	if d.NewFile {
-		return "added"
+		return models.FileStatusAdded
 	}
 	if d.DeletedFile {
-		return "removed"
+		return models.FileStatusRemoved
 	}
 	if d.RenamedFile {
-		return "renamed"
+		return models.FileStatusRenamed
 	}
-	return "modified"
+	return models.FileStatusModified
 }
 
 // filePath returns the most relevant file path from a diff entry.
