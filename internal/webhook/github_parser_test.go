@@ -7,7 +7,7 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
-func TestParseEvent(t *testing.T) {
+func TestParseGitHubEvent(t *testing.T) {
 	tests := []struct {
 		name      string
 		eventType string
@@ -47,8 +47,8 @@ func TestParseEvent(t *testing.T) {
 			}`,
 			wantType: models.EventTypePullRequest,
 			check: func(t *testing.T, event *models.PREvent) {
-				if event.Action != "opened" {
-					t.Errorf("Action = %q, want %q", event.Action, "opened")
+				if event.Action != models.PRActionOpened {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionOpened)
 				}
 				if event.PR.Number != 42 {
 					t.Errorf("PR.Number = %d, want %d", event.PR.Number, 42)
@@ -166,8 +166,8 @@ func TestParseEvent(t *testing.T) {
 			}`,
 			wantType: models.EventTypePullRequestReview,
 			check: func(t *testing.T, event *models.PREvent) {
-				if event.Action != "submitted" {
-					t.Errorf("Action = %q, want %q", event.Action, "submitted")
+				if event.Action != models.PRActionSubmitted {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionSubmitted)
 				}
 				if event.PR.Number != 42 {
 					t.Errorf("PR.Number = %d, want %d", event.PR.Number, 42)
@@ -178,13 +178,142 @@ func TestParseEvent(t *testing.T) {
 			},
 		},
 		{
+			name:      "pull_request closed",
+			eventType: "pull_request",
+			payload: `{
+				"action": "closed",
+				"number": 50,
+				"pull_request": {
+					"number": 50,
+					"title": "Close PR",
+					"state": "closed",
+					"draft": false,
+					"merged": false,
+					"head": {"sha": "close123", "ref": "close-branch"},
+					"base": {"ref": "main"},
+					"user": {"login": "dev", "id": 1},
+					"html_url": "https://github.com/org/repo/pull/50"
+				},
+				"repository": {
+					"name": "repo",
+					"full_name": "org/repo",
+					"owner": {"login": "org"},
+					"clone_url": "https://github.com/org/repo.git",
+					"html_url": "https://github.com/org/repo"
+				},
+				"sender": {"login": "dev", "id": 1}
+			}`,
+			wantType: models.EventTypePullRequest,
+			check: func(t *testing.T, event *models.PREvent) {
+				if event.Action != models.PRActionClosed {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionClosed)
+				}
+				if event.PR.State != models.PRStateClosed {
+					t.Errorf("PR.State = %q, want %q", event.PR.State, models.PRStateClosed)
+				}
+				if event.PR.Merged {
+					t.Error("PR.Merged = true, want false")
+				}
+			},
+		},
+		{
+			name:      "pull_request merged",
+			eventType: "pull_request",
+			payload: `{
+				"action": "closed",
+				"number": 51,
+				"pull_request": {
+					"number": 51,
+					"title": "Merge PR",
+					"state": "closed",
+					"draft": false,
+					"merged": true,
+					"head": {"sha": "merge123", "ref": "merge-branch"},
+					"base": {"ref": "main"},
+					"user": {"login": "dev", "id": 1},
+					"html_url": "https://github.com/org/repo/pull/51"
+				},
+				"repository": {
+					"name": "repo",
+					"full_name": "org/repo",
+					"owner": {"login": "org"},
+					"clone_url": "https://github.com/org/repo.git",
+					"html_url": "https://github.com/org/repo"
+				},
+				"sender": {"login": "dev", "id": 1}
+			}`,
+			wantType: models.EventTypePullRequest,
+			check: func(t *testing.T, event *models.PREvent) {
+				if event.Action != models.PRActionClosed {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionClosed)
+				}
+				if !event.PR.Merged {
+					t.Error("PR.Merged = false, want true")
+				}
+			},
+		},
+		{
+			name:      "pull_request synchronize",
+			eventType: "pull_request",
+			payload: `{
+				"action": "synchronize",
+				"number": 52,
+				"pull_request": {
+					"number": 52,
+					"title": "Push new commits",
+					"state": "open",
+					"draft": false,
+					"merged": false,
+					"head": {"sha": "sync123", "ref": "sync-branch"},
+					"base": {"ref": "main"},
+					"user": {"login": "dev", "id": 1},
+					"html_url": "https://github.com/org/repo/pull/52"
+				},
+				"repository": {
+					"name": "repo",
+					"full_name": "org/repo",
+					"owner": {"login": "org"},
+					"clone_url": "https://github.com/org/repo.git",
+					"html_url": "https://github.com/org/repo"
+				},
+				"sender": {"login": "dev", "id": 1}
+			}`,
+			wantType: models.EventTypePullRequest,
+			check: func(t *testing.T, event *models.PREvent) {
+				if event.Action != models.PRActionSynchronize {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionSynchronize)
+				}
+				if event.Provider != models.VCSProviderGitHub {
+					t.Errorf("Provider = %q, want %q", event.Provider, models.VCSProviderGitHub)
+				}
+			},
+		},
+		{
+			name:      "issue_comment with invalid JSON",
+			eventType: "issue_comment",
+			payload:   `{invalid`,
+			wantErr:   true,
+		},
+		{
+			name:      "pull_request_review with invalid JSON",
+			eventType: "pull_request_review",
+			payload:   `not json`,
+			wantErr:   true,
+		},
+		{
 			name:      "unhandled event type returns nil",
 			eventType: "push",
 			payload:   `{}`,
 			wantNil:   true,
 		},
 		{
-			name:      "invalid JSON",
+			name:      "unhandled event type (deployment) returns nil",
+			eventType: "deployment",
+			payload:   `{}`,
+			wantNil:   true,
+		},
+		{
+			name:      "invalid JSON for pull_request",
 			eventType: "pull_request",
 			payload:   `{invalid json`,
 			wantErr:   true,
@@ -193,9 +322,9 @@ func TestParseEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			event, err := ParseEvent(tt.eventType, []byte(tt.payload))
+			event, err := ParseGitHubEvent(tt.eventType, []byte(tt.payload))
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseEvent() error = %v, wantErr %v", err, tt.wantErr)
+				t.Errorf("ParseGitHubEvent() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
 			if tt.wantErr {
@@ -203,15 +332,15 @@ func TestParseEvent(t *testing.T) {
 			}
 			if tt.wantNil {
 				if event != nil {
-					t.Errorf("ParseEvent() = %v, want nil", event)
+					t.Errorf("ParseGitHubEvent() = %v, want nil", event)
 				}
 				return
 			}
 			if event == nil {
-				t.Fatal("ParseEvent() returned nil, want non-nil")
+				t.Fatal("ParseGitHubEvent() returned nil, want non-nil")
 			}
 			if event.Type != tt.wantType {
-				t.Errorf("ParseEvent() Type = %v, want %v", event.Type, tt.wantType)
+				t.Errorf("ParseGitHubEvent() Type = %v, want %v", event.Type, tt.wantType)
 			}
 			if tt.check != nil {
 				tt.check(t, event)
@@ -220,7 +349,7 @@ func TestParseEvent(t *testing.T) {
 	}
 }
 
-func TestParseEventFieldMapping(t *testing.T) {
+func TestParseGitHubEventFieldMapping(t *testing.T) {
 	// Verify that fields from a pull_request event are correctly mapped
 	payload := map[string]interface{}{
 		"action": "synchronize",
@@ -249,9 +378,9 @@ func TestParseEventFieldMapping(t *testing.T) {
 	}
 
 	data, _ := json.Marshal(payload)
-	event, err := ParseEvent("pull_request", data)
+	event, err := ParseGitHubEvent("pull_request", data)
 	if err != nil {
-		t.Fatalf("ParseEvent() error = %v", err)
+		t.Fatalf("ParseGitHubEvent() error = %v", err)
 	}
 
 	if event.PR.Draft != true {

@@ -6,7 +6,15 @@ import (
 	"github.com/org/lemuria/internal/config"
 )
 
-// EventType represents the type of GitHub webhook event.
+// VCSProvider identifies the version control system hosting the repository.
+type VCSProvider string
+
+const (
+	VCSProviderGitHub VCSProvider = "github"
+	VCSProviderGitLab VCSProvider = "gitlab"
+)
+
+// EventType represents the type of webhook event.
 type EventType string
 
 const (
@@ -15,15 +23,45 @@ const (
 	EventTypePullRequestReview EventType = "pull_request_review"
 )
 
+// PRAction represents a normalized webhook action.
+type PRAction string
+
+const (
+	PRActionOpened      PRAction = "opened"
+	PRActionSynchronize PRAction = "synchronize"
+	PRActionClosed      PRAction = "closed"
+	PRActionCreated     PRAction = "created"
+	PRActionSubmitted   PRAction = "submitted"
+)
+
+// PRState represents the state of a pull request / merge request.
+type PRState string
+
+const (
+	PRStateOpen   PRState = "open"
+	PRStateClosed PRState = "closed"
+)
+
+// FileStatus represents the change status of a file in a PR.
+type FileStatus string
+
+const (
+	FileStatusAdded    FileStatus = "added"
+	FileStatusRemoved  FileStatus = "removed"
+	FileStatusModified FileStatus = "modified"
+	FileStatusRenamed  FileStatus = "renamed"
+)
+
 // PREvent represents a parsed pull request webhook event.
 type PREvent struct {
-	Type       EventType `json:"type"`
-	Action     string    `json:"action"`
-	Repo       RepoInfo  `json:"repo"`
-	PR         PRInfo    `json:"pr"`
-	Comment    *Comment  `json:"comment,omitempty"`
-	Sender     UserInfo  `json:"sender"`
-	ReceivedAt time.Time `json:"receivedAt"`
+	Provider   VCSProvider `json:"provider"`
+	Type       EventType   `json:"type"`
+	Action     PRAction    `json:"action"`
+	Repo       RepoInfo    `json:"repo"`
+	PR         PRInfo      `json:"pr"`
+	Comment    *Comment    `json:"comment,omitempty"`
+	Sender     UserInfo    `json:"sender"`
+	ReceivedAt time.Time   `json:"receivedAt"`
 
 	// RepoConfig is the parsed .lemuria.yaml for this PR's branch.
 	// Populated lazily on first access; nil means not yet loaded or absent.
@@ -46,7 +84,7 @@ type PRInfo struct {
 	Number    int       `json:"number"`
 	Title     string    `json:"title"`
 	Body      string    `json:"body"`
-	State     string    `json:"state"`
+	State     PRState   `json:"state"`
 	Draft     bool      `json:"draft"`
 	Merged    bool      `json:"merged"`
 	Mergeable *bool     `json:"mergeable,omitempty"`
@@ -75,17 +113,17 @@ type UserInfo struct {
 
 // ChangedFile represents a file changed in a PR.
 type ChangedFile struct {
-	Filename  string `json:"filename"`
-	Status    string `json:"status"` // added, removed, modified, renamed
-	Additions int    `json:"additions"`
-	Deletions int    `json:"deletions"`
-	Changes   int    `json:"changes"`
-	Patch     string `json:"patch,omitempty"`
+	Filename  string     `json:"filename"`
+	Status    FileStatus `json:"status"` // added, removed, modified, renamed
+	Additions int        `json:"additions"`
+	Deletions int        `json:"deletions"`
+	Changes   int        `json:"changes"`
+	Patch     string     `json:"patch,omitempty"`
 }
 
 // IsPROpen returns true if the PR is in an open state.
 func (e *PREvent) IsPROpen() bool {
-	return e.PR.State == "open" && !e.PR.Merged
+	return e.PR.State == PRStateOpen && !e.PR.Merged
 }
 
 // IsPRMerged returns true if the PR has been merged.
@@ -95,7 +133,7 @@ func (e *PREvent) IsPRMerged() bool {
 
 // IsPRClosed returns true if the PR is closed (not merged).
 func (e *PREvent) IsPRClosed() bool {
-	return e.PR.State == "closed" && !e.PR.Merged
+	return e.PR.State == PRStateClosed && !e.PR.Merged
 }
 
 // ShouldAutoplan returns true if this event should trigger autoplan.
@@ -105,7 +143,7 @@ func (e *PREvent) ShouldAutoplan() bool {
 	}
 
 	// Trigger on PR open or synchronize (new commits)
-	return e.Action == "opened" || e.Action == "synchronize"
+	return e.Action == PRActionOpened || e.Action == PRActionSynchronize
 }
 
 // ShouldUnlockAll returns true if this event should release all locks.
@@ -115,5 +153,23 @@ func (e *PREvent) ShouldUnlockAll() bool {
 	}
 
 	// Release locks on PR close or merge
-	return e.Action == "closed"
+	return e.Action == PRActionClosed
+}
+
+// PullRequestDetail holds provider-agnostic pull request details.
+type PullRequestDetail struct {
+	Number    int
+	Title     string
+	State     PRState
+	Draft     bool
+	Merged    bool
+	Mergeable bool
+	HeadSHA   string
+	HeadRef   string
+	BaseRef   string
+}
+
+// CommentResult holds the result of posting a comment.
+type CommentResult struct {
+	ID int64
 }

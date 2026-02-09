@@ -53,13 +53,13 @@ This page describes the complete Lemuria workflow, from PR creation to deploymen
 
 1. Developer creates a branch with Kubernetes manifest changes
 2. Opens a pull request against the main branch
-3. GitHub sends a `pull_request` webhook event to Lemuria
+3. Your VCS provider sends a webhook event to Lemuria (GitHub `pull_request` or GitLab `Merge Request Hook`)
 
 ### Phase 2: Auto-Plan
 
 When `autoplan: true` (default):
 
-1. Lemuria receives the PR webhook and validates the HMAC signature
+1. Lemuria receives the PR/MR webhook and validates the signature (GitHub: HMAC-SHA256, GitLab: secret token)
 2. Returns 200 immediately, then processes the event asynchronously in a goroutine
 3. Identifies affected applications:
    - Matches changed files against `.lemuria.yaml` path patterns
@@ -87,8 +87,8 @@ Team reviews the plan:
 
 Developer comments `lemuria sync`:
 
-1. Lemuria receives the `issue_comment` webhook event
-2. Since issue_comment events lack branch info, Lemuria fetches full PR details from GitHub API
+1. Lemuria receives the comment webhook event (`issue_comment` on GitHub, `Note Hook` on GitLab)
+2. Since comment events may lack branch info, Lemuria fetches full PR/MR details from the VCS API
 3. Parses the command from the comment body
 4. Verifies requirements:
    - PR is approved (if required, checked at server > repo > per-app level)
@@ -436,7 +436,9 @@ These branches are never auto-deleted (even when `delete_source_branch: true`):
 
 ## Webhook Events
 
-Lemuria responds to these GitHub webhook events:
+Lemuria responds to these webhook events:
+
+### GitHub Events (`POST /webhook/github`)
 
 | Event | Action | Lemuria Behavior |
 |-------|--------|------------------|
@@ -446,9 +448,19 @@ Lemuria responds to these GitHub webhook events:
 | `issue_comment` | `created` | Parse and execute command |
 | `pull_request_review` | `submitted` | (used for approval checks) |
 
+### GitLab Events (`POST /webhook/gitlab`)
+
+| Event | Action | Lemuria Behavior |
+|-------|--------|------------------|
+| `Merge Request Hook` | `open` | Auto-plan (if enabled) |
+| `Merge Request Hook` | `update` | Auto-plan (if enabled) |
+| `Merge Request Hook` | `close` | Release all locks for the MR |
+| `Merge Request Hook` | `merge` | Release all locks for the MR |
+| `Note Hook` | (on MR) | Parse and execute command |
+
 ### Async Processing
 
-All webhook events are processed **asynchronously**. Lemuria returns `200 OK` immediately after validating the signature and parsing the event, then spawns a goroutine for actual processing. This prevents GitHub webhook timeouts.
+All webhook events are processed **asynchronously**. Lemuria returns `200 OK` immediately after validating the signature/token and parsing the event, then spawns a goroutine for actual processing. This prevents webhook timeouts.
 
 ### Repository Allowlist
 

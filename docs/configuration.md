@@ -149,6 +149,11 @@ github:
   app_id: 123456
   app_private_key: "/app/secrets/github-app.pem"
 
+gitlab:
+  url: "https://gitlab.com"
+  token: "${GITLAB_TOKEN}"
+  webhook_secret: "${GITLAB_WEBHOOK_SECRET}"
+
 argocd:
   server_url: "https://argocd.example.com"
   token: "${ARGOCD_TOKEN}"
@@ -182,6 +187,12 @@ auth:
     client_secret: "${GITHUB_OAUTH_CLIENT_SECRET}"
     allowed_orgs:
       - "myorg"
+  gitlab:
+    url: "https://gitlab.com"
+    client_id: "${GITLAB_OAUTH_CLIENT_ID}"
+    client_secret: "${GITLAB_OAUTH_CLIENT_SECRET}"
+    allowed_groups:
+      - "mygroup"
   oidc:
     name: "Company SSO"
     issuer_url: "https://sso.example.com"
@@ -234,6 +245,25 @@ github:
 | `webhook_secret` | string | Yes | Webhook HMAC-SHA256 secret |
 | `app_id` | int | Yes | GitHub App ID |
 | `app_private_key` | string | Yes | Path to private key file or PEM content |
+
+---
+
+## GitLab Section
+
+```yaml
+gitlab:
+  url: "https://gitlab.com"
+  token: "${GITLAB_TOKEN}"
+  webhook_secret: "${GITLAB_WEBHOOK_SECRET}"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | `https://gitlab.com` | GitLab instance base URL |
+| `token` | string | Required | Personal or Group Access Token (with `api` scope) |
+| `webhook_secret` | string | - | Webhook secret token (validated via `X-Gitlab-Token` header) |
+
+You can configure both GitHub and GitLab simultaneously. Lemuria will initialize separate webhook handlers and command executors for each provider.
 
 ---
 
@@ -319,7 +349,7 @@ allowed_repos:
   - "myorg/*"                 # All repos in org
 ```
 
-When the list is empty, all repositories where the GitHub App is installed are allowed.
+When the list is empty, all repositories are allowed. For GitLab, use the full `path_with_namespace` (e.g., `group/subgroup/project`).
 
 ---
 
@@ -359,6 +389,19 @@ auth:
     client_secret: "${GITHUB_OAUTH_CLIENT_SECRET}"
     allowed_orgs: ["myorg"]
     allowed_teams: ["myorg/platform-team"]
+```
+
+#### GitLab OAuth
+
+```yaml
+auth:
+  gitlab:
+    url: "https://gitlab.com"
+    client_id: "${GITLAB_OAUTH_CLIENT_ID}"
+    client_secret: "${GITLAB_OAUTH_CLIENT_SECRET}"
+    allowed_groups:
+      - "mygroup"
+      - "mygroup/subgroup"
 ```
 
 #### OIDC
@@ -454,13 +497,28 @@ If an environment variable is not set, the `${VAR_NAME}` string is left as-is.
 
 ## Examples
 
-### Minimal Configuration
+### Minimal Configuration (GitHub)
 
 ```yaml
 github:
   webhook_secret: "secret"
   app_id: 123456
   app_private_key: "/app/key.pem"
+
+argocd:
+  server_url: "https://argocd.example.com"
+  token: "token"
+
+redis:
+  address: "redis:6379"
+```
+
+### Minimal Configuration (GitLab)
+
+```yaml
+gitlab:
+  token: "glpat-xxxx"
+  webhook_secret: "secret"
 
 argocd:
   server_url: "https://argocd.example.com"

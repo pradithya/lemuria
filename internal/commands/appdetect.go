@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/org/lemuria/internal/argocd"
-	"github.com/org/lemuria/internal/github"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/vcs"
 )
 
 // detectApplicationChanges analyzes PR files to detect new, modified, and deleted applications.
@@ -20,7 +20,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 	)
 
 	// Get changed files
-	files, err := e.github.GetChangedFiles(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+	files, err := e.vcs.GetChangedFiles(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 	if err != nil {
 		return nil, fmt.Errorf("getting changed files: %w", err)
 	}
@@ -33,7 +33,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 
 	for _, file := range files {
 		// Only process YAML files
-		if !github.IsYAMLFile(file.Filename) {
+		if !vcs.IsYAMLFile(file.Filename) {
 			e.logger.Debug("skipping non-YAML file",
 				"file", file.Filename,
 			)
@@ -46,7 +46,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 		)
 
 		switch file.Status {
-		case "added":
+		case models.FileStatusAdded:
 			// New file - parse for new applications
 			e.logger.Debug("parsing added file for new applications",
 				"file", file.Filename,
@@ -70,7 +70,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 				parsed.New = append(parsed.New, app)
 			}
 
-		case "removed":
+		case models.FileStatusRemoved:
 			// Deleted file - parse from base branch for deleted applications
 			e.logger.Debug("parsing removed file for deleted applications",
 				"file", file.Filename,
@@ -94,8 +94,8 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 				parsed.Deleted = append(parsed.Deleted, app)
 			}
 
-		case "modified":
-			// Modified file - check for added/removed applications within the file
+		case models.FileStatusModified, models.FileStatusRenamed:
+			// Modified or renamed file - check for added/removed applications within the file
 			e.logger.Debug("analyzing modified file for application changes",
 				"file", file.Filename,
 			)
@@ -158,7 +158,7 @@ func (e *Executor) parseAppsFromFile(ctx context.Context, event *models.PREvent,
 		"ref", ref,
 	)
 
-	content, err := e.github.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, ref)
+	content, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, ref)
 	if err != nil {
 		e.logger.Debug("failed to fetch file content",
 			"file", filePath,

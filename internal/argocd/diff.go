@@ -54,7 +54,7 @@ type DiffOptions struct {
 	BaseBranch   string        // Required for DiffModeBranch/DiffModeBoth (e.g., "main")
 	TargetBranch string        // Target branch (e.g., "feature/my-change")
 	PRNumber     int           // PR number for temp app naming
-	PRRepo       string        // Repository (e.g., "owner/repo")
+	PRRepo       string        // Full repository URL (e.g., "https://github.com/owner/repo")
 	Timeout      time.Duration // Timeout for manifest rendering
 
 	// BaseAppSpec and HeadAppSpec are typed Application specs read from git.

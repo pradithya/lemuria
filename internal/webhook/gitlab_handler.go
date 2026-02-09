@@ -1,0 +1,232 @@
+package webhook
+
+import (
+	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+
+	"github.com/org/lemuria/internal/commands"
+	"github.com/org/lemuria/internal/config"
+	"github.com/org/lemuria/internal/gitlab"
+	"github.com/org/lemuria/internal/models"
+)
+
+// GitLabHandler processes GitLab webhook events.
+type GitLabHandler struct {
+	config       *config.Config
+	gitlabClient *gitlab.Client
+	cmdExecutor  *commands.Executor
+	logger       *slog.Logger
+}
+
+// NewGitLabHandler creates a new GitLab webhook handler.
+func NewGitLabHandler(cfg *config.Config, gl *gitlab.Client, executor *commands.Executor, logger *slog.Logger) *GitLabHandler {
+	return &GitLabHandler{
+		config:       cfg,
+		gitlabClient: gl,
+		cmdExecutor:  executor,
+		logger:       logger,
+	}
+}
+
+// Handle processes incoming GitLab webhook requests.
+func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
+	// Read request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		h.logger.Error("failed to read request body", "error", err)
+		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate webhook secret token
+	token := r.Header.Get("X-Gitlab-Token")
+	if !h.validateToken(token) {
+		h.logger.Warn("invalid webhook token")
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	// Determine event type from header
+	eventType := r.Header.Get("X-Gitlab-Event")
+
+	h.logger.Info("received gitlab webhook",
+		"event_type", eventType,
+	)
+
+	// Parse and handle the event
+	event, err := ParseGitLabEvent(eventType, body)
+	if err != nil {
+		h.logger.Error("failed to parse event", "error", err)
+		http.Error(w, "failed to parse event", http.StatusBadRequest)
+		return
+	}
+
+	if event == nil {
+		// Event type not handled
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ignored"}); err != nil {
+			h.logger.Warn("failed to encode response", "error", err)
+		}
+		return
+	}
+
+	// Check if repo is allowed
+	if !h.config.IsRepoAllowed(event.Repo.FullName) {
+		h.logger.Info("repository not in allowlist", "repo", event.Repo.FullName)
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "repo not allowed"}); err != nil {
+			h.logger.Warn("failed to encode response", "error", err)
+		}
+		return
+	}
+
+	// Process the event asynchronously
+	go h.processEvent(context.Background(), event)
+
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "accepted"}); err != nil {
+		h.logger.Warn("failed to encode response", "error", err)
+	}
+}
+
+// validateToken checks the X-Gitlab-Token header against the configured webhook secret.
+func (h *GitLabHandler) validateToken(token string) bool {
+	expected := h.config.GitLab.WebhookSecret
+	if expected == "" {
+		// No secret configured, skip validation
+		return true
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
+}
+
+// processEvent handles the webhook event based on its type.
+func (h *GitLabHandler) processEvent(ctx context.Context, event *models.PREvent) {
+	h.logger.Info("processing gitlab event",
+		"type", event.Type,
+		"action", event.Action,
+		"repo", event.Repo.FullName,
+		"mr", event.PR.Number,
+	)
+
+	// Handle MR close/merge - release all locks
+	if event.ShouldUnlockAll() {
+		h.handlePRClosed(ctx, event)
+		return
+	}
+
+	// Handle autoplan on MR open or push
+	if event.ShouldAutoplan() && h.config.Defaults.Autoplan {
+		h.handleAutoplan(ctx, event)
+		return
+	}
+
+	// Handle note/comment (commands)
+	if event.Type == models.EventTypeIssueComment && event.Comment != nil {
+		h.handleComment(ctx, event)
+		return
+	}
+}
+
+// handlePRClosed releases all locks held by the closed MR.
+func (h *GitLabHandler) handlePRClosed(ctx context.Context, event *models.PREvent) {
+	h.logger.Info("MR closed, releasing locks",
+		"repo", event.Repo.FullName,
+		"mr", event.PR.Number,
+		"merged", event.PR.Merged,
+	)
+
+	if err := h.cmdExecutor.UnlockAll(ctx, event); err != nil {
+		h.logger.Error("failed to release locks",
+			"error", err,
+			"repo", event.Repo.FullName,
+			"mr", event.PR.Number,
+		)
+	}
+}
+
+// handleAutoplan runs plan for affected applications.
+func (h *GitLabHandler) handleAutoplan(ctx context.Context, event *models.PREvent) {
+	h.logger.Info("running autoplan",
+		"repo", event.Repo.FullName,
+		"mr", event.PR.Number,
+	)
+
+	if err := h.cmdExecutor.RunAutoplan(ctx, event); err != nil {
+		h.logger.Error("autoplan failed",
+			"error", err,
+			"repo", event.Repo.FullName,
+			"mr", event.PR.Number,
+		)
+	}
+}
+
+// handleComment parses and executes commands from MR comments.
+func (h *GitLabHandler) handleComment(ctx context.Context, event *models.PREvent) {
+	// Only handle new comments
+	if event.Action != models.PRActionCreated {
+		return
+	}
+
+	cmd, err := commands.Parse(event.Comment.Body)
+	if err != nil {
+		h.logger.Debug("not a lemuria command", "error", err)
+		return
+	}
+
+	// Note webhooks may not include full MR details — fetch them if needed.
+	if event.PR.HeadRef == "" || event.PR.BaseRef == "" {
+		if err := h.enrichMRInfo(ctx, event); err != nil {
+			h.logger.Error("failed to fetch MR details",
+				"error", err,
+				"repo", event.Repo.FullName,
+				"mr", event.PR.Number,
+			)
+			return
+		}
+	}
+
+	h.logger.Info("executing command",
+		"command", cmd.Name,
+		"repo", event.Repo.FullName,
+		"mr", event.PR.Number,
+		"user", event.Comment.Author.Login,
+	)
+
+	if err := h.cmdExecutor.Execute(ctx, cmd, event); err != nil {
+		h.logger.Error("command execution failed",
+			"error", err,
+			"command", cmd.Name,
+			"repo", event.Repo.FullName,
+			"mr", event.PR.Number,
+		)
+	}
+}
+
+// enrichMRInfo fetches full MR details from GitLab and populates missing fields.
+func (h *GitLabHandler) enrichMRInfo(ctx context.Context, event *models.PREvent) error {
+	mr, err := h.gitlabClient.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+	if err != nil {
+		return err
+	}
+
+	event.PR.HeadSHA = mr.HeadSHA
+	event.PR.HeadRef = mr.HeadRef
+	event.PR.BaseRef = mr.BaseRef
+	event.PR.State = mr.State
+	event.PR.Title = mr.Title
+	event.PR.Draft = mr.Draft
+	event.PR.Merged = mr.Merged
+
+	h.logger.Debug("enriched MR info from API",
+		"mr", event.PR.Number,
+		"head_ref", event.PR.HeadRef,
+		"base_ref", event.PR.BaseRef,
+		"head_sha", event.PR.HeadSHA,
+	)
+
+	return nil
+}

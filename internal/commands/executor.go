@@ -7,15 +7,15 @@ import (
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
-	"github.com/org/lemuria/internal/github"
 	"github.com/org/lemuria/internal/lock"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/vcs"
 	"github.com/org/lemuria/pkg/diff"
 )
 
 // Executor handles command execution.
 type Executor struct {
-	github   GitHubClient
+	vcs      VCSClient
 	argocd   *argocd.Client
 	lock     lock.Manager
 	config   *config.Config
@@ -24,9 +24,9 @@ type Executor struct {
 }
 
 // NewExecutor creates a new command executor.
-func NewExecutor(gh GitHubClient, argo *argocd.Client, lockMgr lock.Manager, cfg *config.Config, logger *slog.Logger) *Executor {
+func NewExecutor(vcsClient VCSClient, argo *argocd.Client, lockMgr lock.Manager, cfg *config.Config, logger *slog.Logger) *Executor {
 	return &Executor{
-		github:   gh,
+		vcs:      vcsClient,
 		argocd:   argo,
 		lock:     lockMgr,
 		config:   cfg,
@@ -122,7 +122,7 @@ func (e *Executor) getRepoConfig(ctx context.Context, event *models.PREvent) *co
 
 	ref := event.PR.HeadRef
 
-	configData, err := e.github.GetRepoConfig(ctx, event.Repo.Owner, event.Repo.Name, ref)
+	configData, err := e.vcs.GetRepoConfig(ctx, event.Repo.Owner, event.Repo.Name, ref)
 	if err != nil {
 		e.logger.Debug("failed to load .lemuria.yaml", "error", err, "ref", ref)
 		event.RepoConfigLoaded = true
@@ -156,12 +156,12 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	)
 
 	// Get changed files
-	files, err := e.github.GetChangedFiles(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+	files, err := e.vcs.GetChangedFiles(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 	if err != nil {
 		return nil, fmt.Errorf("getting changed files: %w", err)
 	}
 
-	filePaths := github.GetFilePaths(files)
+	filePaths := vcs.GetFilePaths(files)
 	e.logger.Debug("retrieved changed files",
 		"count", len(filePaths),
 		"files", filePaths,
@@ -207,7 +207,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 
 	// Filter to existing applications affected by this PR
 	var affected []models.Application
-	repoURL := fmt.Sprintf("https://github.com/%s", event.Repo.FullName)
+	repoURL := event.Repo.HTMLURL
 	e.logger.Debug("checking applications against repo URL",
 		"repo_url", repoURL,
 	)
@@ -339,7 +339,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 				"name_matches", nameMatches,
 			)
 			if nameMatches {
-				matched := github.FilterFilesByPatterns(
+				matched := vcs.FilterFilesByPatterns(
 					filesToChangedFiles(files),
 					mapping.Paths,
 				)
@@ -461,5 +461,5 @@ func (e *Executor) InvalidatePlanComments(ctx context.Context, event *models.PRE
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 	)
-	return e.github.InvalidatePlanComments(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+	return e.vcs.InvalidatePlanComments(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 }

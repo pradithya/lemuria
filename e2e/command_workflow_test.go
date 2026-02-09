@@ -14,8 +14,8 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
-// newTestExecutor creates a commands.Executor with real ArgoCD + Redis and a mock GitHub client.
-func newTestExecutor(gh *MockGitHubClient, cfg *config.Config) *commands.Executor {
+// newTestExecutor creates a commands.Executor with real ArgoCD + Redis and a mock VCS client.
+func newTestExecutor(gh *MockVCSClient, cfg *config.Config) *commands.Executor {
 	if cfg == nil {
 		cfg = &config.Config{
 			ArgoCD: config.ArgoCDConfig{
@@ -33,19 +33,21 @@ func newTestExecutor(gh *MockGitHubClient, cfg *config.Config) *commands.Executo
 	return commands.NewExecutor(gh, argoClient, lockManager, cfg, logger)
 }
 
-// newPREvent creates a PREvent for testing.
+// newPREvent creates a PREvent for testing (defaults to GitHub provider).
 func newPREvent(repo, owner, repoName string, prNumber int, headSHA, headRef, baseRef string, commentBody string) *models.PREvent {
 	event := &models.PREvent{
-		Type:   models.EventTypeIssueComment,
-		Action: "created",
+		Provider: models.VCSProviderGitHub,
+		Type:     models.EventTypeIssueComment,
+		Action:   models.PRActionCreated,
 		Repo: models.RepoInfo{
 			Owner:    owner,
 			Name:     repoName,
 			FullName: repo,
+			HTMLURL:  "https://github.com/" + repo,
 		},
 		PR: models.PRInfo{
 			Number:  prNumber,
-			State:   "open",
+			State:   models.PRStateOpen,
 			HeadSHA: headSHA,
 			HeadRef: headRef,
 			BaseRef: baseRef,
@@ -65,6 +67,14 @@ func newPREvent(repo, owner, repoName string, prNumber int, headSHA, headRef, ba
 		}
 	}
 
+	return event
+}
+
+// newGitLabPREvent creates a PREvent for testing with GitLab provider.
+func newGitLabPREvent(repo, owner, repoName string, prNumber int, headSHA, headRef, baseRef string, commentBody string) *models.PREvent {
+	event := newPREvent(repo, owner, repoName, prNumber, headSHA, headRef, baseRef, commentBody)
+	event.Provider = models.VCSProviderGitLab
+	event.Repo.HTMLURL = "https://gitlab.com/" + repo
 	return event
 }
 
@@ -90,7 +100,7 @@ func TestE2EPlanCommand(t *testing.T) {
 	// Ensure no stale locks
 	_ = lockManager.ForceUnlock(testCtx, appName)
 
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 
 	executor := newTestExecutor(mockGH, nil)
@@ -202,12 +212,12 @@ func TestE2EPlanDetectsModifiedExternalChartApp(t *testing.T) {
 	// Configure mock GitHub to simulate a PR that modifies the Application CR file.
 	// The PR repo is "test-owner/test-repo", but the app's source is
 	// "https://argoproj.github.io/argo-helm" — a completely different repo.
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 
 	crFilePath := "bootstrap/" + appName + ".yaml"
 	mockGH.ChangedFiles = []models.ChangedFile{
-		{Filename: crFilePath, Status: "modified"},
+		{Filename: crFilePath, Status: models.FileStatusModified},
 	}
 
 	// Base version (current Helm values)
@@ -333,7 +343,7 @@ func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
 	_ = lockManager.ForceUnlock(testCtx, appName)
 	defer cleanupForceUnlock(testCtx, t, appName)
 
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor := newTestExecutor(mockGH, nil)
 
@@ -447,7 +457,7 @@ func TestE2ESyncCommand(t *testing.T) {
 
 	headSHA := "abc123sync"
 
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor := newTestExecutor(mockGH, nil)
 
@@ -527,7 +537,7 @@ func TestE2ERollbackCommand(t *testing.T) {
 	// Ensure clean lock state
 	defer cleanupForceUnlock(testCtx, t, appName)
 
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor := newTestExecutor(mockGH, nil)
 
@@ -591,7 +601,7 @@ func TestE2EUnlockCommand(t *testing.T) {
 	_ = lockManager.ForceUnlock(testCtx, appName)
 	defer cleanupForceUnlock(testCtx, t, appName)
 
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor := newTestExecutor(mockGH, nil)
 
@@ -712,10 +722,10 @@ spec:
     server: https://kubernetes.default.svc
     namespace: e2e-test-apps`, appName)
 
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	mockGH.ChangedFiles = []models.ChangedFile{
-		{Filename: crFilePath, Status: "modified"},
+		{Filename: crFilePath, Status: models.FileStatusModified},
 	}
 	mockGH.FileContents[crFilePath+"@main"] = []byte(baseYAML)
 	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(headYAML)
@@ -893,7 +903,7 @@ spec:
 	t.Logf("Locks acquired: %d apps for PR #%d", len(locks), prNumber)
 
 	// Step 2: Sync all locked apps
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	mockGH.FileContents[helmCRFilePath+"@feature-branch"] = []byte(helmHeadYAML)
 
@@ -981,7 +991,7 @@ func TestE2ESyncStalePlan(t *testing.T) {
 	_ = lockManager.ForceUnlock(testCtx, appName)
 	defer cleanupForceUnlock(testCtx, t, appName)
 
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor := newTestExecutor(mockGH, nil)
 
@@ -1039,7 +1049,7 @@ func TestE2ESyncNoLock(t *testing.T) {
 	repo := "test-owner/test-repo"
 	prNumber := 600
 
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	executor := newTestExecutor(mockGH, nil)
 
 	// Run sync without plan first (no locks)
@@ -1091,7 +1101,7 @@ func TestE2ELockConflictBetweenPRs(t *testing.T) {
 	repo := "test-owner/test-repo"
 
 	// PR #1: Plan and acquire lock
-	mockGH1 := NewMockGitHubClient()
+	mockGH1 := NewMockVCSClient()
 	mockGH1.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor1 := newTestExecutor(mockGH1, nil)
 
@@ -1115,7 +1125,7 @@ func TestE2ELockConflictBetweenPRs(t *testing.T) {
 	}
 
 	// PR #2: Try to plan the same app
-	mockGH2 := NewMockGitHubClient()
+	mockGH2 := NewMockVCSClient()
 	mockGH2.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor2 := newTestExecutor(mockGH2, nil)
 
@@ -1175,7 +1185,7 @@ func TestE2EUnlockAll(t *testing.T) {
 	_ = lockManager.ForceUnlock(testCtx, appName)
 	defer cleanupForceUnlock(testCtx, t, appName)
 
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	executor := newTestExecutor(mockGH, nil)
 
@@ -1198,7 +1208,7 @@ func TestE2EUnlockAll(t *testing.T) {
 	// Run UnlockAll (simulating PR close)
 	closeEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "")
 	closeEvent.Type = models.EventTypePullRequest
-	closeEvent.Action = "closed"
+	closeEvent.Action = models.PRActionClosed
 
 	err = executor.UnlockAll(testCtx, closeEvent)
 	if err != nil {
@@ -1220,7 +1230,7 @@ func TestE2EUnlockAll(t *testing.T) {
 // =============================================================================
 
 func TestE2EHelpCommand(t *testing.T) {
-	mockGH := NewMockGitHubClient()
+	mockGH := NewMockVCSClient()
 	executor := newTestExecutor(mockGH, nil)
 
 	event := newPREvent("test-owner/test-repo", "test-owner", "test-repo", 900, "", "", "", "lemuria help")
@@ -1239,6 +1249,126 @@ func TestE2EHelpCommand(t *testing.T) {
 
 	// Assert: help comment posted
 	comments := mockGH.GetPostedComments()
+	if len(comments) == 0 {
+		t.Fatal("Expected help comment to be posted")
+	}
+
+	lastComment := comments[len(comments)-1]
+	if !strings.Contains(lastComment.Body, "Help") {
+		t.Error("Expected 'Help' in comment body")
+	}
+	if !strings.Contains(lastComment.Body, "lemuria plan") {
+		t.Error("Expected command examples in help text")
+	}
+}
+
+// =============================================================================
+// GitLab Command Workflow Tests
+// =============================================================================
+
+func TestE2EPlanCommandGitLab(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+
+	// Use pre-existing test-app
+	appName := "test-app"
+
+	// Verify app exists
+	app, err := argoClient.GetApplication(testCtx, appName)
+	if err != nil {
+		t.Skipf("test-app not available: %v", err)
+	}
+	t.Logf("Using test application: %s (path: %s)", app.Name, app.Path)
+
+	// Ensure no stale locks
+	_ = lockManager.ForceUnlock(testCtx, appName)
+	defer cleanupForceUnlock(testCtx, t, appName)
+
+	mockVCS := NewMockVCSClient()
+	mockVCS.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+
+	executor := newTestExecutor(mockVCS, nil)
+
+	headSHA := "abc123gitlab"
+	event := newGitLabPREvent(
+		"mygroup/myproject", "mygroup", "myproject",
+		100, headSHA, "feature-branch", "main",
+		"lemuria plan -a test-app",
+	)
+
+	cmd := &commands.Command{
+		Name:        commands.CommandPlan,
+		Application: appName,
+	}
+
+	err = executor.Execute(testCtx, cmd, event)
+	if err != nil {
+		t.Fatalf("Plan command failed: %v", err)
+	}
+
+	// Assert: comment was posted
+	comments := mockVCS.GetPostedComments()
+	if len(comments) == 0 {
+		t.Fatal("Expected at least one comment to be posted")
+	}
+
+	lastComment := comments[len(comments)-1]
+	t.Logf("Posted comment (truncated): %.200s...", lastComment.Body)
+
+	if !lastComment.IsPlan {
+		t.Error("Expected plan comment to have isPlan=true")
+	}
+
+	// Assert: lock was acquired with correct PlanRevision
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to get lock: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("Expected lock to be acquired after plan")
+	}
+	if lock.PRNumber != 100 {
+		t.Errorf("Expected lock PR number 100, got %d", lock.PRNumber)
+	}
+	if lock.PlanRevision != headSHA {
+		t.Errorf("Expected lock PlanRevision %q, got %q", headSHA, lock.PlanRevision)
+	}
+
+	t.Logf("Lock acquired: app=%s, pr=%d, user=%s, plan_revision=%s",
+		lock.Application, lock.PRNumber, lock.User, lock.PlanRevision)
+
+	// Assert: reaction was added
+	if len(mockVCS.Reactions) == 0 {
+		t.Error("Expected reaction to be added to comment")
+	}
+
+	// Assert: old plan comments were invalidated
+	if len(mockVCS.InvalidatedPRs) == 0 {
+		t.Error("Expected old plan comments to be invalidated")
+	}
+}
+
+func TestE2EHelpCommandGitLab(t *testing.T) {
+	mockVCS := NewMockVCSClient()
+	executor := newTestExecutor(mockVCS, nil)
+
+	event := newGitLabPREvent("mygroup/myproject", "mygroup", "myproject", 900, "", "", "", "lemuria help")
+	cmd := &commands.Command{
+		Name: commands.CommandHelp,
+	}
+
+	// Use a background context for this simple test
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	err := executor.Execute(ctx, cmd, event)
+	if err != nil {
+		t.Fatalf("Help command failed: %v", err)
+	}
+
+	// Assert: help comment posted
+	comments := mockVCS.GetPostedComments()
 	if len(comments) == 0 {
 		t.Fatal("Expected help comment to be posted")
 	}
