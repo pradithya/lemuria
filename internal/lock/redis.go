@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -169,7 +170,7 @@ func (m *RedisManager) ForceUnlock(ctx context.Context, application string) erro
 		m.client.SRem(ctx, prKey, application)
 
 		// Delete plan
-		planKey := planKeyPrefix + application + ":" + fmt.Sprint(lock.PRNumber)
+		planKey := planKeyPrefix + application + ":" + strconv.Itoa(lock.PRNumber)
 		m.client.Del(ctx, planKey)
 	}
 
@@ -245,7 +246,7 @@ func (m *RedisManager) ListAll(ctx context.Context) ([]models.Lock, error) {
 // StorePlan stores the plan revision, source file, plan output, and diffs for verification before sync.
 func (m *RedisManager) StorePlan(ctx context.Context, application string, prNumber int, revision, sourceFile, planOutput string, diffs []models.PlanDiffEntry) error {
 	// Store in the dedicated plan key
-	key := planKeyPrefix + application + ":" + fmt.Sprint(prNumber)
+	key := planKeyPrefix + application + ":" + strconv.Itoa(prNumber)
 	if err := m.client.Set(ctx, key, revision, lockTTL).Err(); err != nil {
 		return err
 	}
@@ -268,7 +269,7 @@ func (m *RedisManager) StorePlan(ctx context.Context, application string, prNumb
 
 // GetPlan retrieves the stored plan revision.
 func (m *RedisManager) GetPlan(ctx context.Context, application string, prNumber int) (string, error) {
-	key := planKeyPrefix + application + ":" + fmt.Sprint(prNumber)
+	key := planKeyPrefix + application + ":" + strconv.Itoa(prNumber)
 	return m.client.Get(ctx, key).Result()
 }
 
@@ -284,5 +285,5 @@ func (m *RedisManager) Close() error {
 
 // prLocksKey returns the Redis key for a PR's lock index.
 func (m *RedisManager) prLocksKey(repo string, prNumber int) string {
-	return prLocksKeyPrefix + repo + ":" + fmt.Sprint(prNumber)
+	return prLocksKeyPrefix + repo + ":" + strconv.Itoa(prNumber)
 }

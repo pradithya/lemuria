@@ -131,7 +131,7 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code string) (*models.User,
 	}
 
 	// Extract claims
-	var claims map[string]interface{}
+	var claims map[string]any
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("extracting claims: %w", err)
 	}
@@ -169,7 +169,7 @@ func (p *OIDCProvider) isEmailDomainAllowed(email string) bool {
 }
 
 // buildUser creates a User from OIDC claims.
-func (p *OIDCProvider) buildUser(subject string, claims map[string]interface{}) *models.User {
+func (p *OIDCProvider) buildUser(subject string, claims map[string]any) *models.User {
 	now := time.Now()
 	user := &models.User{
 		ID:          "oidc:" + subject,
@@ -207,7 +207,7 @@ func (p *OIDCProvider) buildUser(subject string, claims map[string]interface{}) 
 
 	// Extract groups
 	if p.groupsClaim != "" {
-		if groups, ok := claims[p.groupsClaim].([]interface{}); ok {
+		if groups, ok := claims[p.groupsClaim].([]any); ok {
 			for _, g := range groups {
 				if group, ok := g.(string); ok {
 					user.Groups = append(user.Groups, group)

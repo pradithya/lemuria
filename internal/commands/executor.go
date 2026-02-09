@@ -464,11 +464,6 @@ func filesToChangedFiles(paths []string) []models.ChangedFile {
 	return files
 }
 
-// NormalizeRepoURL is re-exported from argocd package for use elsewhere.
-func NormalizeRepoURL(url string) string {
-	return argocd.NormalizeRepoURL(url)
-}
-
 // InvalidatePlanComments marks all existing plan comments on a PR as stale.
 func (e *Executor) InvalidatePlanComments(ctx context.Context, event *models.PREvent) error {
 	e.logger.Debug("invalidating old plan comments",

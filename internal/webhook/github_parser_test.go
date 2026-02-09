@@ -365,10 +365,10 @@ func TestParseGitHubEvent(t *testing.T) {
 
 func TestParseGitHubEventFieldMapping(t *testing.T) {
 	// Verify that fields from a pull_request event are correctly mapped
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"action": "synchronize",
 		"number": 7,
-		"pull_request": map[string]interface{}{
+		"pull_request": map[string]any{
 			"number":    7,
 			"title":     "Update manifests",
 			"body":      "Updated kustomize overlays",
@@ -376,19 +376,19 @@ func TestParseGitHubEventFieldMapping(t *testing.T) {
 			"draft":     true,
 			"merged":    false,
 			"mergeable": true,
-			"head":      map[string]interface{}{"sha": "def456", "ref": "update-branch"},
-			"base":      map[string]interface{}{"ref": "main"},
-			"user":      map[string]interface{}{"login": "author", "id": 42, "avatar_url": "https://example.com/a"},
+			"head":      map[string]any{"sha": "def456", "ref": "update-branch"},
+			"base":      map[string]any{"ref": "main"},
+			"user":      map[string]any{"login": "author", "id": 42, "avatar_url": "https://example.com/a"},
 			"html_url":  "https://github.com/org/repo/pull/7",
 		},
-		"repository": map[string]interface{}{
+		"repository": map[string]any{
 			"name":      "repo",
 			"full_name": "org/repo",
-			"owner":     map[string]interface{}{"login": "org"},
+			"owner":     map[string]any{"login": "org"},
 			"clone_url": "https://github.com/org/repo.git",
 			"html_url":  "https://github.com/org/repo",
 		},
-		"sender": map[string]interface{}{"login": "author", "id": 42, "avatar_url": "https://example.com/a"},
+		"sender": map[string]any{"login": "author", "id": 42, "avatar_url": "https://example.com/a"},
 	}
 
 	data, _ := json.Marshal(payload)

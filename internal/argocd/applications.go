@@ -132,7 +132,7 @@ func convertV1alpha1Application(app v1alpha1.Application, sourceFile string) mod
 
 // SyncApplication triggers a sync for the specified application and waits for it to complete.
 func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOptions) (*models.SyncResult, error) {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"name": name,
 	}
 
@@ -385,10 +385,11 @@ func (c *Client) FindApplicationsByRepo(ctx context.Context, repoURL string) ([]
 		return nil, err
 	}
 
+	normalizedRepo := NormalizeRepoURL(repoURL)
 	var matched []models.Application
 	for _, app := range apps {
-		for _, url := range app.GetRepoURLs() {
-			if NormalizeRepoURL(url) == NormalizeRepoURL(repoURL) {
+		for _, appURL := range app.GetRepoURLs() {
+			if NormalizeRepoURL(appURL) == normalizedRepo {
 				matched = append(matched, app)
 				break
 			}
@@ -441,7 +442,7 @@ func (c *Client) RollbackApplication(ctx context.Context, name string, opts *Rol
 		return nil, fmt.Errorf("rollback ID is required")
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"id": opts.ID,
 	}
 
