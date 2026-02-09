@@ -15,6 +15,7 @@
 package argocd
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/org/lemuria/internal/models"
@@ -270,7 +271,7 @@ func TestFormatCreateDiff(t *testing.T) {
 		t.Error("Expected non-empty diff for create")
 	}
 
-	if !contains(diff, "+") {
+	if !strings.Contains(diff, "+") {
 		t.Error("Expected diff to contain additions")
 	}
 }
@@ -283,7 +284,7 @@ func TestFormatDeleteDiff(t *testing.T) {
 		t.Error("Expected non-empty diff for delete")
 	}
 
-	if !contains(diff, "-") {
+	if !strings.Contains(diff, "-") {
 		t.Error("Expected diff to contain deletions")
 	}
 }
@@ -326,7 +327,7 @@ func TestJSONToYAML(t *testing.T) {
 		if result == "" {
 			t.Error("Expected non-empty result for valid JSON")
 		}
-		if contains(result, "{") || contains(result, "}") {
+		if strings.Contains(result, "{") || strings.Contains(result, "}") {
 			t.Error("Expected YAML format, not JSON")
 		}
 	})
@@ -861,13 +862,4 @@ func TestSummarizeDiffs(t *testing.T) {
 	if summary.Unchanged != 1 {
 		t.Errorf("Unchanged = %d, want 1", summary.Unchanged)
 	}
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

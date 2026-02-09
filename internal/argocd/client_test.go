@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -79,7 +80,7 @@ func TestClientGet(t *testing.T) {
 				t.Fatalf("get() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if tt.wantErr && err != nil {
-				if !contains(err.Error(), tt.wantErrMsg) {
+				if !strings.Contains(err.Error(), tt.wantErrMsg) {
 					t.Errorf("error = %q, want to contain %q", err.Error(), tt.wantErrMsg)
 				}
 			}
