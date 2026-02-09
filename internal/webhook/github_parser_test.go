@@ -178,13 +178,142 @@ func TestParseGitHubEvent(t *testing.T) {
 			},
 		},
 		{
+			name:      "pull_request closed",
+			eventType: "pull_request",
+			payload: `{
+				"action": "closed",
+				"number": 50,
+				"pull_request": {
+					"number": 50,
+					"title": "Close PR",
+					"state": "closed",
+					"draft": false,
+					"merged": false,
+					"head": {"sha": "close123", "ref": "close-branch"},
+					"base": {"ref": "main"},
+					"user": {"login": "dev", "id": 1},
+					"html_url": "https://github.com/org/repo/pull/50"
+				},
+				"repository": {
+					"name": "repo",
+					"full_name": "org/repo",
+					"owner": {"login": "org"},
+					"clone_url": "https://github.com/org/repo.git",
+					"html_url": "https://github.com/org/repo"
+				},
+				"sender": {"login": "dev", "id": 1}
+			}`,
+			wantType: models.EventTypePullRequest,
+			check: func(t *testing.T, event *models.PREvent) {
+				if event.Action != models.PRActionClosed {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionClosed)
+				}
+				if event.PR.State != models.PRStateClosed {
+					t.Errorf("PR.State = %q, want %q", event.PR.State, models.PRStateClosed)
+				}
+				if event.PR.Merged {
+					t.Error("PR.Merged = true, want false")
+				}
+			},
+		},
+		{
+			name:      "pull_request merged",
+			eventType: "pull_request",
+			payload: `{
+				"action": "closed",
+				"number": 51,
+				"pull_request": {
+					"number": 51,
+					"title": "Merge PR",
+					"state": "closed",
+					"draft": false,
+					"merged": true,
+					"head": {"sha": "merge123", "ref": "merge-branch"},
+					"base": {"ref": "main"},
+					"user": {"login": "dev", "id": 1},
+					"html_url": "https://github.com/org/repo/pull/51"
+				},
+				"repository": {
+					"name": "repo",
+					"full_name": "org/repo",
+					"owner": {"login": "org"},
+					"clone_url": "https://github.com/org/repo.git",
+					"html_url": "https://github.com/org/repo"
+				},
+				"sender": {"login": "dev", "id": 1}
+			}`,
+			wantType: models.EventTypePullRequest,
+			check: func(t *testing.T, event *models.PREvent) {
+				if event.Action != models.PRActionClosed {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionClosed)
+				}
+				if !event.PR.Merged {
+					t.Error("PR.Merged = false, want true")
+				}
+			},
+		},
+		{
+			name:      "pull_request synchronize",
+			eventType: "pull_request",
+			payload: `{
+				"action": "synchronize",
+				"number": 52,
+				"pull_request": {
+					"number": 52,
+					"title": "Push new commits",
+					"state": "open",
+					"draft": false,
+					"merged": false,
+					"head": {"sha": "sync123", "ref": "sync-branch"},
+					"base": {"ref": "main"},
+					"user": {"login": "dev", "id": 1},
+					"html_url": "https://github.com/org/repo/pull/52"
+				},
+				"repository": {
+					"name": "repo",
+					"full_name": "org/repo",
+					"owner": {"login": "org"},
+					"clone_url": "https://github.com/org/repo.git",
+					"html_url": "https://github.com/org/repo"
+				},
+				"sender": {"login": "dev", "id": 1}
+			}`,
+			wantType: models.EventTypePullRequest,
+			check: func(t *testing.T, event *models.PREvent) {
+				if event.Action != models.PRActionSynchronize {
+					t.Errorf("Action = %q, want %q", event.Action, models.PRActionSynchronize)
+				}
+				if event.Provider != models.VCSProviderGitHub {
+					t.Errorf("Provider = %q, want %q", event.Provider, models.VCSProviderGitHub)
+				}
+			},
+		},
+		{
+			name:      "issue_comment with invalid JSON",
+			eventType: "issue_comment",
+			payload:   `{invalid`,
+			wantErr:   true,
+		},
+		{
+			name:      "pull_request_review with invalid JSON",
+			eventType: "pull_request_review",
+			payload:   `not json`,
+			wantErr:   true,
+		},
+		{
 			name:      "unhandled event type returns nil",
 			eventType: "push",
 			payload:   `{}`,
 			wantNil:   true,
 		},
 		{
-			name:      "invalid JSON",
+			name:      "unhandled event type (deployment) returns nil",
+			eventType: "deployment",
+			payload:   `{}`,
+			wantNil:   true,
+		},
+		{
+			name:      "invalid JSON for pull_request",
 			eventType: "pull_request",
 			payload:   `{invalid json`,
 			wantErr:   true,
