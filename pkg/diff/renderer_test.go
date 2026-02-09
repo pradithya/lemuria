@@ -283,6 +283,163 @@ func TestRenderResourceTablePipeEscaping(t *testing.T) {
 	}
 }
 
+func TestRenderPlan(t *testing.T) {
+	renderer := NewRenderer()
+
+	results := []PlanResult{
+		{
+			Application: "my-app",
+			Diffs: []models.ManifestDiff{
+				{
+					Resource: models.ResourceKey{
+						Kind:      "Deployment",
+						Name:      "my-app",
+						Namespace: "default",
+					},
+					Action: models.DiffActionUpdate,
+					Diff:   "--- live\n+++ target\n@@ -1,2 +1,2 @@\n-replicas: 2\n+replicas: 3\n",
+				},
+				{
+					Resource: models.ResourceKey{
+						Kind: "ConfigMap",
+						Name: "my-config",
+					},
+					Action: models.DiffActionCreate,
+				},
+			},
+			Created:    1,
+			Updated:    1,
+			Deleted:    0,
+			LockStatus: "Locked by this PR",
+		},
+		{
+			Application: "locked-app",
+			LockStatus:  "Locked by PR #99 (otheruser)",
+		},
+		{
+			Application: "error-app",
+			Error:       testError("connection refused"),
+		},
+	}
+
+	output := renderer.RenderPlan(results, 42)
+
+	expectations := []string{
+		"## Lemuria Plan",
+		"### Application: `my-app`",
+		"1 to create",
+		"1 to update",
+		"Deployment/my-app",
+		"ConfigMap/my-config",
+		"Locked by this PR",
+		"### Application: `locked-app`",
+		"Locked by PR #99",
+		"### Application: `error-app`",
+		"Error",
+		"connection refused",
+		"lemuria sync",
+		"lemuria unlock",
+	}
+
+	for _, exp := range expectations {
+		if !strings.Contains(output, exp) {
+			t.Errorf("Expected output to contain %q", exp)
+		}
+	}
+}
+
+func TestRenderNewAndDeletedApps(t *testing.T) {
+	renderer := NewRenderer()
+
+	t.Run("renders new application", func(t *testing.T) {
+		results := []PlanResult{
+			{
+				Application: "new-app",
+				ChangeType:  models.ApplicationNew,
+				SourceFile:  "apps/new-app.yaml",
+			},
+		}
+
+		output := renderer.RenderPlan(results, 42)
+
+		expectations := []string{
+			"## Lemuria Plan",
+			"### Application: `new-app`",
+			"New application",
+			"will be created",
+			"apps/new-app.yaml",
+		}
+
+		for _, exp := range expectations {
+			if !strings.Contains(output, exp) {
+				t.Errorf("expected output to contain %q\nOutput: %s", exp, output)
+			}
+		}
+	})
+
+	t.Run("renders deleted application", func(t *testing.T) {
+		results := []PlanResult{
+			{
+				Application: "deleted-app",
+				ChangeType:  models.ApplicationDeleted,
+				SourceFile:  "apps/deleted-app.yaml",
+			},
+		}
+
+		output := renderer.RenderPlan(results, 42)
+
+		expectations := []string{
+			"## Lemuria Plan",
+			"### Application: `deleted-app`",
+			"will be deleted",
+			"apps/deleted-app.yaml",
+		}
+
+		for _, exp := range expectations {
+			if !strings.Contains(output, exp) {
+				t.Errorf("expected output to contain %q\nOutput: %s", exp, output)
+			}
+		}
+	})
+
+	t.Run("renders mixed new, existing, and deleted", func(t *testing.T) {
+		results := []PlanResult{
+			{
+				Application: "existing-app",
+				ChangeType:  models.ApplicationExisting,
+				LockStatus:  "Locked by this PR",
+				Created:     1,
+				Updated:     2,
+			},
+			{
+				Application: "new-app",
+				ChangeType:  models.ApplicationNew,
+				SourceFile:  "apps/new.yaml",
+			},
+			{
+				Application: "deleted-app",
+				ChangeType:  models.ApplicationDeleted,
+				SourceFile:  "apps/deleted.yaml",
+			},
+		}
+
+		output := renderer.RenderPlan(results, 42)
+
+		if !strings.Contains(output, "1 to create") {
+			t.Error("expected existing app changes to be rendered")
+		}
+		if !strings.Contains(output, "Locked by this PR") {
+			t.Error("expected lock status for existing app")
+		}
+		if !strings.Contains(output, "new-app") {
+			t.Error("expected new app to be mentioned")
+		}
+		if !strings.Contains(output, "deleted-app") {
+			t.Error("expected deleted app to be mentioned")
+		}
+	})
+}
+
 // errTest is a test error.
 var errTest = testError("test error")
 

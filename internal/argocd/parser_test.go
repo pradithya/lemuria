@@ -301,6 +301,50 @@ spec:
 			wantCount: 1,
 			wantNames: []string{"valid-app"},
 		},
+		{
+			name: "application with auto-sync",
+			content: `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: auto-sync-app
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/auto
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+`,
+			wantCount: 1,
+			wantNames: []string{"auto-sync-app"},
+		},
+		{
+			name: "multi-source application",
+			content: `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: multi-source-app
+spec:
+  project: default
+  sources:
+    - repoURL: https://github.com/org/repo
+      path: base
+      targetRevision: main
+    - repoURL: https://charts.example.com
+      chart: my-chart
+      targetRevision: 1.0.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`,
+			wantCount: 1,
+			wantNames: []string{"multi-source-app"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -327,6 +371,66 @@ spec:
 			}
 		})
 	}
+}
+
+func TestParseApplicationAutoSyncDetection(t *testing.T) {
+	yamlWithAutoSync := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: auto-sync-app
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/auto
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+`
+
+	yamlWithoutAutoSync := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: manual-app
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/manual
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+
+	t.Run("detects auto-sync enabled", func(t *testing.T) {
+		apps, err := ParseApplicationsFromYAML([]byte(yamlWithAutoSync), "test.yaml")
+		if err != nil {
+			t.Fatalf("ParseApplicationsFromYAML() error = %v", err)
+		}
+		if len(apps) != 1 {
+			t.Fatalf("expected 1 app, got %d", len(apps))
+		}
+		if !apps[0].AutoSyncEnabled {
+			t.Error("expected AutoSyncEnabled to be true")
+		}
+	})
+
+	t.Run("detects auto-sync disabled", func(t *testing.T) {
+		apps, err := ParseApplicationsFromYAML([]byte(yamlWithoutAutoSync), "test.yaml")
+		if err != nil {
+			t.Fatalf("ParseApplicationsFromYAML() error = %v", err)
+		}
+		if len(apps) != 1 {
+			t.Fatalf("expected 1 app, got %d", len(apps))
+		}
+		if apps[0].AutoSyncEnabled {
+			t.Error("expected AutoSyncEnabled to be false")
+		}
+	})
 }
 
 func TestParsedApplications_String(t *testing.T) {
