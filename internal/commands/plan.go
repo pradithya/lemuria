@@ -53,19 +53,28 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 	var err error
 
 	if cmd.Application != "" {
-		// Specific application requested
+		// Specific application requested — try as Application first, then ApplicationSet
 		e.logger.Debug("fetching specific application",
 			"app", cmd.Application,
 		)
-		app, err := e.argocd.GetApplication(ctx, cmd.Application)
-		if err != nil {
-			e.logger.Debug("application not found",
+		app, appErr := e.argocd.GetApplication(ctx, cmd.Application)
+		if appErr != nil {
+			e.logger.Debug("application not found, trying as applicationset",
 				"app", cmd.Application,
-				"error", err,
+				"error", appErr,
 			)
-			return e.postError(ctx, event, fmt.Errorf("application %s not found: %w", cmd.Application, err))
+			expandedApps, appSetErr := e.expandApplicationSet(ctx, cmd.Application)
+			if appSetErr != nil {
+				e.logger.Debug("applicationset also not found",
+					"app", cmd.Application,
+					"error", appSetErr,
+				)
+				return e.postError(ctx, event, fmt.Errorf("application %s not found: %w", cmd.Application, appErr))
+			}
+			apps = expandedApps
+		} else {
+			apps = []models.Application{*app}
 		}
-		apps = []models.Application{*app}
 	} else if cmd.All {
 		// All applications for this repo
 		repoURL := event.Repo.HTMLURL
@@ -123,14 +132,16 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 
 // appPlanResult holds the result of planning a single application.
 type appPlanResult struct {
-	Application string
-	Diffs       []models.ManifestDiff
-	Summary     argocd.DiffSummary
-	LockStatus  string
-	Warning     string
-	Error       error
-	ChangeType  models.ApplicationChangeType
-	SourceFile  string
+	Application        string
+	ApplicationSetName string
+	Diffs              []models.ManifestDiff
+	Summary            argocd.DiffSummary
+	LockStatus         string
+	Warning            string
+	Error              error
+	ChangeType         models.ApplicationChangeType
+	SourceFile         string
+	IsGeneratedApp     bool
 }
 
 // planApplication generates a diff for a single application.
@@ -143,9 +154,11 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	)
 
 	result := appPlanResult{
-		Application: app.Name,
-		ChangeType:  app.ChangeType,
-		SourceFile:  app.SourceFile,
+		Application:        app.Name,
+		ApplicationSetName: app.ApplicationSetName,
+		ChangeType:         app.ChangeType,
+		SourceFile:         app.SourceFile,
+		IsGeneratedApp:     app.IsGeneratedApp,
 	}
 
 	// Handle new applications (not yet in ArgoCD)
@@ -347,16 +360,18 @@ func convertToRenderResults(results []appPlanResult) []diff.PlanResult {
 	rendered := make([]diff.PlanResult, len(results))
 	for i, r := range results {
 		rendered[i] = diff.PlanResult{
-			Application: r.Application,
-			Diffs:       r.Diffs,
-			Created:     r.Summary.Created,
-			Updated:     r.Summary.Updated,
-			Deleted:     r.Summary.Deleted,
-			LockStatus:  r.LockStatus,
-			Warning:     r.Warning,
-			Error:       r.Error,
-			ChangeType:  r.ChangeType,
-			SourceFile:  r.SourceFile,
+			Application:        r.Application,
+			ApplicationSetName: r.ApplicationSetName,
+			Diffs:              r.Diffs,
+			Created:            r.Summary.Created,
+			Updated:            r.Summary.Updated,
+			Deleted:            r.Summary.Deleted,
+			LockStatus:         r.LockStatus,
+			Warning:            r.Warning,
+			Error:              r.Error,
+			ChangeType:         r.ChangeType,
+			SourceFile:         r.SourceFile,
+			IsGeneratedApp:     r.IsGeneratedApp,
 		}
 	}
 	return rendered
@@ -398,6 +413,25 @@ func toPlanDiffEntries(diffs []models.ManifestDiff) []models.PlanDiffEntry {
 		})
 	}
 	return entries
+}
+
+// expandApplicationSet fetches an ApplicationSet by name and returns its generated applications.
+func (e *Executor) expandApplicationSet(ctx context.Context, name string) ([]models.Application, error) {
+	_, err := e.argocd.GetApplicationSet(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("applicationset %s not found: %w", name, err)
+	}
+
+	apps, err := e.argocd.GetApplicationsByApplicationSet(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("getting applications for applicationset %s: %w", name, err)
+	}
+
+	if len(apps) == 0 {
+		return nil, fmt.Errorf("applicationset %s has no generated applications", name)
+	}
+
+	return apps, nil
 }
 
 // postComment creates a new Lemuria comment on the PR.
