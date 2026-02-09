@@ -21,6 +21,8 @@ import (
 	"net/url"
 	"strconv"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+
 	"github.com/org/lemuria/internal/models"
 )
 
@@ -71,7 +73,17 @@ func (c *Client) GetManifests(ctx context.Context, name string, params *GetManif
 		manifests = append(manifests, manifest)
 	}
 
-	return manifests, resp.Revision, nil
+	// ArgoCD v3+ no longer returns revision in the manifests response.
+	// Fall back to the application's sync status revision.
+	revision := resp.Revision
+	if revision == "" {
+		var appResp v1alpha1.Application
+		if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &appResp); err == nil {
+			revision = appResp.Status.Sync.Revision
+		}
+	}
+
+	return manifests, revision, nil
 }
 
 // parseManifest extracts metadata from a raw JSON manifest.

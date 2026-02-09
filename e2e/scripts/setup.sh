@@ -16,7 +16,7 @@
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-lemuria-e2e}"
-ARGOCD_VERSION="${ARGOCD_VERSION:-v2.10.0}"
+ARGOCD_VERSION="${ARGOCD_VERSION:-v3.3.0}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 E2E_DIR="$(dirname "$SCRIPT_DIR")"
 
@@ -69,7 +69,7 @@ install_argocd() {
 
     kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 
-    kubectl apply -n argocd -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
+    kubectl apply -n argocd --server-side --force-conflicts -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
 
     echo "Waiting for Argo CD to be ready..."
     kubectl wait --for=condition=Available deployment/argocd-server -n argocd --timeout=300s

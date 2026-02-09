@@ -351,6 +351,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 				if !containsAppByName(affected, app.Name) && !containsAppByName(parsed.New, app.Name) {
 					app.IsGeneratedApp = true
 					parsed.New = append(parsed.New, app)
+					affected = append(affected, app)
 				}
 			}
 
