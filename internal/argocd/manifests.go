@@ -37,6 +37,7 @@ type GetManifestsParams struct {
 	Revision        string
 	SourcePositions []int
 	Revisions       []string
+	FetchRevision   bool // when true, fetches revision from app status if not in manifests response
 }
 
 // GetManifests fetches the target manifests for an application.
@@ -74,9 +75,9 @@ func (c *Client) GetManifests(ctx context.Context, name string, params *GetManif
 	}
 
 	// ArgoCD v3+ no longer returns revision in the manifests response.
-	// Fall back to the application's sync status revision.
+	// Only fetch revision from app status when explicitly requested to avoid extra API calls.
 	revision := resp.Revision
-	if revision == "" {
+	if revision == "" && params != nil && params.FetchRevision {
 		var appResp v1alpha1.Application
 		if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &appResp); err == nil {
 			revision = appResp.Status.Sync.Revision

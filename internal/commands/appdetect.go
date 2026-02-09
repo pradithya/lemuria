@@ -326,7 +326,7 @@ func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *model
 			e.detectAppSetRemovedFile(ctx, event, file.Filename, result)
 
 		case models.FileStatusModified, models.FileStatusRenamed:
-			e.detectAppSetModifiedFile(ctx, event, file.Filename, result)
+			e.detectAppSetModifiedFile(ctx, event, file, result)
 		}
 	}
 
@@ -414,12 +414,24 @@ func (e *Executor) detectAppSetRemovedFile(ctx context.Context, event *models.PR
 }
 
 // detectAppSetModifiedFile compares base and head versions of a file to find ApplicationSet changes.
-func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.PREvent, filePath string, result *ParsedApplicationSetChanges) {
-	baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, event.PR.BaseRef)
+func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.PREvent, file models.ChangedFile, result *ParsedApplicationSetChanges) {
+	filePath := file.Filename
+
+	// For renames, the base branch has the file at the old path
+	baseFilePath := filePath
+	if file.PreviousFilename != "" {
+		baseFilePath = file.PreviousFilename
+	}
+
+	baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, baseFilePath, event.PR.BaseRef)
 	if err != nil {
-		e.logger.Debug("failed to fetch base appset file (treating as new)", "file", filePath, "error", err)
-		// If base doesn't exist, treat as added
-		e.detectAppSetAddedFile(ctx, event, filePath, result)
+		e.logger.Warn("failed to fetch base appset file", "file", baseFilePath, "error", err)
+		// Only treat as added if this is NOT a rename — for renames, failing to fetch
+		// the old path is unexpected and should not silently classify apps as new.
+		if file.PreviousFilename == "" {
+			e.logger.Debug("treating as new appset file", "file", filePath)
+			e.detectAppSetAddedFile(ctx, event, filePath, result)
+		}
 		return
 	}
 
@@ -429,9 +441,9 @@ func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.P
 		return
 	}
 
-	baseAppSets, err := argocd.ParseApplicationSetsFromYAML(baseContent, filePath)
+	baseAppSets, err := argocd.ParseApplicationSetsFromYAML(baseContent, baseFilePath)
 	if err != nil {
-		e.logger.Warn("failed to parse base appsets", "file", filePath, "error", err)
+		e.logger.Warn("failed to parse base appsets", "file", baseFilePath, "error", err)
 		baseAppSets = nil
 	}
 
