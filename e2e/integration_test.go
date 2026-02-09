@@ -85,7 +85,7 @@ func TestFullPlanWorkflow(t *testing.T) {
 		Mode:         argocd.DiffModeLive,
 		TargetBranch: revision,
 		PRNumber:     prNumber,
-		PRRepo:       "https://github.com/" + repo,
+		PRRepo:       app.RepoURL,
 		Timeout:      2 * time.Minute,
 	})
 	if err != nil {
