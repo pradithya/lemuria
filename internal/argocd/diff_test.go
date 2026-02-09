@@ -589,6 +589,252 @@ func TestCleanForDiff_LabelsInSelectors(t *testing.T) {
 	})
 }
 
+func TestComputeLiveVsTargetDiff(t *testing.T) {
+	tests := []struct {
+		name            string
+		liveResources   []ManagedResource
+		targetManifests []models.Manifest
+		wantActions     map[models.DiffAction]int
+		wantTotal       int
+	}{
+		{
+			name: "resource exists in both live and target (update)",
+			liveResources: []ManagedResource{
+				{
+					Group:               "apps",
+					Kind:                "Deployment",
+					Namespace:           "default",
+					Name:                "web",
+					NormalizedLiveState: `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default"},"spec":{"replicas":2}}`,
+				},
+			},
+			targetManifests: []models.Manifest{
+				{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+					Name:       "web",
+					Namespace:  "default",
+					Raw:        `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default"},"spec":{"replicas":3}}`,
+				},
+			},
+			wantActions: map[models.DiffAction]int{models.DiffActionUpdate: 1},
+			wantTotal:   1,
+		},
+		{
+			name:          "resource only in target (create)",
+			liveResources: []ManagedResource{},
+			targetManifests: []models.Manifest{
+				{
+					APIVersion: "v1",
+					Kind:       "ConfigMap",
+					Name:       "new-cm",
+					Namespace:  "default",
+					Raw:        `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"new-cm","namespace":"default"},"data":{"key":"val"}}`,
+				},
+			},
+			wantActions: map[models.DiffAction]int{models.DiffActionCreate: 1},
+			wantTotal:   1,
+		},
+		{
+			name: "resource only in live (delete)",
+			liveResources: []ManagedResource{
+				{
+					Kind:      "ConfigMap",
+					Namespace: "default",
+					Name:      "old-cm",
+					LiveState: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"old-cm","namespace":"default"},"data":{"key":"val"}}`,
+				},
+			},
+			targetManifests: []models.Manifest{},
+			wantActions:     map[models.DiffAction]int{models.DiffActionDelete: 1},
+			wantTotal:       1,
+		},
+		{
+			name: "hook resources are skipped",
+			liveResources: []ManagedResource{
+				{Kind: "Job", Namespace: "default", Name: "hook-job", Hook: true, LiveState: `{"kind":"Job"}`},
+			},
+			targetManifests: []models.Manifest{},
+			wantTotal:       0,
+		},
+		{
+			name: "secret resources are skipped",
+			liveResources: []ManagedResource{
+				{Kind: "Secret", Group: "", Namespace: "default", Name: "my-secret", LiveState: `{"kind":"Secret"}`},
+			},
+			targetManifests: []models.Manifest{
+				{APIVersion: "v1", Kind: "Secret", Name: "new-secret", Namespace: "default", Raw: `{"kind":"Secret"}`},
+			},
+			wantTotal: 0,
+		},
+		{
+			name: "uses NormalizedLiveState when available",
+			liveResources: []ManagedResource{
+				{
+					Group:               "apps",
+					Kind:                "Deployment",
+					Namespace:           "default",
+					Name:                "web",
+					LiveState:           `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default","resourceVersion":"999"},"spec":{"replicas":1}}`,
+					NormalizedLiveState: `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default"},"spec":{"replicas":1}}`,
+				},
+			},
+			targetManifests: []models.Manifest{
+				{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", Namespace: "default", Raw: `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default"},"spec":{"replicas":1}}`},
+			},
+			wantTotal: 0, // No diff because normalized state matches target
+		},
+		{
+			name: "live resources with empty state are not shown as deletes",
+			liveResources: []ManagedResource{
+				{Kind: "ConfigMap", Namespace: "default", Name: "phantom", LiveState: ""},
+				{Kind: "ConfigMap", Namespace: "default", Name: "null-state", LiveState: "null"},
+			},
+			targetManifests: []models.Manifest{},
+			wantTotal:       0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diffs := computeLiveVsTargetDiff(tt.liveResources, tt.targetManifests)
+			if len(diffs) != tt.wantTotal {
+				t.Fatalf("got %d diffs, want %d", len(diffs), tt.wantTotal)
+			}
+			if tt.wantActions != nil {
+				actions := make(map[models.DiffAction]int)
+				for _, d := range diffs {
+					actions[d.Action]++
+				}
+				for action, count := range tt.wantActions {
+					if actions[action] != count {
+						t.Errorf("action %q count = %d, want %d", action, actions[action], count)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestComputeThreeWayDiff(t *testing.T) {
+	tests := []struct {
+		name            string
+		baseManifests   []models.Manifest
+		targetManifests []models.Manifest
+		liveResources   []ManagedResource
+		wantTotal       int
+		checkFunc       func(t *testing.T, diffs []models.ManifestDiff)
+	}{
+		{
+			name: "resource in all three states with changes",
+			baseManifests: []models.Manifest{
+				{APIVersion: "v1", Kind: "ConfigMap", Name: "cm", Namespace: "default", Raw: `{"data":{"key":"base"}}`},
+			},
+			targetManifests: []models.Manifest{
+				{APIVersion: "v1", Kind: "ConfigMap", Name: "cm", Namespace: "default", Raw: `{"data":{"key":"target"}}`},
+			},
+			liveResources: []ManagedResource{
+				{Kind: "ConfigMap", Namespace: "default", Name: "cm", LiveState: `{"data":{"key":"live"}}`},
+			},
+			wantTotal: 1,
+			checkFunc: func(t *testing.T, diffs []models.ManifestDiff) {
+				if diffs[0].Action != models.DiffActionUpdate {
+					t.Errorf("branch action = %q, want update", diffs[0].Action)
+				}
+				if diffs[0].BranchDiff == "" {
+					t.Error("expected non-empty BranchDiff")
+				}
+				if diffs[0].LiveDiff == "" {
+					t.Error("expected non-empty LiveDiff")
+				}
+			},
+		},
+		{
+			name:          "resource added in PR (not in base, in target)",
+			baseManifests: []models.Manifest{},
+			targetManifests: []models.Manifest{
+				{APIVersion: "v1", Kind: "ConfigMap", Name: "new-cm", Namespace: "default", Raw: `{"data":{"key":"val"}}`},
+			},
+			liveResources: []ManagedResource{},
+			wantTotal:     1,
+			checkFunc: func(t *testing.T, diffs []models.ManifestDiff) {
+				if diffs[0].Action != models.DiffActionCreate {
+					t.Errorf("branch action = %q, want create", diffs[0].Action)
+				}
+			},
+		},
+		{
+			name: "resource deleted in PR (in base, not in target)",
+			baseManifests: []models.Manifest{
+				{APIVersion: "v1", Kind: "ConfigMap", Name: "old-cm", Namespace: "default", Raw: `{"data":{"key":"val"}}`},
+			},
+			targetManifests: []models.Manifest{},
+			liveResources: []ManagedResource{
+				{Kind: "ConfigMap", Namespace: "default", Name: "old-cm", LiveState: `{"data":{"key":"val"}}`},
+			},
+			wantTotal: 1,
+			checkFunc: func(t *testing.T, diffs []models.ManifestDiff) {
+				if diffs[0].Action != models.DiffActionDelete {
+					t.Errorf("branch action = %q, want delete", diffs[0].Action)
+				}
+			},
+		},
+		{
+			name: "resource drifted live (base=target but live different)",
+			baseManifests: []models.Manifest{
+				{APIVersion: "v1", Kind: "ConfigMap", Name: "drifted", Namespace: "default", Raw: `{"data":{"key":"same"}}`},
+			},
+			targetManifests: []models.Manifest{
+				{APIVersion: "v1", Kind: "ConfigMap", Name: "drifted", Namespace: "default", Raw: `{"data":{"key":"same"}}`},
+			},
+			liveResources: []ManagedResource{
+				{Kind: "ConfigMap", Namespace: "default", Name: "drifted", LiveState: `{"data":{"key":"modified-in-cluster"}}`},
+			},
+			wantTotal: 1,
+			checkFunc: func(t *testing.T, diffs []models.ManifestDiff) {
+				if diffs[0].Action != models.DiffActionNone {
+					t.Errorf("branch action = %q, want none (no branch change)", diffs[0].Action)
+				}
+				if diffs[0].LiveAction != models.DiffActionUpdate {
+					t.Errorf("live action = %q, want update (drift)", diffs[0].LiveAction)
+				}
+				if diffs[0].BranchDiff != "" {
+					t.Error("expected empty BranchDiff (base=target)")
+				}
+				if diffs[0].LiveDiff == "" {
+					t.Error("expected non-empty LiveDiff (drift)")
+				}
+			},
+		},
+		{
+			name: "hook and secret resources skipped",
+			baseManifests: []models.Manifest{
+				{APIVersion: "v1", Kind: "Secret", Name: "my-secret", Namespace: "default", Raw: `{"kind":"Secret"}`},
+			},
+			targetManifests: []models.Manifest{
+				{APIVersion: "v1", Kind: "Secret", Name: "my-secret", Namespace: "default", Raw: `{"kind":"Secret","data":{"new":"val"}}`},
+			},
+			liveResources: []ManagedResource{
+				{Kind: "Secret", Namespace: "default", Name: "my-secret", LiveState: `{"kind":"Secret"}`},
+				{Kind: "Job", Namespace: "default", Name: "hook", Hook: true, LiveState: `{"kind":"Job"}`},
+			},
+			wantTotal: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diffs := computeThreeWayDiff(tt.baseManifests, tt.targetManifests, tt.liveResources)
+			if len(diffs) != tt.wantTotal {
+				t.Fatalf("got %d diffs, want %d", len(diffs), tt.wantTotal)
+			}
+			if tt.checkFunc != nil {
+				tt.checkFunc(t, diffs)
+			}
+		})
+	}
+}
+
 func TestSummarizeDiffs(t *testing.T) {
 	diffs := []models.ManifestDiff{
 		{Action: models.DiffActionCreate},

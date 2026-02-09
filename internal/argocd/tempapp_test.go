@@ -226,20 +226,38 @@ func TestGenerateTempAppName(t *testing.T) {
 
 func TestSanitizeLabelValue(t *testing.T) {
 	tests := []struct {
+		name  string
 		input string
 		want  string
 	}{
-		{"org/repo", "org-repo"},
-		{"simple", "simple"},
-		{"/leading-slash", "leading-slash"},
-		{"trailing-slash/", "trailing-slash"},
+		{"slash replaced", "org/repo", "org-repo"},
+		{"simple", "simple", "simple"},
+		{"leading slash trimmed", "/leading-slash", "leading-slash"},
+		{"trailing slash trimmed", "trailing-slash/", "trailing-slash"},
+		{
+			"long value truncated to 63 chars",
+			"https://github.com/very-long-organization-name/very-long-repository-name-exceeding-limit",
+			"https---github.com-very-long-organization-name-very-long-reposi",
+		},
+		{"colons replaced", "host:8080/path", "host-8080-path"},
+		{
+			"trailing special chars after truncation trimmed",
+			// 66 chars; positions 0-59 are alphanum, 60-62 are "---", 63-65 are "xyz"
+			// s[:63] = 60 alphanum chars + "---" → TrimRight removes "---"
+			"abcdefghijklmnopqrstuvwxyz1234abcdefghijklmnopqrstuvwxyz1234---xyz",
+			"abcdefghijklmnopqrstuvwxyz1234abcdefghijklmnopqrstuvwxyz1234",
+		},
+		{"https URL sanitized", "https://github.com/org/repo", "https---github.com-org-repo"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			got := sanitizeLabelValue(tt.input)
 			if got != tt.want {
 				t.Errorf("sanitizeLabelValue(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+			if len(got) > 63 {
+				t.Errorf("result length %d > 63", len(got))
 			}
 		})
 	}
