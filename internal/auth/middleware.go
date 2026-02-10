@@ -183,6 +183,15 @@ func (m *Middleware) ClearSessionCookie(w http.ResponseWriter) {
 
 // CreateSession creates a new session for the user and sets the cookie.
 func (m *Middleware) CreateSession(ctx context.Context, w http.ResponseWriter, user *models.User) (*models.Session, error) {
+	// TODO(VULN-33): Invalidate existing sessions for this user before creating
+	// a new one. Currently there is no user-to-session index, so we cannot
+	// efficiently look up sessions by user ID. To fix this properly:
+	//   1. Maintain a Redis set per user (e.g. "lemuria:user:sessions:<userID>")
+	//      that tracks all active session IDs for that user.
+	//   2. On login, iterate the set and delete each session before creating
+	//      a new one.
+	//   3. Update Create/Delete on RedisSessionStore to maintain this index.
+
 	// Resolve role
 	user.Role = m.roleResolver.ResolveRole(ctx, user)
 

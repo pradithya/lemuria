@@ -87,7 +87,7 @@ func (s *RedisSessionStore) Create(ctx context.Context, user *models.User) (*mod
 
 	// Add to sessions index (non-fatal if it fails)
 	if err := s.client.SAdd(ctx, sessionsIndexKey, sessionID).Err(); err != nil {
-		slog.Warn("failed to add session to index", "sessionID", sessionID, "error", err)
+		slog.Warn("failed to add session to index", "sessionID", truncateSessionID(sessionID), "error", err)
 	}
 
 	return session, nil
@@ -113,7 +113,7 @@ func (s *RedisSessionStore) Get(ctx context.Context, sessionID string) (*models.
 	if session.IsExpired() {
 		// Clean up expired session
 		if err := s.Delete(ctx, sessionID); err != nil {
-			slog.Warn("failed to delete expired session", "sessionID", sessionID, "error", err)
+			slog.Warn("failed to delete expired session", "sessionID", truncateSessionID(sessionID), "error", err)
 		}
 		return nil, nil
 	}
@@ -257,6 +257,16 @@ func (s *RedisSessionStore) GetUserRole(ctx context.Context, userID string) (mod
 func (s *RedisSessionStore) DeleteUserRole(ctx context.Context, userID string) error {
 	key := userRoleKeyPrefix + userID
 	return s.client.Del(ctx, key).Err()
+}
+
+// truncateSessionID returns the first 8 characters of a session ID followed by
+// "..." for safe logging. If the session ID is shorter than 8 characters, the
+// full value is returned followed by "...".
+func truncateSessionID(id string) string {
+	if len(id) > 8 {
+		return id[:8] + "..."
+	}
+	return id + "..."
 }
 
 // generateSessionID generates a cryptographically secure session ID.

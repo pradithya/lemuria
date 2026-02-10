@@ -43,14 +43,14 @@ func Load(paths ...string) (*Config, error) {
 		}
 	}
 
-	// Overlay environment variables
+	// Overlay environment variables with LEMURIA_ prefix
 	// Uses double underscore (__) for hierarchy, single underscore preserved in keys
 	// Examples:
-	//   ARGOCD__TOKEN       -> argocd.token
-	//   ARGOCD__SERVER_URL  -> argocd.server_url
-	//   GITHUB__WEBHOOK_SECRET -> github.webhook_secret
-	if err := k.Load(env.Provider("", ".", func(s string) string {
-		key := strings.ToLower(s)
+	//   LEMURIA_ARGOCD__TOKEN       -> argocd.token
+	//   LEMURIA_ARGOCD__SERVER_URL  -> argocd.server_url
+	//   LEMURIA_GITHUB__WEBHOOK_SECRET -> github.webhook_secret
+	if err := k.Load(env.Provider("LEMURIA_", ".", func(s string) string {
+		key := strings.ToLower(strings.TrimPrefix(s, "LEMURIA_"))
 		key = strings.ReplaceAll(key, "__", ".")
 		return key
 	}), nil); err != nil {

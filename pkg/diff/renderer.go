@@ -66,7 +66,7 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 	var sb strings.Builder
 
 	// Header with status indicator for new/deleted apps
-	header := fmt.Sprintf("### Application: `%s`", result.Application)
+	header := fmt.Sprintf("### Application: `%s`", escapeMarkdown(result.Application))
 	switch result.ChangeType {
 	case models.ApplicationNew:
 		header += " 🆕"
@@ -203,7 +203,7 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 
 	allSucceeded := true
 	for _, result := range results {
-		sb.WriteString(fmt.Sprintf("### Application: `%s`\n\n", result.Application))
+		sb.WriteString(fmt.Sprintf("### Application: `%s`\n\n", escapeMarkdown(result.Application)))
 
 		if result.Error != nil {
 			sb.WriteString(fmt.Sprintf("❌ **Error:** %s\n\n", result.Error.Error()))
@@ -341,6 +341,25 @@ func (r *Renderer) renderPlanDiffs(diffs []models.PlanDiffEntry) string {
 	return sb.String()
 }
 
+// escapeMarkdown escapes Markdown special characters in user-controlled strings
+// to prevent Markdown injection when embedding values in PR comments.
+func escapeMarkdown(s string) string {
+	replacer := strings.NewReplacer(
+		"|", "\\|",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+		"#", "\\#",
+		"*", "\\*",
+		"_", "\\_",
+		"`", "\\`",
+		"<", "&lt;",
+		">", "&gt;",
+	)
+	return replacer.Replace(s)
+}
+
 // sanitizeDiffForMarkdown escapes runs of 3 or more backticks in diff content
 // to prevent breaking markdown fenced code blocks. A zero-width space is inserted
 // after the second backtick to break any fence-like sequence.
@@ -401,7 +420,7 @@ func healthStatusIcon(status string) string {
 
 // RenderError formats an error as a markdown comment.
 func (r *Renderer) RenderError(err error) string {
-	return fmt.Sprintf("## Lemuria Error\n\n```\n%s\n```\n", err.Error())
+	return fmt.Sprintf("## Lemuria Error\n\n```\n%s\n```\n", escapeMarkdown(err.Error()))
 }
 
 // RenderHelp formats the help message.

@@ -61,7 +61,12 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	// Setup logger with configured log level
+	// Setup structured JSON logger. Using slog with JSON output format ensures
+	// that user-controlled data (e.g. usernames, application names) is properly
+	// escaped and cannot inject fake log entries via newlines or special
+	// characters. Production deployments MUST use this JSON handler (or another
+	// structured format) rather than the text handler to mitigate log injection
+	// risks (see VULN-15).
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: parseLogLevel(cfg.Server.LogLevel),
 	}))

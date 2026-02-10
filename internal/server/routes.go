@@ -299,7 +299,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logger.Info("user logged in via GitHub", "user", user.Login, "email", user.Email)
+	s.logger.Info("user logged in via GitHub", "user", user.Login)
 
 	// Redirect to original URL
 	redirectURL := state.RedirectURL
@@ -372,7 +372,7 @@ func (s *Server) handleGitLabCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logger.Info("user logged in via GitLab", "user", user.Login, "email", user.Email)
+	s.logger.Info("user logged in via GitLab", "user", user.Login)
 
 	// Redirect to original URL
 	redirectURL := state.RedirectURL
@@ -449,7 +449,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logger.Info("user logged in via OIDC", "user", user.Login, "email", user.Email)
+	s.logger.Info("user logged in via OIDC", "user", user.Login)
 
 	// Redirect to original URL
 	redirectURL := state.RedirectURL
@@ -597,6 +597,12 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch the previous role before updating, for audit logging
+	previousRole := ""
+	if prevRole, found, err := s.roleResolver.GetUserRole(r.Context(), userID); err == nil && found {
+		previousRole = string(prevRole)
+	}
+
 	if err := s.roleResolver.SetUserRole(r.Context(), userID, role); err != nil {
 		s.logger.Error("failed to set user role", "user_id", userID, "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
@@ -608,6 +614,7 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	currentUser := auth.UserFromRequest(r)
 	s.logger.Info("user role updated",
 		"target_user", userID,
+		"previous_role", previousRole,
 		"new_role", role,
 		"by_user", currentUser.Login,
 	)
