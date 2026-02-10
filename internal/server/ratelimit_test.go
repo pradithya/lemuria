@@ -44,7 +44,8 @@ func TestRateLimiterAllow(t *testing.T) {
 }
 
 func TestRateLimiterWindowExpiry(t *testing.T) {
-	// Use a very short window so entries expire quickly
+	// Use a short window so entries expire quickly. The sleep below must
+	// be comfortably larger than the window to avoid flaky results.
 	rl := NewRateLimiter(2, 50*time.Millisecond)
 	defer rl.Stop()
 
@@ -61,13 +62,22 @@ func TestRateLimiterWindowExpiry(t *testing.T) {
 		t.Error("3rd attempt should be denied")
 	}
 
-	// Wait for the window to expire
-	time.Sleep(60 * time.Millisecond)
+	// Wait well past the window to avoid flakiness on slow CI runners.
+	time.Sleep(150 * time.Millisecond)
 
 	// Should be allowed again after window expires
 	if !rl.Allow(key) {
 		t.Error("attempt after window expiry should be allowed")
 	}
+}
+
+func TestRateLimiterStopIdempotent(t *testing.T) {
+	rl := NewRateLimiter(1, 1*time.Minute)
+
+	// Calling Stop multiple times must not panic.
+	rl.Stop()
+	rl.Stop()
+	rl.Stop()
 }
 
 func TestRateLimiterIndependentKeys(t *testing.T) {

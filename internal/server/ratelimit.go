@@ -28,6 +28,7 @@ type RateLimiter struct {
 	maxAttempts int
 	window      time.Duration
 	stopCleanup chan struct{}
+	stopOnce    sync.Once
 }
 
 // NewRateLimiter creates a RateLimiter that allows maxAttempts requests per
@@ -77,14 +78,23 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return true
 }
 
-// Stop terminates the background cleanup goroutine.
+// Stop terminates the background cleanup goroutine. It is safe to call
+// multiple times; only the first call actually closes the channel.
 func (rl *RateLimiter) Stop() {
-	close(rl.stopCleanup)
+	rl.stopOnce.Do(func() {
+		close(rl.stopCleanup)
+	})
 }
 
 // cleanup runs periodically to remove keys whose entries have all expired.
+// The ticker interval is the smaller of the configured window and 1 minute,
+// so short-lived windows are cleaned up promptly.
 func (rl *RateLimiter) cleanup() {
-	ticker := time.NewTicker(1 * time.Minute)
+	interval := rl.window
+	if interval > 1*time.Minute {
+		interval = 1 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

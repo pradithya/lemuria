@@ -17,6 +17,7 @@ package server
 import (
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -461,9 +462,14 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 
 // handleBasicLogin handles basic username/password authentication.
 func (s *Server) handleBasicLogin(w http.ResponseWriter, r *http.Request) {
-	// Rate limit by remote IP to prevent brute force attacks
-	if s.loginRateLimiter != nil && !s.loginRateLimiter.Allow(r.RemoteAddr) {
-		s.logger.Warn("login rate limit exceeded", "remote_addr", r.RemoteAddr)
+	// Rate limit by remote IP to prevent brute force attacks.
+	// Extract host from RemoteAddr (strip port) so the key is stable.
+	clientIP := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		clientIP = host
+	}
+	if s.loginRateLimiter != nil && !s.loginRateLimiter.Allow(clientIP) {
+		s.logger.Warn("login rate limit exceeded", "remote_addr", clientIP)
 		w.Header().Set("Retry-After", "60")
 		respondJSON(w, http.StatusTooManyRequests, map[string]string{
 			"error": "too many login attempts, please try again later",
