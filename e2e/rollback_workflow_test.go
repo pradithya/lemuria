@@ -35,7 +35,7 @@ func TestE2ERollbackCommand(t *testing.T) {
 	// Create a per-test application
 	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
-	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
 	// Ensure clean lock state
 	defer cleanupForceUnlock(testCtx, t, appName)

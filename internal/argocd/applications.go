@@ -157,14 +157,25 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 		return nil, fmt.Errorf("syncing application %s: %w", name, err)
 	}
 
+	// Determine timeout: use opts.Timeout if set, otherwise default.
+	timeout := defaultSyncWaitTimeout
+	if opts != nil && opts.Timeout > 0 {
+		timeout = opts.Timeout
+	}
+
 	// Poll until the operation reaches a terminal phase.
-	return c.waitForSyncComplete(ctx, name, syncWaitTimeout)
+	return c.waitForSyncComplete(ctx, name, timeout)
 }
 
-const syncWaitTimeout = 3 * time.Minute
+// defaultSyncWaitTimeout is the default maximum time to wait for a sync operation
+// to complete and the application to become healthy, used when no timeout is
+// specified in SyncOptions. Aligned with ArgoCD's default operation timeout.
+const defaultSyncWaitTimeout = 10 * time.Minute
 
 // waitForSyncComplete watches the application using the streaming Watch API until
-// the operation reaches a terminal phase and health stabilizes.
+// the operation reaches a terminal phase and the application becomes healthy.
+// Returns an error if the application enters a degraded state or fails to become
+// healthy within the timeout period.
 func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout time.Duration) (*models.SyncResult, error) {
 	watchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -193,22 +204,60 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			}
 		}
 
-		// Sync succeeded — wait for health to stabilize.
+		// Sync succeeded — wait for health to become Healthy or reach a terminal state.
 		healthStatus := models.HealthStatus(status.HealthStatus)
-		if healthStatus != models.HealthStatusProgressing && healthStatus != "" {
+		switch healthStatus {
+		case models.HealthStatusHealthy:
+			// Success: application is healthy
 			syncResult.HealthStatus = healthStatus
+			return syncResult, nil
+
+		case models.HealthStatusDegraded:
+			// Failure: application entered degraded state
+			syncResult.Phase = models.SyncPhaseFailed
+			syncResult.HealthStatus = healthStatus
+			syncResult.Message = "application health is Degraded"
+			return syncResult, nil
+
+		case models.HealthStatusSuspended:
+			// Suspended is a valid terminal state (user-intended)
+			syncResult.HealthStatus = healthStatus
+			return syncResult, nil
+
+		case models.HealthStatusMissing, models.HealthStatusUnknown:
+			// Failure: unexpected terminal health state
+			syncResult.Phase = models.SyncPhaseFailed
+			syncResult.HealthStatus = healthStatus
+			syncResult.Message = fmt.Sprintf("application health is %s", healthStatus)
+			return syncResult, nil
+
+		case models.HealthStatusProgressing, "":
+			// Still progressing, continue waiting
+			continue
+
+		default:
+			// Unknown health status, treat as failure
+			syncResult.Phase = models.SyncPhaseFailed
+			syncResult.HealthStatus = healthStatus
+			syncResult.Message = fmt.Sprintf("unexpected health status: %s", healthStatus)
 			return syncResult, nil
 		}
 	}
 
-	// Stream ended (timeout or connection closed).
+	// Stream ended (timeout or connection closed) before health stabilized.
 	if syncResult == nil {
 		return nil, fmt.Errorf("timeout waiting for sync to complete for %s", name)
 	}
 
-	// Sync completed but health didn't stabilize before timeout.
-	syncResult.HealthStatus = models.HealthStatusProgressing
-	return syncResult, nil
+	// Sync completed but health didn't become healthy before timeout.
+	return &models.SyncResult{
+		Application:  syncResult.Application,
+		Revision:     syncResult.Revision,
+		Phase:        models.SyncPhaseFailed,
+		Message:      "timeout waiting for application to become healthy",
+		Resources:    syncResult.Resources,
+		HealthStatus: models.HealthStatusProgressing,
+	}, nil
 }
 
 // watchEvent represents a single event from the ArgoCD Watch API stream.
@@ -368,6 +417,7 @@ type SyncOptions struct {
 	Prune     bool
 	DryRun    bool
 	Resources []SyncResource
+	Timeout   time.Duration // Maximum time to wait for sync and healthy state. 0 means use default (10m).
 }
 
 // SyncResource identifies a specific resource to sync.

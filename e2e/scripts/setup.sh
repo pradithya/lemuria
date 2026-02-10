@@ -86,6 +86,46 @@ install_argocd() {
     echo "Argo CD installed successfully."
 }
 
+# Create Ingress for Argo CD via Traefik
+create_argocd_ingress() {
+    echo "Creating Ingress for Argo CD..."
+
+    cat <<EOF | kubectl apply -f -
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server
+  namespace: argocd
+spec:
+  rules:
+  - host: argocd.127.0.0.1.nip.io
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: argocd-server
+            port:
+              number: 80
+EOF
+
+    echo "Waiting for Ingress to be ready..."
+    # Wait for Traefik to pick up the Ingress
+    local retries=30
+    local i=0
+    while [ $i -lt $retries ]; do
+        if curl -sf -o /dev/null "http://argocd.127.0.0.1.nip.io:8080/api/v1/session" 2>/dev/null || \
+           curl -sf -o /dev/null "http://argocd.127.0.0.1.nip.io:8080/healthz" 2>/dev/null; then
+            echo "Argo CD Ingress is ready."
+            return
+        fi
+        sleep 2
+        i=$((i + 1))
+    done
+    echo "WARNING: Ingress may not be ready yet, continuing..."
+}
+
 # Get Argo CD credentials
 get_argocd_credentials() {
     echo "Getting Argo CD credentials..."
@@ -96,15 +136,7 @@ get_argocd_credentials() {
     echo "Argo CD Admin Password: $ARGOCD_PASSWORD"
     echo "$ARGOCD_PASSWORD" > "$E2E_DIR/.argocd-password"
 
-    # Port forward argocd-server
-    echo "Setting up port-forward for Argo CD..."
-    kubectl port-forward svc/argocd-server -n argocd 8081:80 &
-    ARGOCD_PF_PID=$!
-    echo "$ARGOCD_PF_PID" > "$E2E_DIR/.argocd-pf-pid"
-
-    sleep 3
-
-    echo "Argo CD available at http://localhost:8081"
+    echo "Argo CD available at http://argocd.127.0.0.1.nip.io:8080"
 }
 
 # Generate Argo CD API token
@@ -114,7 +146,7 @@ generate_argocd_token() {
     ARGOCD_PASSWORD=$(cat "$E2E_DIR/.argocd-password")
 
     # Login and get session token
-    SESSION_TOKEN=$(curl -s -X POST "http://localhost:8081/api/v1/session" \
+    SESSION_TOKEN=$(curl -s -X POST "http://argocd.127.0.0.1.nip.io:8080/api/v1/session" \
         -H "Content-Type: application/json" \
         -d "{\"username\":\"admin\",\"password\":\"$ARGOCD_PASSWORD\"}" | \
         grep -o '"token":"[^"]*"' | cut -d'"' -f4)
@@ -128,7 +160,7 @@ generate_argocd_token() {
     echo "Argo CD token saved."
 }
 
-# Install Redis
+# Install Redis (in-cluster with port-forward — single connection, stable)
 install_redis() {
     echo "Installing Redis..."
 
@@ -176,7 +208,7 @@ EOF
     echo "Waiting for Redis to be ready..."
     kubectl wait --for=condition=Available deployment/redis -n redis --timeout=120s
 
-    # Port forward Redis
+    # Port forward Redis (single stable connection, not affected by parallel load)
     kubectl port-forward svc/redis -n redis 6379:6379 &
     REDIS_PF_PID=$!
     echo "$REDIS_PF_PID" > "$E2E_DIR/.redis-pf-pid"
@@ -210,7 +242,7 @@ write_env_file() {
     ARGOCD_TOKEN=$(cat "$E2E_DIR/.argocd-token" 2>/dev/null || echo "")
 
     cat > "$E2E_DIR/.env" <<EOF
-ARGOCD_SERVER=http://localhost:8081
+ARGOCD_SERVER=http://argocd.127.0.0.1.nip.io:8080
 ARGOCD_TOKEN=$ARGOCD_TOKEN
 ARGOCD_INSECURE=true
 REDIS_ADDR=localhost:6379
@@ -225,6 +257,7 @@ main() {
     check_prerequisites
     create_cluster
     install_argocd
+    create_argocd_ingress
     install_redis
     get_argocd_credentials
     generate_argocd_token
@@ -233,7 +266,7 @@ main() {
 
     echo ""
     echo "=== Setup Complete ==="
-    echo "Argo CD: http://localhost:8081 (admin / $(cat "$E2E_DIR/.argocd-password"))"
+    echo "Argo CD: http://argocd.127.0.0.1.nip.io:8080 (admin / $(cat "$E2E_DIR/.argocd-password"))"
     echo "Redis: localhost:6379"
     echo ""
     echo "To run tests: cd $E2E_DIR && go test -v ./..."

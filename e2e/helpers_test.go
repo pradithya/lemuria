@@ -133,3 +133,44 @@ func cleanupForceUnlock(ctx context.Context, t *testing.T, app string) {
 		t.Logf("Warning: failed to force unlock %s: %v", app, err)
 	}
 }
+
+// createTestApplicationWithBadImage creates an ArgoCD application that uses a non-existent image.
+// This will cause the deployment to enter ImagePullBackOff state, resulting in Degraded health.
+func createTestApplicationWithBadImage(ctx context.Context, t *testing.T, client *argocd.Client, name, namespace string) {
+	t.Helper()
+
+	if namespace == "" {
+		namespace = "e2e-test-apps"
+	}
+
+	app := &v1alpha1.Application{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "argocd",
+		},
+		Spec: v1alpha1.ApplicationSpec{
+			Project: "default",
+			Source: &v1alpha1.ApplicationSource{
+				RepoURL:        "https://github.com/argoproj/argocd-example-apps.git",
+				TargetRevision: "HEAD",
+				Path:           "kustomize-guestbook",
+				Kustomize: &v1alpha1.ApplicationSourceKustomize{
+					Images: v1alpha1.KustomizeImages{
+						// Override guestbook image with a non-existent image
+						"gcr.io/heptio-images/ks-guestbook-demo=nonexistent.invalid/bad-image:v999",
+					},
+				},
+			},
+			Destination: v1alpha1.ApplicationDestination{
+				Server:    "https://kubernetes.default.svc",
+				Namespace: namespace,
+			},
+		},
+	}
+
+	if err := client.CreateApplication(ctx, app); err != nil {
+		t.Fatalf("Failed to create test application with bad image %s: %v", name, err)
+	}
+
+	t.Logf("Created test application with bad image: %s", name)
+}
