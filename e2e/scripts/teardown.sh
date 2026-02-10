@@ -21,16 +21,7 @@ E2E_DIR="$(dirname "$SCRIPT_DIR")"
 
 echo "=== Lemuria E2E Test Teardown ==="
 
-# Kill port forwards
-if [ -f "$E2E_DIR/.argocd-pf-pid" ]; then
-    PID=$(cat "$E2E_DIR/.argocd-pf-pid")
-    if kill -0 "$PID" 2>/dev/null; then
-        echo "Stopping Argo CD port-forward (PID: $PID)..."
-        kill "$PID" || true
-    fi
-    rm -f "$E2E_DIR/.argocd-pf-pid"
-fi
-
+# Kill Redis port-forward
 if [ -f "$E2E_DIR/.redis-pf-pid" ]; then
     PID=$(cat "$E2E_DIR/.redis-pf-pid")
     if kill -0 "$PID" 2>/dev/null; then

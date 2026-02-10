@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/models"
@@ -27,19 +28,16 @@ func TestE2EUnlockCommand(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
+	appName := uniqueAppName("e2e-unlock")
 	repo := "test-owner/test-repo"
 	prNumber := 400
 
-	// Use pre-existing test-app to avoid needing to create/delete
-	_, err := argoClient.GetApplication(testCtx, "test-app")
-	if err != nil {
-		t.Skipf("test-app not available: %v", err)
-	}
-	appName := "test-app"
+	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
-	// Ensure clean lock state
-	_ = lockManager.ForceUnlock(testCtx, appName)
 	defer cleanupForceUnlock(testCtx, t, appName)
 
 	mockGH := NewMockVCSClient()
@@ -104,17 +102,14 @@ func TestE2ELockConflictBetweenPRs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
-	appName := "test-app"
+	appName := uniqueAppName("e2e-conflict")
 
-	// Verify app exists
-	_, err := argoClient.GetApplication(testCtx, appName)
-	if err != nil {
-		t.Skipf("test-app not available: %v", err)
-	}
+	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
-	// Ensure clean lock state
-	_ = lockManager.ForceUnlock(testCtx, appName)
 	defer cleanupForceUnlock(testCtx, t, appName)
 
 	repo := "test-owner/test-repo"
@@ -185,19 +180,16 @@ func TestE2EUnlockAll(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
-	// Verify we have at least one app
-	_, err := argoClient.GetApplication(testCtx, "test-app")
-	if err != nil {
-		t.Skipf("test-app not available: %v", err)
-	}
-
+	appName := uniqueAppName("e2e-unlockall")
 	repo := "test-owner/test-repo"
 	prNumber := 800
-	appName := "test-app"
 
-	// Ensure clean lock state
-	_ = lockManager.ForceUnlock(testCtx, appName)
+	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
+
 	defer cleanupForceUnlock(testCtx, t, appName)
 
 	mockGH := NewMockVCSClient()

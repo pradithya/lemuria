@@ -56,6 +56,7 @@ type ArgoCDConfig struct {
 	Insecure       bool          `koanf:"insecure"`
 	DiffMode       string        `koanf:"diff_mode"`        // "branch" or "live", default: "branch"
 	TempAppTimeout time.Duration `koanf:"temp_app_timeout"` // Timeout for temp app manifest rendering, default: 2m
+	SyncTimeout    time.Duration `koanf:"sync_timeout"`     // Timeout for sync + health wait, default: 10m
 }
 
 // RedisConfig holds Redis connection settings.

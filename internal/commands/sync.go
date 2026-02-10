@@ -243,8 +243,9 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 	}
 
 	opts := &argocd.SyncOptions{
-		Prune:  cmd.Prune,
-		DryRun: cmd.DryRun,
+		Prune:   cmd.Prune,
+		DryRun:  cmd.DryRun,
+		Timeout: e.config.ArgoCD.SyncTimeout,
 	}
 
 	// Only set revision for apps sourcing from the PR repo.

@@ -141,7 +141,7 @@ func TestE2EPlanDetectsModifiedExternalChartApp(t *testing.T) {
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 
 	// Wait for app to appear in ArgoCD
-	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
 	// Ensure clean lock state
 	defer cleanupForceUnlock(testCtx, t, appName)

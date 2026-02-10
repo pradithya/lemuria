@@ -60,7 +60,7 @@ test-unit:
 
 # Run e2e tests (requires setup first)
 test-e2e:
-	cd e2e && go test -v -timeout 10m ./...
+	cd e2e && go test -v -timeout 10m -parallel 4 ./...
 
 # Setup e2e test infrastructure
 e2e-setup:
