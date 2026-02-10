@@ -81,17 +81,30 @@ func TestE2ESyncCommand(t *testing.T) {
 		t.Fatalf("Sync command failed: %v", err)
 	}
 
-	// Assert: sync comment was posted
+	// Assert: initial progress comment was posted
 	comments := mockGH.GetPostedComments()
 	if len(comments) == 0 {
-		t.Fatal("Expected sync result comment to be posted")
+		t.Fatal("Expected initial sync progress comment to be posted")
 	}
 
-	lastComment := comments[len(comments)-1]
-	t.Logf("Sync comment: %.300s", lastComment.Body)
+	initialComment := comments[len(comments)-1]
+	t.Logf("Initial sync comment: %.300s", initialComment.Body)
 
-	if !strings.Contains(lastComment.Body, "Sync") {
-		t.Error("Expected sync result in comment body")
+	if !strings.Contains(initialComment.Body, "Sync in progress") {
+		t.Error("Expected initial comment to contain 'Sync in progress'")
+	}
+
+	// Assert: final result was posted as an update
+	updatedComments := mockGH.GetUpdatedComments()
+	if len(updatedComments) == 0 {
+		t.Fatal("Expected sync result to be posted as an update")
+	}
+
+	lastUpdate := updatedComments[len(updatedComments)-1]
+	t.Logf("Final sync comment: %.300s", lastUpdate.Body)
+
+	if !strings.Contains(lastUpdate.Body, "Sync") {
+		t.Error("Expected sync result in updated comment body")
 	}
 
 	// Assert: lock was released (successful sync releases lock)
@@ -210,27 +223,33 @@ spec:
 		t.Fatalf("Sync command failed: %v", err)
 	}
 
-	// Assert: sync comment was posted
+	// Assert: initial comment was posted
 	comments := mockGH.GetPostedComments()
 	if len(comments) == 0 {
-		t.Fatal("Expected sync result comment to be posted")
+		t.Fatal("Expected initial sync progress comment to be posted")
 	}
 
-	lastComment := comments[len(comments)-1]
-	t.Logf("Sync comment: %.500s", lastComment.Body)
+	// Assert: final result was posted as an update
+	updatedComments := mockGH.GetUpdatedComments()
+	if len(updatedComments) == 0 {
+		t.Fatal("Expected sync result to be posted as an update")
+	}
+
+	lastUpdate := updatedComments[len(updatedComments)-1]
+	t.Logf("Sync comment: %.500s", lastUpdate.Body)
 
 	// Assert: sync did NOT report stale plan
-	if strings.Contains(lastComment.Body, "stale") {
+	if strings.Contains(lastUpdate.Body, "stale") {
 		t.Error("Sync should not report stale plan")
 	}
 
 	// Assert: sync result mentions the app
-	if !strings.Contains(lastComment.Body, appName) {
+	if !strings.Contains(lastUpdate.Body, appName) {
 		t.Errorf("Expected sync comment to mention app %q", appName)
 	}
 
 	// Assert: sync attempted (not an error about revision)
-	if strings.Contains(lastComment.Body, "No applications are locked") {
+	if strings.Contains(lastUpdate.Body, "No applications are locked") {
 		t.Error("Expected sync to find the locked application")
 	}
 }
@@ -358,44 +377,50 @@ spec:
 		t.Fatalf("Sync command failed: %v", err)
 	}
 
-	// Assert: sync comment was posted
+	// Assert: initial comment was posted
 	comments := mockGH.GetPostedComments()
 	if len(comments) == 0 {
-		t.Fatal("Expected sync result comment")
+		t.Fatal("Expected initial sync progress comment")
 	}
 
-	lastComment := comments[len(comments)-1]
-	t.Logf("Sync comment: %.800s", lastComment.Body)
+	// Assert: final result was posted as an update
+	updatedComments := mockGH.GetUpdatedComments()
+	if len(updatedComments) == 0 {
+		t.Fatal("Expected sync result to be posted as an update")
+	}
+
+	lastUpdate := updatedComments[len(updatedComments)-1]
+	t.Logf("Sync comment: %.800s", lastUpdate.Body)
 
 	// Assert: both apps mentioned in sync output
-	if !strings.Contains(lastComment.Body, gitAppName) {
+	if !strings.Contains(lastUpdate.Body, gitAppName) {
 		t.Errorf("Expected sync comment to mention git app %q", gitAppName)
 	}
-	if !strings.Contains(lastComment.Body, helmAppName) {
+	if !strings.Contains(lastUpdate.Body, helmAppName) {
 		t.Errorf("Expected sync comment to mention Helm app %q", helmAppName)
 	}
 
 	// Assert: no stale plan error
-	if strings.Contains(lastComment.Body, "stale") {
+	if strings.Contains(lastUpdate.Body, "stale") {
 		t.Error("Sync should not report stale plan")
 	}
 
 	// Assert: plan output is included in sync comment
-	if !strings.Contains(lastComment.Body, "Planned changes") {
+	if !strings.Contains(lastUpdate.Body, "Planned changes") {
 		t.Error("Expected sync comment to include plan summary")
 	}
-	if !strings.Contains(lastComment.Body, "1 to update") {
+	if !strings.Contains(lastUpdate.Body, "1 to update") {
 		t.Error("Expected sync comment to show '1 to update' from stored plan output")
 	}
 
 	// Assert: plan diffs are rendered in the sync comment
-	if !strings.Contains(lastComment.Body, "Plan Diff") {
+	if !strings.Contains(lastUpdate.Body, "Plan Diff") {
 		t.Error("Expected sync comment to include 'Plan Diff' section from stored PlanDiffs")
 	}
-	if !strings.Contains(lastComment.Body, "resources changed") {
+	if !strings.Contains(lastUpdate.Body, "resources changed") {
 		t.Error("Expected sync comment to include resource count in plan diff section")
 	}
-	if !strings.Contains(lastComment.Body, "replicas") {
+	if !strings.Contains(lastUpdate.Body, "replicas") {
 		t.Error("Expected sync comment to contain diff content (replicas) from stored PlanDiffs")
 	}
 }
@@ -569,22 +594,28 @@ func TestE2ESyncDegradedHealth(t *testing.T) {
 		t.Fatalf("Sync command returned error: %v", err)
 	}
 
-	// Assert: sync result comment was posted
+	// Assert: initial comment was posted
 	comments := mockGH.GetPostedComments()
 	if len(comments) == 0 {
-		t.Fatal("Expected sync result comment to be posted")
+		t.Fatal("Expected initial sync progress comment to be posted")
 	}
 
-	lastComment := comments[len(comments)-1]
-	t.Logf("Sync comment for degraded app: %.800s", lastComment.Body)
+	// Assert: final result was posted as an update
+	updatedComments := mockGH.GetUpdatedComments()
+	if len(updatedComments) == 0 {
+		t.Fatal("Expected sync result to be posted as an update")
+	}
+
+	lastUpdate := updatedComments[len(updatedComments)-1]
+	t.Logf("Sync comment for degraded app: %.800s", lastUpdate.Body)
 
 	// Assert: sync result indicates failure — either:
 	// - "Sync failed" (rendered for non-Succeeded phase)
 	// - "Degraded" (health status if Kubernetes progressDeadlineSeconds expired)
 	// - "timeout" (message from health wait timeout)
-	hasFailed := strings.Contains(lastComment.Body, "Sync failed")
-	hasDegraded := strings.Contains(lastComment.Body, "Degraded")
-	hasTimeout := strings.Contains(lastComment.Body, "timeout")
+	hasFailed := strings.Contains(lastUpdate.Body, "Sync failed")
+	hasDegraded := strings.Contains(lastUpdate.Body, "Degraded")
+	hasTimeout := strings.Contains(lastUpdate.Body, "timeout")
 	if !hasFailed && !hasDegraded && !hasTimeout {
 		t.Error("Expected sync result to indicate failure (Sync failed / Degraded / timeout)")
 	}

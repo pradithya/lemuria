@@ -106,6 +106,20 @@ func (c *Client) AddReaction(ctx context.Context, owner, repo string, commentID 
 	return nil
 }
 
+// UpdateComment updates an existing merge request note (VCS interface method).
+// The Lemuria marker is prepended to preserve comment identification.
+func (c *Client) UpdateComment(ctx context.Context, owner, repo string, number int, commentID int64, body string) error {
+	markedBody := CommentMarker + "\n" + body
+	project := projectPath(owner, repo)
+	_, _, err := c.client.Notes.UpdateMergeRequestNote(project, int64(number), commentID, &gogitlab.UpdateMergeRequestNoteOptions{
+		Body: gogitlab.Ptr(markedBody),
+	}, gogitlab.WithContext(ctx))
+	if err != nil {
+		return fmt.Errorf("updating MR note %d: %w", commentID, err)
+	}
+	return nil
+}
+
 // InvalidatePlanComments marks all existing plan comments on a MR as stale.
 func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string, number int) error {
 	project := projectPath(owner, repo)

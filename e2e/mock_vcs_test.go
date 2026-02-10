@@ -36,6 +36,7 @@ type MockVCSClient struct {
 
 	// Recorded interactions
 	PostedComments  []PostedComment
+	UpdatedComments []UpdatedComment
 	Reactions       []Reaction
 	MergeCalls      []MergeCall
 	DeletedBranches []string
@@ -43,6 +44,15 @@ type MockVCSClient struct {
 
 	// Internal counter for comment IDs
 	nextCommentID int64
+}
+
+// UpdatedComment records a comment updated via UpdateComment.
+type UpdatedComment struct {
+	Owner     string
+	Repo      string
+	Number    int
+	CommentID int64
+	Body      string
 }
 
 // PostedComment records a comment posted via PostComment.
@@ -150,6 +160,19 @@ func (m *MockVCSClient) PostComment(_ context.Context, owner, repo string, numbe
 	}, nil
 }
 
+func (m *MockVCSClient) UpdateComment(_ context.Context, owner, repo string, number int, commentID int64, body string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.UpdatedComments = append(m.UpdatedComments, UpdatedComment{
+		Owner:     owner,
+		Repo:      repo,
+		Number:    number,
+		CommentID: commentID,
+		Body:      body,
+	})
+	return nil
+}
+
 func (m *MockVCSClient) AddReaction(_ context.Context, owner, repo string, commentID int64, reaction string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -203,6 +226,15 @@ func (m *MockVCSClient) GetPostedComments() []PostedComment {
 	return result
 }
 
+// GetUpdatedComments returns a copy of the updated comments for assertion.
+func (m *MockVCSClient) GetUpdatedComments() []UpdatedComment {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]UpdatedComment, len(m.UpdatedComments))
+	copy(result, m.UpdatedComments)
+	return result
+}
+
 // GetMergeCalls returns a copy of the merge calls for assertion.
 func (m *MockVCSClient) GetMergeCalls() []MergeCall {
 	m.mu.Lock()
@@ -217,6 +249,7 @@ func (m *MockVCSClient) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.PostedComments = nil
+	m.UpdatedComments = nil
 	m.Reactions = nil
 	m.MergeCalls = nil
 	m.DeletedBranches = nil
