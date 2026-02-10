@@ -84,6 +84,15 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		locks = filtered
 	}
 
+	// Check user authorization for the target applications
+	appNamesForAuth := make([]string, len(locks))
+	for i, l := range locks {
+		appNamesForAuth[i] = l.Application
+	}
+	if err := e.checkUserAuthorizationForApps(ctx, cmd, event, appNamesForAuth); err != nil {
+		return err
+	}
+
 	// Check requirements before sync
 	e.logger.Debug("checking sync requirements")
 	if err := e.checkSyncRequirements(ctx, event, locks); err != nil {

@@ -15,9 +15,12 @@
 package commands
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/org/lemuria/internal/argocd"
+	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
 
@@ -188,6 +191,328 @@ func TestContainsAppByName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := containsAppByName(apps, tt.appName); got != tt.want {
 				t.Errorf("containsAppByName(%q) = %v, want %v", tt.appName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTitleCase(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"sync", "Sync"},
+		{"rollback", "Rollback"},
+		{"plan", "Plan"},
+		{"", ""},
+		{"HELP", "HELP"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := titleCase(tt.input); got != tt.want {
+				t.Errorf("titleCase(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsUserAllowedForApp(t *testing.T) {
+	tests := []struct {
+		name       string
+		repoConfig *config.RepoConfig
+		appName    string
+		user       string
+		want       bool
+	}{
+		// (1) allowed_users unset => allow
+		{
+			name:       "nil repo config allows all users",
+			repoConfig: nil,
+			appName:    "my-app",
+			user:       "anyone",
+			want:       true,
+		},
+		{
+			name:       "no sync requirements allows all users",
+			repoConfig: &config.RepoConfig{},
+			appName:    "my-app",
+			user:       "anyone",
+			want:       true,
+		},
+		{
+			name: "matching requirement with empty allowed_users allows all",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "my-app", AllowedUsers: nil},
+				},
+			},
+			appName: "my-app",
+			user:    "anyone",
+			want:    true,
+		},
+		{
+			name: "no matching requirement allows all",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "other-app", AllowedUsers: []string{"alice"}},
+				},
+			},
+			appName: "my-app",
+			user:    "anyone",
+			want:    true,
+		},
+		// (2) user in list => allow
+		{
+			name: "user in allowed list is allowed",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "my-app", AllowedUsers: []string{"alice", "bob"}},
+				},
+			},
+			appName: "my-app",
+			user:    "bob",
+			want:    true,
+		},
+		// (3) user not in list => blocked
+		{
+			name: "user not in allowed list is blocked",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "my-app", AllowedUsers: []string{"alice", "bob"}},
+				},
+			},
+			appName: "my-app",
+			user:    "charlie",
+			want:    false,
+		},
+		// Wildcard matching
+		{
+			name: "wildcard requirement allows user in list",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "*", AllowedUsers: []string{"admin"}},
+				},
+			},
+			appName: "any-app",
+			user:    "admin",
+			want:    true,
+		},
+		{
+			name: "wildcard requirement blocks user not in list",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "*", AllowedUsers: []string{"admin"}},
+				},
+			},
+			appName: "any-app",
+			user:    "hacker",
+			want:    false,
+		},
+		// Most-specific match precedence: exact match overrides wildcard
+		{
+			name: "exact match takes priority over wildcard - user allowed by exact, blocked by wildcard",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "*", AllowedUsers: []string{"admin"}},
+					{Name: "dev-app", AllowedUsers: []string{"dev-user"}},
+				},
+			},
+			appName: "dev-app",
+			user:    "dev-user",
+			want:    true,
+		},
+		{
+			name: "exact match takes priority over wildcard - user blocked by exact even if allowed by wildcard",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "*", AllowedUsers: []string{"admin"}},
+					{Name: "prod-app", AllowedUsers: []string{"prod-deployer"}},
+				},
+			},
+			appName: "prod-app",
+			user:    "admin",
+			want:    false,
+		},
+		// Prefix wildcard matching
+		{
+			name: "prefix wildcard allows user",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "prod-*", AllowedUsers: []string{"deployer"}},
+				},
+			},
+			appName: "prod-api",
+			user:    "deployer",
+			want:    true,
+		},
+		{
+			name: "prefix wildcard blocks user",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "prod-*", AllowedUsers: []string{"deployer"}},
+				},
+			},
+			appName: "prod-api",
+			user:    "junior-dev",
+			want:    false,
+		},
+		// Exact match with empty allowed_users overrides wildcard restriction
+		{
+			name: "exact match with empty allowed_users overrides wildcard restriction",
+			repoConfig: &config.RepoConfig{
+				SyncRequirements: []config.SyncRequirement{
+					{Name: "*", AllowedUsers: []string{"admin"}},
+					{Name: "dev-app", AllowedUsers: nil},
+				},
+			},
+			appName: "dev-app",
+			user:    "anyone",
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := newSyncTestExecutor(nil, &config.Config{})
+			got := exec.isUserAllowedForApp(tt.repoConfig, tt.appName, tt.user)
+			if got != tt.want {
+				t.Errorf("isUserAllowedForApp() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckUserAuthorizationForApps(t *testing.T) {
+	tests := []struct {
+		name           string
+		repoConfigYAML string
+		user           string
+		appNames       []string
+		cmdName        CommandType
+		wantErr        bool
+		wantErrContain string
+	}{
+		{
+			name:     "no repo config allows all",
+			user:     "anyone",
+			appNames: []string{"app-a"},
+			cmdName:  CommandSync,
+			wantErr:  false,
+		},
+		{
+			name:           "allowed_users unset allows all",
+			repoConfigYAML: "version: 1\nsync_requirements:\n  - name: \"app-a\"\n    require_approval: false\n",
+			user:           "anyone",
+			appNames:       []string{"app-a"},
+			cmdName:        CommandSync,
+			wantErr:        false,
+		},
+		{
+			name:           "user in list is allowed",
+			repoConfigYAML: "version: 1\nsync_requirements:\n  - name: \"app-a\"\n    allowed_users: [\"alice\", \"bob\"]\n",
+			user:           "alice",
+			appNames:       []string{"app-a"},
+			cmdName:        CommandSync,
+			wantErr:        false,
+		},
+		{
+			name:           "user not in list is blocked",
+			repoConfigYAML: "version: 1\nsync_requirements:\n  - name: \"app-a\"\n    allowed_users: [\"alice\", \"bob\"]\n",
+			user:           "charlie",
+			appNames:       []string{"app-a"},
+			cmdName:        CommandSync,
+			wantErr:        true,
+			wantErrContain: "not authorized",
+		},
+		{
+			name:           "multi-app: user allowed for all apps",
+			repoConfigYAML: "version: 1\nsync_requirements:\n  - name: \"*\"\n    allowed_users: [\"deployer\"]\n",
+			user:           "deployer",
+			appNames:       []string{"app-a", "app-b"},
+			cmdName:        CommandSync,
+			wantErr:        false,
+		},
+		{
+			name:           "multi-app: user blocked on one app",
+			repoConfigYAML: "version: 1\nsync_requirements:\n  - name: \"app-a\"\n    allowed_users: [\"alice\"]\n  - name: \"app-b\"\n    allowed_users: [\"bob\"]\n",
+			user:           "alice",
+			appNames:       []string{"app-a", "app-b"},
+			cmdName:        CommandSync,
+			wantErr:        true,
+			wantErrContain: "app-b",
+		},
+		{
+			name:           "exact match overrides wildcard - user restricted to specific app only",
+			repoConfigYAML: "version: 1\nsync_requirements:\n  - name: \"*\"\n    allowed_users: [\"admin\"]\n  - name: \"dev-app\"\n    allowed_users: [\"dev-user\"]\n",
+			user:           "dev-user",
+			appNames:       []string{"dev-app"},
+			cmdName:        CommandRollback,
+			wantErr:        false,
+		},
+		{
+			name:           "exact match overrides wildcard - user cannot touch specific app",
+			repoConfigYAML: "version: 1\nsync_requirements:\n  - name: \"*\"\n    allowed_users: [\"admin\"]\n  - name: \"prod-app\"\n    allowed_users: [\"prod-deployer\"]\n",
+			user:           "admin",
+			appNames:       []string{"prod-app"},
+			cmdName:        CommandSync,
+			wantErr:        true,
+			wantErrContain: "prod-app",
+		},
+		{
+			name:     "nil comment allows all (autoplan scenario)",
+			user:     "", // will set event.Comment = nil
+			appNames: []string{"app-a"},
+			cmdName:  CommandSync,
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var repoConfigData []byte
+			if tt.repoConfigYAML != "" {
+				repoConfigData = []byte(tt.repoConfigYAML)
+			}
+
+			mock := &mockVCSForSync{
+				repoConfigData: repoConfigData,
+			}
+
+			cfg := &config.Config{}
+			exec := newSyncTestExecutor(mock, cfg)
+
+			event := &models.PREvent{
+				Repo: models.RepoInfo{
+					Owner:    "org",
+					Name:     "repo",
+					FullName: "org/repo",
+				},
+				PR: models.PRInfo{
+					Number:  1,
+					HeadRef: "feature-branch",
+				},
+			}
+
+			if tt.user != "" {
+				event.Comment = &models.Comment{
+					Author: models.UserInfo{Login: tt.user},
+				}
+			}
+
+			cmd := &Command{Name: tt.cmdName}
+			err := exec.checkUserAuthorizationForApps(context.Background(), cmd, event, tt.appNames)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("checkUserAuthorizationForApps() expected error, got nil")
+				} else if tt.wantErrContain != "" && !strings.Contains(err.Error(), tt.wantErrContain) {
+					t.Errorf("checkUserAuthorizationForApps() error = %q, want containing %q", err.Error(), tt.wantErrContain)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("checkUserAuthorizationForApps() unexpected error: %v", err)
+				}
 			}
 		})
 	}

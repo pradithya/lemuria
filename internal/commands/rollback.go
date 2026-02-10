@@ -42,6 +42,11 @@ func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *mod
 
 	// If specific app requested, rollback just that app
 	if cmd.Application != "" {
+		// Check user authorization for the specific application
+		if err := e.checkUserAuthorizationForApps(ctx, cmd, event, []string{cmd.Application}); err != nil {
+			return err
+		}
+
 		app, err := e.argocd.GetApplication(ctx, cmd.Application)
 		if err != nil {
 			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Rollback\n\n"+
@@ -65,6 +70,15 @@ func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *mod
 	if len(locks) == 0 {
 		return e.postComment(ctx, event, "", "## Lemuria Rollback\n\n"+
 			"No applications are locked by this PR. Nothing to rollback.")
+	}
+
+	// Check user authorization for all locked applications
+	rollbackAppNames := make([]string, len(locks))
+	for i, l := range locks {
+		rollbackAppNames[i] = l.Application
+	}
+	if err := e.checkUserAuthorizationForApps(ctx, cmd, event, rollbackAppNames); err != nil {
+		return err
 	}
 
 	// Rollback each application

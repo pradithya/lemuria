@@ -195,6 +195,37 @@ func TestGitLabHandlerHandle(t *testing.T) {
 		},
 	}
 
+	// Oversized payload test - body exceeds 10 MB limit
+	t.Run("oversized payload returns 400", func(t *testing.T) {
+		cfg := &config.Config{
+			GitLab: config.GitLabConfig{
+				WebhookSecret: secret,
+			},
+		}
+
+		h := &GitLabHandler{
+			config: cfg,
+			logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		}
+
+		// Create a body that exceeds 10 MB
+		oversized := make([]byte, 10<<20+1) // 10 MB + 1 byte
+		for i := range oversized {
+			oversized[i] = 'A'
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/webhook/gitlab", bytes.NewReader(oversized))
+		req.Header.Set("X-Gitlab-Token", secret)
+		req.Header.Set("X-Gitlab-Event", "Merge Request Hook")
+
+		rec := httptest.NewRecorder()
+		h.Handle(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d for oversized payload", rec.Code, http.StatusBadRequest)
+		}
+	})
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{
