@@ -145,7 +145,7 @@ func (p *OIDCProvider) Exchange(ctx context.Context, code string) (*models.User,
 			return nil, fmt.Errorf("email is required but not provided by identity provider")
 		}
 		if !p.isEmailDomainAllowed(user.Email) {
-			return nil, fmt.Errorf("email domain not allowed: %s", user.Email)
+			return nil, fmt.Errorf("email domain not allowed")
 		}
 	}
 

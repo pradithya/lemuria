@@ -414,6 +414,7 @@ func (e *Executor) postPlanComment(ctx context.Context, event *models.PREvent, b
 
 // postError posts an error comment.
 func (e *Executor) postError(ctx context.Context, event *models.PREvent, err error) error {
-	body := fmt.Sprintf("## Lemuria Error\n\n```\n%s\n```", err.Error())
+	e.logger.Error("command execution error", "repo", event.Repo.FullName, "pr", event.PR.Number, "error", err)
+	body := fmt.Sprintf("## Lemuria Error\n\nAn error occurred while processing the command. Check server logs for details.")
 	return e.postComment(ctx, event, "", body)
 }

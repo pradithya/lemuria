@@ -284,7 +284,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("GitHub OAuth exchange failed", "error", err)
 		respondJSON(w, http.StatusUnauthorized, map[string]string{
-			"error": "authentication failed: " + err.Error(),
+			"error": "authentication failed",
 		})
 		return
 	}
@@ -357,7 +357,7 @@ func (s *Server) handleGitLabCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("GitLab OAuth exchange failed", "error", err)
 		respondJSON(w, http.StatusUnauthorized, map[string]string{
-			"error": "authentication failed: " + err.Error(),
+			"error": "authentication failed",
 		})
 		return
 	}
@@ -414,7 +414,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logger.Error("OIDC callback error", "error", errorDesc)
 		respondJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "authentication failed: " + errorDesc,
+			"error": "authentication failed",
 		})
 		return
 	}
@@ -434,7 +434,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.Error("OIDC exchange failed", "error", err)
 		respondJSON(w, http.StatusUnauthorized, map[string]string{
-			"error": "authentication failed: " + err.Error(),
+			"error": "authentication failed",
 		})
 		return
 	}

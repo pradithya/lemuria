@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -42,6 +43,7 @@ func NewClient(cfg config.ArgoCDConfig) (*Client, error) {
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if cfg.Insecure {
+		slog.Warn("SECURITY WARNING: ArgoCD TLS verification is disabled (insecure: true)")
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 

@@ -28,9 +28,16 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
+// maxYAMLSize is the maximum allowed size for YAML content from PR branches.
+const maxYAMLSize = 1 << 20 // 1MB
+
 // ParseApplicationsFromYAML parses ArgoCD Application CRs from YAML content.
 // It handles both single-document and multi-document YAML files.
 func ParseApplicationsFromYAML(content []byte, sourceFile string) ([]models.Application, error) {
+	if len(content) > maxYAMLSize {
+		return nil, fmt.Errorf("YAML content exceeds maximum size of %d bytes", maxYAMLSize)
+	}
+
 	var apps []models.Application
 
 	decoder := yaml.NewDecoder(bytes.NewReader(content))
@@ -71,6 +78,10 @@ func ParseApplicationsFromYAML(content []byte, sourceFile string) ([]models.Appl
 // v1alpha1.Application for the Application CR matching appName.
 // Handles multi-document YAML files.
 func ParseRawApplicationFromYAML(content []byte, appName string) (*v1alpha1.Application, error) {
+	if len(content) > maxYAMLSize {
+		return nil, fmt.Errorf("YAML content exceeds maximum size of %d bytes", maxYAMLSize)
+	}
+
 	decoder := yaml.NewDecoder(bytes.NewReader(content))
 
 	for {
