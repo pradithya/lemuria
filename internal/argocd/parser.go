@@ -109,6 +109,93 @@ func ParseRawApplicationFromYAML(content []byte, appName string) (*v1alpha1.Appl
 	return nil, fmt.Errorf("application %q not found in YAML", appName)
 }
 
+// ParseApplicationSetsFromYAML parses ArgoCD ApplicationSet CRs from YAML content.
+// It handles both single-document and multi-document YAML files.
+func ParseApplicationSetsFromYAML(content []byte, sourceFile string) ([]v1alpha1.ApplicationSet, error) {
+	var appSets []v1alpha1.ApplicationSet
+
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+
+	for {
+		var rawDoc any
+		err := decoder.Decode(&rawDoc)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			// Skip invalid YAML documents
+			continue
+		}
+
+		yamlBytes, err := yaml.Marshal(rawDoc)
+		if err != nil {
+			continue
+		}
+
+		var appSet v1alpha1.ApplicationSet
+		if err := sigsyaml.Unmarshal(yamlBytes, &appSet); err != nil {
+			continue
+		}
+
+		// Check if this is an ArgoCD ApplicationSet
+		if !strings.HasPrefix(appSet.APIVersion, "argoproj.io/") || appSet.Kind != "ApplicationSet" {
+			continue
+		}
+
+		appSets = append(appSets, appSet)
+	}
+
+	return appSets, nil
+}
+
+// ParseRawApplicationSetFromYAML parses YAML content and returns the typed
+// v1alpha1.ApplicationSet for the ApplicationSet CR matching name.
+// Handles multi-document YAML files.
+func ParseRawApplicationSetFromYAML(content []byte, name string) (*v1alpha1.ApplicationSet, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+
+	for {
+		var rawDoc any
+		err := decoder.Decode(&rawDoc)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		yamlBytes, err := yaml.Marshal(rawDoc)
+		if err != nil {
+			continue
+		}
+
+		var appSet v1alpha1.ApplicationSet
+		if err := sigsyaml.Unmarshal(yamlBytes, &appSet); err != nil {
+			continue
+		}
+
+		if !strings.HasPrefix(appSet.APIVersion, "argoproj.io/") {
+			continue
+		}
+		if appSet.Kind != "ApplicationSet" {
+			continue
+		}
+		if appSet.Name != name {
+			continue
+		}
+
+		return &appSet, nil
+	}
+
+	return nil, fmt.Errorf("applicationset %q not found in YAML", name)
+}
+
+// ParsedAppSet is a helper that pairs an ApplicationSet with its source file.
+type ParsedAppSet struct {
+	AppSet     *v1alpha1.ApplicationSet
+	SourceFile string
+}
+
 // ParsedApplications holds applications parsed from PR files.
 type ParsedApplications struct {
 	// New contains applications that are being added in the PR (file status: added)

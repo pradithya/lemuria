@@ -49,7 +49,8 @@ type Application struct {
 	Labels               map[string]string     `json:"labels,omitempty"`
 	AutoSyncEnabled      bool                  `json:"autoSyncEnabled"`
 	ChangeType           ApplicationChangeType `json:"changeType,omitempty"`
-	SourceFile           string                `json:"sourceFile,omitempty"` // File path where this app CR is defined
+	SourceFile           string                `json:"sourceFile,omitempty"`     // File path where this app CR is defined
+	IsGeneratedApp       bool                  `json:"isGeneratedApp,omitempty"` // True if detected via ApplicationSet Generate API
 }
 
 // ApplicationSource represents a source in a multi-source application.

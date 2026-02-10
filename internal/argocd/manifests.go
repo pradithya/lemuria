@@ -21,6 +21,8 @@ import (
 	"net/url"
 	"strconv"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+
 	"github.com/org/lemuria/internal/models"
 )
 
@@ -35,6 +37,7 @@ type GetManifestsParams struct {
 	Revision        string
 	SourcePositions []int
 	Revisions       []string
+	FetchRevision   bool // when true, fetches revision from app status if not in manifests response
 }
 
 // GetManifests fetches the target manifests for an application.
@@ -71,7 +74,17 @@ func (c *Client) GetManifests(ctx context.Context, name string, params *GetManif
 		manifests = append(manifests, manifest)
 	}
 
-	return manifests, resp.Revision, nil
+	// ArgoCD v3+ no longer returns revision in the manifests response.
+	// Only fetch revision from app status when explicitly requested to avoid extra API calls.
+	revision := resp.Revision
+	if revision == "" && params != nil && params.FetchRevision {
+		var appResp v1alpha1.Application
+		if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &appResp); err == nil {
+			revision = appResp.Status.Sync.Revision
+		}
+	}
+
+	return manifests, revision, nil
 }
 
 // parseManifest extracts metadata from a raw JSON manifest.

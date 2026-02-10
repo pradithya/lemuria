@@ -73,7 +73,7 @@ func TestFullPlanWorkflow(t *testing.T) {
 	t.Log("Lock acquired successfully")
 
 	// Step 2: Get manifests to determine revision
-	_, revision, err := argoClient.GetManifests(testCtx, app.Name, nil)
+	_, revision, err := argoClient.GetManifests(testCtx, app.Name, &argocd.GetManifestsParams{FetchRevision: true})
 	if err != nil {
 		t.Fatalf("Failed to get manifests: %v", err)
 	}
