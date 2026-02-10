@@ -276,11 +276,22 @@ func verifyAndExtractSessionID(secret []byte, cookieValue string) (string, error
 	sessionID := parts[0]
 	providedSig := parts[1]
 
+	// Decode the provided signature from hex to raw bytes.
+	// This validates that the signature is well-formed hex of the correct length,
+	// preventing timing leaks from hmac.Equal short-circuiting on length mismatch.
+	providedMAC, err := hex.DecodeString(providedSig)
+	if err != nil {
+		return "", fmt.Errorf("invalid session cookie signature: malformed hex")
+	}
+	if len(providedMAC) != sha256.Size {
+		return "", fmt.Errorf("invalid session cookie signature: wrong length")
+	}
+
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(sessionID))
-	expectedSig := hex.EncodeToString(mac.Sum(nil))
+	expectedMAC := mac.Sum(nil)
 
-	if !hmac.Equal([]byte(providedSig), []byte(expectedSig)) {
+	if !hmac.Equal(providedMAC, expectedMAC) {
 		return "", fmt.Errorf("invalid session cookie signature")
 	}
 

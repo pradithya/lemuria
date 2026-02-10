@@ -134,6 +134,17 @@ func validate(cfg *Config) error {
 	if cfg.Auth.Enabled {
 		if cfg.Auth.SessionSecret == "" {
 			errs = append(errs, "auth.session_secret is required when auth is enabled")
+		} else if len(cfg.Auth.SessionSecret) < 32 {
+			errs = append(errs, "auth.session_secret must be at least 32 bytes (it is used as an HMAC-SHA256 key)")
+		}
+
+		// Validate basic auth users have password_hash set
+		if cfg.Auth.Basic != nil {
+			for i, user := range cfg.Auth.Basic.Users {
+				if user.PasswordHash == "" {
+					errs = append(errs, fmt.Sprintf("auth.basic.users[%d].password_hash is required (use bcrypt hash, not plaintext password)", i))
+				}
+			}
 		}
 	}
 
