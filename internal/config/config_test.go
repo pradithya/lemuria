@@ -155,7 +155,7 @@ func TestConfigHasBasicAuth(t *testing.T) {
 		{
 			name: "has users",
 			config: &Config{Auth: AuthConfig{Basic: &BasicAuthConfig{
-				Users: []BasicAuthUser{{Username: "admin", Password: "pass"}},
+				Users: []BasicAuthUser{{Username: "admin", PasswordHash: "$2a$10$hash"}},
 			}}},
 			want: true,
 		},

@@ -51,8 +51,8 @@ auth:
   basic:
     users:
       - username: admin
-        password: admin
+        password_hash: "$2a$10$YD9MKCJwxFCuAm54vkbLTuqFWFnF9Yz4P8mlnf64MZjEuNMgARSma"
         role: admin
       - username: user
-        password: user
+        password_hash: "$2a$10$fUKMhTgErd8FwjgolUPKWuaqIDXIte3fFyhk19ZAYG2jIpL1I.QFW"
         role: user

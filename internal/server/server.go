@@ -175,6 +175,7 @@ func (s *Server) setupAuth(cfg *config.Config) error {
 	s.authMiddleware = auth.NewMiddleware(
 		s.sessionStore,
 		s.roleResolver,
+		cfg.Auth.SessionSecret,
 		cfg.Auth.CookieDomain,
 		cfg.Auth.CookieSecure,
 		s.logger,

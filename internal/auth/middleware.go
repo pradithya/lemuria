@@ -16,7 +16,11 @@ package auth
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -31,27 +35,30 @@ const (
 
 // Middleware provides HTTP middleware for authentication and authorization.
 type Middleware struct {
-	sessionStore *RedisSessionStore
-	roleResolver *ConfigRoleResolver
-	cookieDomain string
-	cookieSecure bool
-	logger       *slog.Logger
+	sessionStore  *RedisSessionStore
+	roleResolver  *ConfigRoleResolver
+	sessionSecret []byte
+	cookieDomain  string
+	cookieSecure  bool
+	logger        *slog.Logger
 }
 
 // NewMiddleware creates a new auth middleware.
 func NewMiddleware(
 	sessionStore *RedisSessionStore,
 	roleResolver *ConfigRoleResolver,
+	sessionSecret string,
 	cookieDomain string,
 	cookieSecure bool,
 	logger *slog.Logger,
 ) *Middleware {
 	return &Middleware{
-		sessionStore: sessionStore,
-		roleResolver: roleResolver,
-		cookieDomain: cookieDomain,
-		cookieSecure: cookieSecure,
-		logger:       logger,
+		sessionStore:  sessionStore,
+		roleResolver:  roleResolver,
+		sessionSecret: []byte(sessionSecret),
+		cookieDomain:  cookieDomain,
+		cookieSecure:  cookieSecure,
+		logger:        logger,
 	}
 }
 
@@ -130,7 +137,12 @@ func (m *Middleware) getSessionFromRequest(r *http.Request) *models.Session {
 	// Try cookie first
 	cookie, err := r.Cookie(SessionCookieName)
 	if err == nil && cookie.Value != "" {
-		session, err := m.sessionStore.Get(r.Context(), cookie.Value)
+		sessionID, err := verifyAndExtractSessionID(m.sessionSecret, cookie.Value)
+		if err != nil {
+			m.logger.Debug("invalid session cookie signature", "error", err)
+			return nil
+		}
+		session, err := m.sessionStore.Get(r.Context(), sessionID)
 		if err != nil {
 			m.logger.Debug("failed to get session from cookie", "error", err)
 			return nil
@@ -142,7 +154,12 @@ func (m *Middleware) getSessionFromRequest(r *http.Request) *models.Session {
 	authHeader := r.Header.Get("Authorization")
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		session, err := m.sessionStore.Get(r.Context(), token)
+		sessionID, err := verifyAndExtractSessionID(m.sessionSecret, token)
+		if err != nil {
+			m.logger.Debug("invalid bearer token signature", "error", err)
+			return nil
+		}
+		session, err := m.sessionStore.Get(r.Context(), sessionID)
 		if err != nil {
 			m.logger.Debug("failed to get session from bearer token", "error", err)
 			return nil
@@ -154,10 +171,12 @@ func (m *Middleware) getSessionFromRequest(r *http.Request) *models.Session {
 }
 
 // SetSessionCookie sets the session cookie on the response.
+// The cookie value is signed using HMAC-SHA256: sessionID.signature
 func (m *Middleware) SetSessionCookie(w http.ResponseWriter, session *models.Session) {
+	signedValue := signSessionID(m.sessionSecret, session.ID)
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
-		Value:    session.ID,
+		Value:    signedValue,
 		Path:     "/",
 		Domain:   m.cookieDomain,
 		Secure:   m.cookieSecure,
@@ -237,6 +256,35 @@ func (m *Middleware) respondForbidden(w http.ResponseWriter, r *http.Request, me
 	}); err != nil {
 		m.logger.Warn("failed to encode forbidden response", "error", err)
 	}
+}
+
+// signSessionID signs a session ID using HMAC-SHA256 and returns "sessionID.signature".
+func signSessionID(secret []byte, sessionID string) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(sessionID))
+	signature := hex.EncodeToString(mac.Sum(nil))
+	return sessionID + "." + signature
+}
+
+// verifyAndExtractSessionID verifies the HMAC signature and extracts the session ID.
+func verifyAndExtractSessionID(secret []byte, cookieValue string) (string, error) {
+	parts := strings.SplitN(cookieValue, ".", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid signed cookie format")
+	}
+
+	sessionID := parts[0]
+	providedSig := parts[1]
+
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(sessionID))
+	expectedSig := hex.EncodeToString(mac.Sum(nil))
+
+	if !hmac.Equal([]byte(providedSig), []byte(expectedSig)) {
+		return "", fmt.Errorf("invalid session cookie signature")
+	}
+
+	return sessionID, nil
 }
 
 // wantsJSON returns true if the request expects a JSON response.

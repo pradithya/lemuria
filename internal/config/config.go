@@ -106,9 +106,9 @@ type BasicAuthConfig struct {
 
 // BasicAuthUser represents a basic auth user.
 type BasicAuthUser struct {
-	Username string `koanf:"username"`
-	Password string `koanf:"password"`
-	Role     string `koanf:"role"`
+	Username     string `koanf:"username"`
+	PasswordHash string `koanf:"password_hash"` // bcrypt hash of the password
+	Role         string `koanf:"role"`
 }
 
 // GitHubOAuthConfig holds GitHub OAuth settings (separate from GitHub App).

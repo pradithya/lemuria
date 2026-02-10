@@ -130,6 +130,13 @@ func validate(cfg *Config) error {
 		errs = append(errs, "argocd.token is required")
 	}
 
+	// Validate auth config if enabled
+	if cfg.Auth.Enabled {
+		if cfg.Auth.SessionSecret == "" {
+			errs = append(errs, "auth.session_secret is required when auth is enabled")
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("configuration errors:\n  - %s", strings.Join(errs, "\n  - "))
 	}

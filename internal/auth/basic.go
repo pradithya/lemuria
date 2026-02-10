@@ -16,8 +16,9 @@ package auth
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
@@ -30,8 +31,8 @@ type BasicProvider struct {
 }
 
 type basicUser struct {
-	password string
-	role     models.Role
+	passwordHash string
+	role         models.Role
 }
 
 // NewBasicProvider creates a new basic auth provider from config.
@@ -43,8 +44,8 @@ func NewBasicProvider(cfg *config.BasicAuthConfig) *BasicProvider {
 			role = models.RoleUser
 		}
 		users[u.Username] = basicUser{
-			password: u.Password,
-			role:     role,
+			passwordHash: u.PasswordHash,
+			role:         role,
 		}
 	}
 	return &BasicProvider{users: users}
@@ -67,8 +68,8 @@ func (p *BasicProvider) Authenticate(ctx context.Context, username, password str
 		return nil, fmt.Errorf("invalid username or password")
 	}
 
-	// Constant-time comparison to prevent timing attacks
-	if subtle.ConstantTimeCompare([]byte(user.password), []byte(password)) != 1 {
+	// Compare password against bcrypt hash
+	if err := bcrypt.CompareHashAndPassword([]byte(user.passwordHash), []byte(password)); err != nil {
 		return nil, fmt.Errorf("invalid username or password")
 	}
 
