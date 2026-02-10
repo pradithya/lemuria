@@ -66,6 +66,7 @@ type Server struct {
 	gitlabOAuthProvider *auth.GitLabProvider
 	oidcProvider        *auth.OIDCProvider
 	basicAuthProvider   *auth.BasicProvider
+	loginRateLimiter    *RateLimiter
 }
 
 // New creates a new Server instance.
@@ -120,6 +121,12 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 			return nil, fmt.Errorf("setting up auth: %w", err)
 		}
 	}
+
+	// Initialize login rate limiter (5 attempts per minute per IP)
+	s.loginRateLimiter = NewRateLimiter(5, 1*time.Minute)
+
+	// Warn about insecure configuration values at startup
+	config.WarnInsecureConfig(cfg, logger)
 
 	s.setupMiddleware()
 	s.setupRoutes()
@@ -293,6 +300,9 @@ func (s *Server) Run() error {
 
 // Close releases all resources held by the server.
 func (s *Server) Close() error {
+	if s.loginRateLimiter != nil {
+		s.loginRateLimiter.Stop()
+	}
 	if s.lockManager != nil {
 		if err := s.lockManager.Close(); err != nil {
 			s.logger.Error("error closing lock manager", "error", err)
