@@ -106,7 +106,7 @@ install-tools:
 	@echo ""
 	@echo "Installing Go tools..."
 	@echo "  Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(GOBIN) $(GOLANGCI_LINT_VERSION)
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/$(GOLANGCI_LINT_VERSION)/install.sh | sh -s -- -b $(GOBIN) $(GOLANGCI_LINT_VERSION)
 	@echo "  Installing goimports $(GOIMPORTS_VERSION)..."
 	@go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
 	@echo "  Installing addlicense $(ADDLICENSE_VERSION)..."
@@ -167,7 +167,7 @@ CONFIG ?= config/test.yaml
 run-redis:
 	@if [ -z "$$(docker ps -q -f name=lemuria-redis)" ]; then \
 		echo "Starting Redis..."; \
-		docker run -d --name lemuria-redis -p 6379:6379 redis:7-alpine; \
+		docker run -d --name lemuria-redis -p 127.0.0.1:6379:6379 redis:7-alpine; \
 		sleep 2; \
 	else \
 		echo "Redis is already running"; \

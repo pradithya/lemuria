@@ -156,7 +156,7 @@ jobs:
           cache: true
 
       - name: Install k3d
-        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/v5.7.5/install.sh | TAG=v5.7.5 bash
 
       - name: Install Helm
         uses: azure/setup-helm@v4
