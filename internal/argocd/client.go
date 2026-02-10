@@ -94,7 +94,7 @@ func (c *Client) get(ctx context.Context, path string, query url.Values, result 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	if result != nil {
@@ -125,7 +125,7 @@ func (c *Client) post(ctx context.Context, path string, query url.Values, payloa
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	if result != nil {
@@ -156,7 +156,7 @@ func (c *Client) put(ctx context.Context, path string, query url.Values, payload
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		return &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 
 	if result != nil {
@@ -178,7 +178,7 @@ func (c *Client) delete(ctx context.Context, path string, query url.Values) erro
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(body))
+		return &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	return nil

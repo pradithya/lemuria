@@ -413,8 +413,17 @@ func (e *Executor) postPlanComment(ctx context.Context, event *models.PREvent, b
 }
 
 // postError posts an error comment.
+// ArgoCD API errors are sanitized to avoid leaking internal details.
+// Other errors (validation failures, lock errors, etc.) are shown as-is
+// since they contain user-actionable information.
 func (e *Executor) postError(ctx context.Context, event *models.PREvent, err error) error {
 	e.logger.Error("command execution error", "repo", event.Repo.FullName, "pr", event.PR.Number, "error", err)
-	body := fmt.Sprintf("## Lemuria Error\n\nAn error occurred while processing the command. Check server logs for details.")
+
+	var body string
+	if argocd.IsAPIError(err) {
+		body = "## Lemuria Error\n\nAn error occurred while processing the command. Check server logs for details."
+	} else {
+		body = fmt.Sprintf("## Lemuria Error\n\n%s", err.Error())
+	}
 	return e.postComment(ctx, event, "", body)
 }

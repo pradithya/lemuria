@@ -344,7 +344,7 @@ func (c *Client) watchApplication(ctx context.Context, name string) (<-chan watc
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("watch API error (status %d): %s", resp.StatusCode, string(body))
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	ch := make(chan watchEvent)

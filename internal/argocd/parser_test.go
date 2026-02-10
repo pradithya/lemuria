@@ -15,6 +15,7 @@
 package argocd
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/org/lemuria/internal/models"
@@ -429,6 +430,97 @@ spec:
 		}
 		if apps[0].AutoSyncEnabled {
 			t.Error("expected AutoSyncEnabled to be false")
+		}
+	})
+}
+
+func TestParseApplicationsFromYAML_SizeLimit(t *testing.T) {
+	t.Run("content at max size is accepted", func(t *testing.T) {
+		// Build valid YAML that is exactly maxYAMLSize bytes
+		header := []byte(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: size-test
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: manifests
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  # padding: `)
+		padding := make([]byte, maxYAMLSize-len(header))
+		for i := range padding {
+			padding[i] = 'x'
+		}
+		content := append(header, padding...)
+
+		_, err := ParseApplicationsFromYAML(content, "test.yaml")
+		if err != nil {
+			t.Fatalf("expected no error for content at max size, got: %v", err)
+		}
+	})
+
+	t.Run("content exceeding max size is rejected", func(t *testing.T) {
+		content := make([]byte, maxYAMLSize+1)
+		for i := range content {
+			content[i] = 'x'
+		}
+
+		_, err := ParseApplicationsFromYAML(content, "test.yaml")
+		if err == nil {
+			t.Fatal("expected error for content exceeding max size")
+		}
+		if got := err.Error(); got != fmt.Sprintf("YAML content exceeds maximum size of %d bytes", maxYAMLSize) {
+			t.Errorf("unexpected error message: %s", got)
+		}
+	})
+}
+
+func TestParseRawApplicationFromYAML_SizeLimit(t *testing.T) {
+	t.Run("content at max size is accepted", func(t *testing.T) {
+		// Build valid YAML that is exactly maxYAMLSize bytes
+		header := []byte(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: size-test
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: manifests
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  # padding: `)
+		padding := make([]byte, maxYAMLSize-len(header))
+		for i := range padding {
+			padding[i] = 'x'
+		}
+		content := append(header, padding...)
+
+		app, err := ParseRawApplicationFromYAML(content, "size-test")
+		if err != nil {
+			t.Fatalf("expected no error for content at max size, got: %v", err)
+		}
+		if app.Name != "size-test" {
+			t.Errorf("expected name 'size-test', got %v", app.Name)
+		}
+	})
+
+	t.Run("content exceeding max size is rejected", func(t *testing.T) {
+		content := make([]byte, maxYAMLSize+1)
+		for i := range content {
+			content[i] = 'x'
+		}
+
+		_, err := ParseRawApplicationFromYAML(content, "my-app")
+		if err == nil {
+			t.Fatal("expected error for content exceeding max size")
+		}
+		if got := err.Error(); got != fmt.Sprintf("YAML content exceeds maximum size of %d bytes", maxYAMLSize) {
+			t.Errorf("unexpected error message: %s", got)
 		}
 	})
 }
