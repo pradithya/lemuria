@@ -120,6 +120,9 @@ func validate(cfg *Config) error {
 		if cfg.GitLab.Token == "" {
 			errs = append(errs, "gitlab.token is required when gitlab is configured")
 		}
+		if cfg.GitLab.WebhookSecret == "" {
+			errs = append(errs, "gitlab.webhook_secret is required when gitlab is configured")
+		}
 	}
 
 	if cfg.ArgoCD.ServerURL == "" {
