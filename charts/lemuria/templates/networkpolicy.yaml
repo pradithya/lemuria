@@ -12,6 +12,7 @@ spec:
   policyTypes:
     - Ingress
     - Egress
+  {{- if .Values.networkPolicy.ingressLabels }}
   ingress:
     - from:
         - namespaceSelector: {}
@@ -20,7 +21,8 @@ spec:
               {{- toYaml .Values.networkPolicy.ingressLabels | nindent 14 }}
       ports:
         - protocol: TCP
-          port: {{ .Values.service.port }}
+          port: http
+  {{- end }}
   egress:
     - to:
         - podSelector:

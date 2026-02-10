@@ -64,6 +64,17 @@ redis:
   # Redis database number
   db: 0
 
+  # Enable TLS for Redis connections (default: false)
+  # Set to true when connecting to Redis instances that require TLS
+  # (e.g., AWS ElastiCache in-transit encryption, Azure Cache for Redis)
+  # Override with: REDIS__TLS
+  tls: false
+
+  # Skip TLS certificate verification (default: false)
+  # WARNING: Not recommended for production use - only for self-signed certs in dev/test
+  # Override with: REDIS__TLS_INSECURE
+  tls_insecure: false
+
 defaults:
   # Automatically run plan when PR is opened or updated
   autoplan: true
