@@ -58,8 +58,8 @@ ingress:
   # -- Ingress class name
   className: nginx
   # -- Ingress annotations
-  annotations: {}
-    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
     # cert-manager.io/cluster-issuer: "letsencrypt-prod"
   # -- Ingress hosts configuration
   hosts:
@@ -68,10 +68,12 @@ ingress:
         - path: /
           pathType: Prefix
   # -- Ingress TLS configuration
-  tls: []
+  # RECOMMENDED: Configure TLS to encrypt traffic in transit.
+  # Example:
   #  - secretName: lemuria-tls
   #    hosts:
   #      - lemuria.example.com
+  tls: []
 
 resources:
   limits:
@@ -107,6 +109,13 @@ tolerations: []
 
 # -- Affinity rules for pod scheduling
 affinity: {}
+
+# -- NetworkPolicy configuration to restrict pod traffic
+networkPolicy:
+  # -- Enable NetworkPolicy (default: false to not break existing deployments)
+  enabled: false
+  # -- Labels to match ingress source pods (e.g., ingress controller)
+  ingressLabels: {}
 
 # Lemuria configuration (non-sensitive values stored in ConfigMap)
 # Sensitive values are stored in Secret and injected via environment variables
@@ -176,8 +185,8 @@ redis:
     enabled: false
   master:
     persistence:
-      # -- Enable Redis data persistence
-      enabled: false
+      # -- Enable Redis data persistence (recommended to prevent data loss on restart)
+      enabled: true
       # -- Storage class for Redis PVC
       storageClass: ""
       # -- Size of Redis PVC

@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -138,11 +139,17 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 // setupAuth initializes authentication components.
 func (s *Server) setupAuth(cfg *config.Config) error {
 	// Create Redis client for sessions
-	s.redisClient = redis.NewClient(&redis.Options{
+	redisOpts := &redis.Options{
 		Addr:     cfg.Redis.Address,
 		Password: cfg.Redis.Password,
 		DB:       cfg.Redis.DB,
-	})
+	}
+	if cfg.Redis.TLS {
+		redisOpts.TLSConfig = &tls.Config{
+			InsecureSkipVerify: cfg.Redis.TLSInsecure,
+		}
+	}
+	s.redisClient = redis.NewClient(redisOpts)
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

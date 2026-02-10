@@ -61,9 +61,11 @@ type ArgoCDConfig struct {
 
 // RedisConfig holds Redis connection settings.
 type RedisConfig struct {
-	Address  string `koanf:"address"`
-	Password string `koanf:"password"`
-	DB       int    `koanf:"db"`
+	Address     string `koanf:"address"`
+	Password    string `koanf:"password"`
+	DB          int    `koanf:"db"`
+	TLS         bool   `koanf:"tls"`
+	TLSInsecure bool   `koanf:"tls_insecure"`
 }
 
 // DefaultsConfig holds default behavior settings.

@@ -16,6 +16,7 @@ package lock
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,11 +47,17 @@ type RedisManager struct {
 
 // NewRedisManager creates a new Redis-based lock manager.
 func NewRedisManager(cfg config.RedisConfig) (*RedisManager, error) {
-	client := redis.NewClient(&redis.Options{
+	opts := &redis.Options{
 		Addr:     cfg.Address,
 		Password: cfg.Password,
 		DB:       cfg.DB,
-	})
+	}
+	if cfg.TLS {
+		opts.TLSConfig = &tls.Config{
+			InsecureSkipVerify: cfg.TLSInsecure,
+		}
+	}
+	client := redis.NewClient(opts)
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
