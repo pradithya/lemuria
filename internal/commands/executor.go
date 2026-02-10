@@ -61,6 +61,13 @@ func (e *Executor) Execute(ctx context.Context, cmd *Command, event *models.PREv
 		"head_sha", event.PR.HeadSHA,
 	)
 
+	// Check user authorization for sync and rollback commands
+	if cmd.Name == CommandSync || cmd.Name == CommandRollback {
+		if err := e.checkUserAuthorization(ctx, cmd, event); err != nil {
+			return err
+		}
+	}
+
 	switch cmd.Name {
 	case CommandPlan:
 		return e.executePlan(ctx, cmd, event)
@@ -75,6 +82,71 @@ func (e *Executor) Execute(ctx context.Context, cmd *Command, event *models.PREv
 	default:
 		return fmt.Errorf("unknown command: %s", cmd.Name)
 	}
+}
+
+// checkUserAuthorization verifies that the comment author is in the allowed
+// users list defined in the repo's SyncRequirements. If AllowedUsers is empty
+// or nil for all matching requirements, all users are allowed (backwards
+// compatible). Returns nil if authorized, posts a comment and returns an error
+// if not.
+func (e *Executor) checkUserAuthorization(ctx context.Context, cmd *Command, event *models.PREvent) error {
+	if event.Comment == nil {
+		return nil
+	}
+
+	user := event.Comment.Author.Login
+	repoConfig := e.getRepoConfig(ctx, event)
+	if repoConfig == nil {
+		// No repo config means no restrictions
+		return nil
+	}
+
+	// Collect allowed users from all matching sync requirements.
+	// If a specific application is targeted, only check that app's requirements.
+	// Otherwise, check all sync requirements.
+	var allowedUsers []string
+	hasRestriction := false
+
+	for _, req := range repoConfig.SyncRequirements {
+		matches := false
+		if cmd.Application != "" {
+			// Check if this requirement applies to the targeted application
+			matches = matchAppName(req.Name, cmd.Application)
+		} else {
+			// No specific app targeted; any requirement with allowed_users applies
+			matches = true
+		}
+
+		if matches && len(req.AllowedUsers) > 0 {
+			hasRestriction = true
+			allowedUsers = append(allowedUsers, req.AllowedUsers...)
+		}
+	}
+
+	// If no restrictions are configured, allow all users
+	if !hasRestriction {
+		return nil
+	}
+
+	// Check if the user is in the allowed list
+	for _, allowed := range allowedUsers {
+		if allowed == user {
+			return nil
+		}
+	}
+
+	e.logger.Warn("unauthorized user attempted command",
+		"user", user,
+		"command", cmd.Name,
+		"repo", event.Repo.FullName,
+		"pr", event.PR.Number,
+	)
+
+	msg := fmt.Sprintf("## Lemuria %s\n\n:no_entry: User `%s` is not authorized to run `%s`. Please contact a repository administrator.",
+		cmd.Name, user, cmd.Name)
+	_ = e.postComment(ctx, event, "", msg)
+
+	return fmt.Errorf("user %s is not authorized to run %s", user, cmd.Name)
 }
 
 // RunAutoplan runs plan for all affected applications.

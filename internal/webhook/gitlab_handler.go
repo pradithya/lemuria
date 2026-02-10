@@ -48,7 +48,8 @@ func NewGitLabHandler(cfg *config.Config, gl *gitlab.Client, executor *commands.
 
 // Handle processes incoming GitLab webhook requests.
 func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	// Read request body
+	// Read request body with size limit to prevent memory exhaustion
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10 MB limit
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.logger.Error("failed to read request body", "error", err)
@@ -59,7 +60,10 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Validate webhook secret token
 	token := r.Header.Get("X-Gitlab-Token")
 	if !h.validateToken(token) {
-		h.logger.Warn("invalid webhook token")
+		h.logger.Warn("invalid webhook token",
+			"remote_addr", r.RemoteAddr,
+			"user_agent", r.UserAgent(),
+		)
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}

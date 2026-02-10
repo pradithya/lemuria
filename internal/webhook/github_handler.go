@@ -49,7 +49,8 @@ func NewGitHubHandler(cfg *config.Config, gh *github.Client, executor *commands.
 
 // Handle processes incoming GitHub webhook requests.
 func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	// Read request body
+	// Read request body with size limit to prevent memory exhaustion
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10 MB limit
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.logger.Error("failed to read request body", "error", err)
@@ -60,7 +61,10 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Validate webhook signature
 	signature := r.Header.Get("X-Hub-Signature-256")
 	if !h.validator.Validate(body, signature) {
-		h.logger.Warn("invalid webhook signature")
+		h.logger.Warn("invalid webhook signature",
+			"remote_addr", r.RemoteAddr,
+			"user_agent", r.UserAgent(),
+		)
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
