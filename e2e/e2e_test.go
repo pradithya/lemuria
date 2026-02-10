@@ -41,13 +41,13 @@ func TestMain(m *testing.M) {
 
 	// Setup context with timeout
 	var cancel context.CancelFunc
-	testCtx, cancel = context.WithTimeout(context.Background(), 5*time.Minute)
+	testCtx, cancel = context.WithTimeout(context.Background(), 7*time.Minute)
 	defer cancel()
 
 	// Initialize clients
 	var err error
 	argoClient, err = argocd.NewClient(config.ArgoCDConfig{
-		ServerURL: getEnv("ARGOCD_SERVER", "http://localhost:8081"),
+		ServerURL: getEnv("ARGOCD_SERVER", "http://argocd.127.0.0.1.nip.io:8080"),
 		Token:     getEnv("ARGOCD_TOKEN", ""),
 		Insecure:  true,
 	})

@@ -29,6 +29,7 @@ func TestE2ESyncCommand(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
 	appName := uniqueAppName("e2e-sync")
 	repo := "test-owner/test-repo"
@@ -37,7 +38,7 @@ func TestE2ESyncCommand(t *testing.T) {
 	// Create a per-test application
 	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
-	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
 	// Ensure clean lock state
 	defer cleanupForceUnlock(testCtx, t, appName)
@@ -109,6 +110,7 @@ func TestE2ESyncExternalSourceApp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
 	appName := uniqueAppName("e2e-ext-sync")
 	repo := "test-owner/test-repo"
@@ -118,7 +120,7 @@ func TestE2ESyncExternalSourceApp(t *testing.T) {
 	// Create an app with an external Helm chart source
 	createTestHelmChartApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
-	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
 	defer cleanupForceUnlock(testCtx, t, appName)
 
@@ -240,6 +242,7 @@ func TestE2ESyncMixedApps(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
 	gitAppName := uniqueAppName("e2e-git-mix")
 	helmAppName := uniqueAppName("e2e-helm-mix")
@@ -250,11 +253,11 @@ func TestE2ESyncMixedApps(t *testing.T) {
 	// Create both apps
 	createTestApplication(testCtx, t, argoClient, gitAppName, "e2e-test-apps")
 	defer deleteTestApplication(testCtx, t, argoClient, gitAppName)
-	waitForAppReady(testCtx, t, argoClient, gitAppName, 60*time.Second)
+	waitForAppReady(testCtx, t, argoClient, gitAppName, 120*time.Second)
 
 	createTestHelmChartApplication(testCtx, t, argoClient, helmAppName, "e2e-test-apps")
 	defer deleteTestApplication(testCtx, t, argoClient, helmAppName)
-	waitForAppReady(testCtx, t, argoClient, helmAppName, 60*time.Second)
+	waitForAppReady(testCtx, t, argoClient, helmAppName, 120*time.Second)
 
 	defer cleanupForceUnlock(testCtx, t, gitAppName)
 	defer cleanupForceUnlock(testCtx, t, helmAppName)
@@ -401,19 +404,16 @@ func TestE2ESyncStalePlan(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
+	appName := uniqueAppName("e2e-stale")
 	repo := "test-owner/test-repo"
 	prNumber := 500
 
-	// Use pre-existing test-app
-	_, err := argoClient.GetApplication(testCtx, "test-app")
-	if err != nil {
-		t.Skipf("test-app not available: %v", err)
-	}
-	appName := "test-app"
+	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
-	// Ensure clean lock state
-	_ = lockManager.ForceUnlock(testCtx, appName)
 	defer cleanupForceUnlock(testCtx, t, appName)
 
 	mockGH := NewMockVCSClient()
@@ -470,6 +470,7 @@ func TestE2ESyncNoLock(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
 	repo := "test-owner/test-repo"
 	prNumber := 600
@@ -499,5 +500,101 @@ func TestE2ESyncNoLock(t *testing.T) {
 
 	if !strings.Contains(lastComment.Body, "No applications are locked") {
 		t.Error("Expected 'No applications are locked' message")
+	}
+}
+
+// TestE2ESyncDegradedHealth verifies that sync fails when the application
+// enters a Degraded health state (e.g., due to ImagePullBackOff).
+func TestE2ESyncDegradedHealth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+	t.Parallel()
+
+	appName := uniqueAppName("e2e-degraded")
+	repo := "test-owner/test-repo"
+	prNumber := 700
+	headSHA := "abc123degraded"
+
+	// Create an application with a non-existent image to trigger Degraded health
+	createTestApplicationWithBadImage(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
+
+	defer cleanupForceUnlock(testCtx, t, appName)
+
+	mockGH := NewMockVCSClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+
+	// Use a short sync timeout so the test doesn't wait the full default (10m)
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "live",
+			TempAppTimeout: 2 * time.Minute,
+			SyncTimeout:    90 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			RequireApproval: false,
+			AutoMerge:       false,
+		},
+	}
+	executor := newTestExecutor(mockGH, cfg)
+
+	// Step 1: Run plan to acquire lock
+	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+appName)
+	planCmd := &commands.Command{
+		Name:        commands.CommandPlan,
+		Application: appName,
+	}
+
+	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
+		t.Fatalf("Plan command failed: %v", err)
+	}
+
+	// Verify lock acquired
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil || lock == nil {
+		t.Fatalf("Expected lock to be acquired: %v", err)
+	}
+
+	// Step 2: Run sync - this should fail due to Degraded health
+	mockGH.Reset()
+	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
+	syncCmd := &commands.Command{
+		Name: commands.CommandSync,
+	}
+
+	err = executor.Execute(testCtx, syncCmd, syncEvent)
+	if err != nil {
+		t.Fatalf("Sync command returned error: %v", err)
+	}
+
+	// Assert: sync result comment was posted
+	comments := mockGH.GetPostedComments()
+	if len(comments) == 0 {
+		t.Fatal("Expected sync result comment to be posted")
+	}
+
+	lastComment := comments[len(comments)-1]
+	t.Logf("Sync comment for degraded app: %.800s", lastComment.Body)
+
+	// Assert: sync result indicates failure — either:
+	// - "Sync failed" (rendered for non-Succeeded phase)
+	// - "Degraded" (health status if Kubernetes progressDeadlineSeconds expired)
+	// - "timeout" (message from health wait timeout)
+	hasFailed := strings.Contains(lastComment.Body, "Sync failed")
+	hasDegraded := strings.Contains(lastComment.Body, "Degraded")
+	hasTimeout := strings.Contains(lastComment.Body, "timeout")
+	if !hasFailed && !hasDegraded && !hasTimeout {
+		t.Error("Expected sync result to indicate failure (Sync failed / Degraded / timeout)")
+	}
+
+	// Assert: lock was NOT released (sync failed)
+	lock, err = lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to check lock after sync: %v", err)
+	}
+	if lock == nil {
+		t.Error("Expected lock to still be held after failed sync")
 	}
 }
