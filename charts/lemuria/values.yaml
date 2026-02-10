@@ -158,7 +158,9 @@ secrets:
     argocd:
       token: ""
     redis:
-      password: ""
+      # -- Redis password. Defaults to the Redis subchart password so the app
+      # can connect out of the box. Override for production.
+      password: "change-me-in-production"
 
 # Redis subchart configuration (Bitnami Redis)
 # See https://github.com/bitnami/charts/tree/main/bitnami/redis for all options
@@ -173,7 +175,9 @@ redis:
     tag: "7"
   auth:
     # -- Enable Redis authentication
-    enabled: false
+    enabled: true
+    # -- Default Redis password. Use existingSecret in production.
+    password: "change-me-in-production"
   master:
     persistence:
       # -- Enable Redis data persistence
