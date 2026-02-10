@@ -222,6 +222,10 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 			allSucceeded = false
 		}
 
+		if result.Message != "" && (result.Phase == "Succeeded" || result.Phase == "Running") {
+			sb.WriteString(fmt.Sprintf("**Message:** %s\n\n", result.Message))
+		}
+
 		// Health status
 		if result.HealthStatus != "" {
 			sb.WriteString(fmt.Sprintf("**Health:** %s %s\n\n", healthStatusIcon(result.HealthStatus), result.HealthStatus))
@@ -269,19 +273,30 @@ func (r *Renderer) renderResourceTable(resources []models.ResourceResult) string
 
 	sb.WriteString("<details>\n")
 	sb.WriteString(fmt.Sprintf("<summary>Resource Results (%d resources)</summary>\n\n", len(resources)))
-	sb.WriteString("| Resource | Status | Message |\n")
-	sb.WriteString("|----------|--------|--------|\n")
+	sb.WriteString("| Resource | Status | Health | Message |\n")
+	sb.WriteString("|----------|--------|--------|--------|\n")
 
 	for _, res := range resources {
 		icon := resourceStatusIcon(res.Status)
+
+		// Health column
+		healthCol := ""
+		if res.HealthStatus != "" {
+			healthCol = fmt.Sprintf("%s %s", healthStatusIcon(string(res.HealthStatus)), string(res.HealthStatus))
+		}
+
+		// For degraded resources, prefer HealthMessage over sync Message
 		msg := res.Message
+		if res.HealthStatus == models.HealthStatusDegraded && res.HealthMessage != "" {
+			msg = res.HealthMessage
+		}
 		if len(msg) > 80 {
 			msg = msg[:77] + "..."
 		}
 		// Escape pipe characters in messages to avoid breaking the table
 		msg = strings.ReplaceAll(msg, "|", "\\|")
-		sb.WriteString(fmt.Sprintf("| %s | %s %s | %s |\n",
-			res.Resource.String(), icon, res.Status, msg))
+		sb.WriteString(fmt.Sprintf("| %s | %s %s | %s | %s |\n",
+			res.Resource.String(), icon, res.Status, healthCol, msg))
 	}
 
 	sb.WriteString("\n</details>\n\n")

@@ -39,14 +39,16 @@ func TestRenderSync(t *testing.T) {
 				PlanOutput:   "2 to create, 1 to update",
 				Resources: []models.ResourceResult{
 					{
-						Resource: models.ResourceKey{Kind: "Deployment", Name: "web", Namespace: "default"},
-						Status:   "Synced",
-						Message:  "deployment.apps/web configured",
+						Resource:     models.ResourceKey{Kind: "Deployment", Name: "web", Namespace: "default"},
+						Status:       "Synced",
+						Message:      "deployment.apps/web configured",
+						HealthStatus: "Healthy",
 					},
 					{
-						Resource: models.ResourceKey{Kind: "Service", Name: "web-svc", Namespace: "default"},
-						Status:   "Synced",
-						Message:  "service/web-svc created",
+						Resource:     models.ResourceKey{Kind: "Service", Name: "web-svc", Namespace: "default"},
+						Status:       "Synced",
+						Message:      "service/web-svc created",
+						HealthStatus: "Healthy",
 					},
 				},
 			}},
@@ -58,6 +60,7 @@ func TestRenderSync(t *testing.T) {
 				"Deployment/web",
 				"Service/web-svc",
 				"Synced",
+				"| Health |",
 				"All applications synced successfully",
 			},
 		},
@@ -215,6 +218,47 @@ func TestRenderSync(t *testing.T) {
 			contains: []string{
 				"Sync successful",
 				"⏳ Progressing",
+			},
+		},
+		{
+			name: "per-resource health rendering with healthy and degraded",
+			results: []SyncResultEntry{{
+				Application:  "my-app",
+				Phase:        "Failed",
+				Message:      "application health is Degraded",
+				HealthStatus: "Degraded",
+				Resources: []models.ResourceResult{
+					{
+						Resource:     models.ResourceKey{Kind: "Deployment", Name: "web", Namespace: "default"},
+						Status:       "Synced",
+						HealthStatus: "Healthy",
+					},
+					{
+						Resource:      models.ResourceKey{Kind: "Deployment", Name: "worker", Namespace: "default"},
+						Status:        "Synced",
+						HealthStatus:  "Degraded",
+						HealthMessage: "container backoff: ImagePullBackOff",
+					},
+				},
+			}},
+			contains: []string{
+				"Sync failed",
+				"💚 Healthy",
+				"❤️ Degraded",
+				"ImagePullBackOff",
+			},
+		},
+		{
+			name: "always-shown message on success",
+			results: []SyncResultEntry{{
+				Application:  "my-app",
+				Phase:        "Succeeded",
+				Message:      "successfully synced (all tasks run)",
+				HealthStatus: "Healthy",
+			}},
+			contains: []string{
+				"Sync successful",
+				"**Message:** successfully synced (all tasks run)",
 			},
 		},
 	}

@@ -63,6 +63,10 @@ func (m *mockVCSForSync) PostComment(context.Context, string, string, int, strin
 	return &models.CommentResult{ID: 1}, nil
 }
 
+func (m *mockVCSForSync) UpdateComment(context.Context, string, string, int, int64, string) error {
+	return nil
+}
+
 func (m *mockVCSForSync) AddReaction(context.Context, string, string, int64, string) error {
 	return nil
 }

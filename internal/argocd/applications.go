@@ -130,6 +130,37 @@ func convertV1alpha1Application(app v1alpha1.Application, sourceFile string) mod
 	return result
 }
 
+// GetResourceHealth fetches per-resource health information for an application.
+func (c *Client) GetResourceHealth(ctx context.Context, name string) ([]models.ResourceHealthInfo, error) {
+	var resp v1alpha1.Application
+	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
+		return nil, fmt.Errorf("getting resource health for %s: %w", name, err)
+	}
+
+	var results []models.ResourceHealthInfo
+	for _, r := range resp.Status.Resources {
+		if r.Health == nil {
+			continue
+		}
+		apiVersion := r.Version
+		if r.Group != "" {
+			apiVersion = r.Group + "/" + r.Version
+		}
+		results = append(results, models.ResourceHealthInfo{
+			Resource: models.ResourceKey{
+				APIVersion: apiVersion,
+				Kind:       r.Kind,
+				Name:       r.Name,
+				Namespace:  r.Namespace,
+			},
+			HealthStatus:  models.HealthStatus(r.Health.Status),
+			HealthMessage: r.Health.Message,
+		})
+	}
+
+	return results, nil
+}
+
 // SyncApplication triggers a sync for the specified application and waits for it to complete.
 func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOptions) (*models.SyncResult, error) {
 	payload := map[string]any{
