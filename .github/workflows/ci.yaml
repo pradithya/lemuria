@@ -36,7 +36,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
   HELM_CHART_NAME: lemuria
   GO_VERSION: '1.25'
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
   DOCKER_BUILDKIT: 1
 
 permissions:
@@ -156,7 +156,7 @@ jobs:
           cache: true
 
       - name: Install k3d
-        run: curl -s https://raw.githubusercontent.com/k3d-io/k3d/v5.7.5/install.sh | TAG=v5.7.5 bash
+        run: curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/v5.7.5/install.sh | TAG=v5.7.5 bash
 
       - name: Install Helm
         uses: azure/setup-helm@v4
