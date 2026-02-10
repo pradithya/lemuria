@@ -50,6 +50,73 @@ func (c *Client) GetApplicationSet(ctx context.Context, name string) (*models.Ap
 	return &appSet, nil
 }
 
+// CreateApplicationSet creates a new ApplicationSet in ArgoCD.
+func (c *Client) CreateApplicationSet(ctx context.Context, appSet *v1alpha1.ApplicationSet) error {
+	if err := c.post(ctx, "/api/v1/applicationsets", nil, appSet, nil); err != nil {
+		return fmt.Errorf("creating applicationset: %w", err)
+	}
+	return nil
+}
+
+// DeleteApplicationSet deletes an ApplicationSet from ArgoCD.
+func (c *Client) DeleteApplicationSet(ctx context.Context, name string) error {
+	if err := c.delete(ctx, "/api/v1/applicationsets/"+url.PathEscape(name), nil); err != nil {
+		return fmt.Errorf("deleting applicationset %s: %w", name, err)
+	}
+	return nil
+}
+
+// GenerateApplications calls the ArgoCD Generate API to preview what applications
+// an ApplicationSet spec would produce without creating anything in the cluster.
+func (c *Client) GenerateApplications(ctx context.Context, appSet *v1alpha1.ApplicationSet) ([]models.Application, error) {
+	payload := map[string]any{
+		"applicationSet": appSet,
+	}
+
+	var resp struct {
+		Applications []v1alpha1.Application `json:"applications"`
+	}
+	if err := c.post(ctx, "/api/v1/applicationsets/generate", nil, payload, &resp); err != nil {
+		return nil, fmt.Errorf("generating applications for applicationset %s: %w", appSet.Name, err)
+	}
+
+	apps := make([]models.Application, 0, len(resp.Applications))
+	for _, item := range resp.Applications {
+		apps = append(apps, convertV1alpha1Application(item, ""))
+	}
+
+	return apps, nil
+}
+
+// GetApplicationsByApplicationSet returns all applications created by an ApplicationSet.
+func (c *Client) GetApplicationsByApplicationSet(ctx context.Context, name string) ([]models.Application, error) {
+	// First try label selector (some versions of Argo CD add the label)
+	selector := fmt.Sprintf("argocd.argoproj.io/application-set-name=%s", name)
+	apps, err := c.ListApplicationsWithSelector(ctx, selector)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(apps) > 0 {
+		return apps, nil
+	}
+
+	// Fallback: get all apps and filter by ownerReference-derived ApplicationSetName
+	allApps, err := c.ListApplications(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var filtered []models.Application
+	for _, app := range allApps {
+		if app.ApplicationSetName == name {
+			filtered = append(filtered, app)
+		}
+	}
+
+	return filtered, nil
+}
+
 // convertApplicationSet converts a v1alpha1.ApplicationSet to our domain model.
 func convertApplicationSet(appSet v1alpha1.ApplicationSet) models.ApplicationSet {
 	result := models.ApplicationSet{
@@ -84,33 +151,4 @@ func convertApplicationSet(appSet v1alpha1.ApplicationSet) models.ApplicationSet
 
 	result.Template = template
 	return result
-}
-
-// GetApplicationsByApplicationSet returns all applications created by an ApplicationSet.
-func (c *Client) GetApplicationsByApplicationSet(ctx context.Context, name string) ([]models.Application, error) {
-	// First try label selector (some versions of Argo CD add the label)
-	selector := fmt.Sprintf("argocd.argoproj.io/application-set-name=%s", name)
-	apps, err := c.ListApplicationsWithSelector(ctx, selector)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(apps) > 0 {
-		return apps, nil
-	}
-
-	// Fallback: get all apps and filter by ownerReference-derived ApplicationSetName
-	allApps, err := c.ListApplications(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	var filtered []models.Application
-	for _, app := range allApps {
-		if app.ApplicationSetName == name {
-			filtered = append(filtered, app)
-		}
-	}
-
-	return filtered, nil
 }

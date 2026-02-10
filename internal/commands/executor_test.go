@@ -193,6 +193,78 @@ func TestContainsAppByName(t *testing.T) {
 	}
 }
 
+func TestConvertToRenderResultsApplicationSetName(t *testing.T) {
+	results := []appPlanResult{
+		{
+			Application:        "standalone-app",
+			ApplicationSetName: "",
+		},
+		{
+			Application:        "appset-dev",
+			ApplicationSetName: "my-appset",
+		},
+		{
+			Application:        "appset-staging",
+			ApplicationSetName: "my-appset",
+		},
+	}
+
+	rendered := convertToRenderResults(results)
+
+	if len(rendered) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(rendered))
+	}
+	if rendered[0].ApplicationSetName != "" {
+		t.Errorf("expected empty ApplicationSetName for standalone app, got %q", rendered[0].ApplicationSetName)
+	}
+	if rendered[1].ApplicationSetName != "my-appset" {
+		t.Errorf("expected ApplicationSetName %q, got %q", "my-appset", rendered[1].ApplicationSetName)
+	}
+	if rendered[2].ApplicationSetName != "my-appset" {
+		t.Errorf("expected ApplicationSetName %q, got %q", "my-appset", rendered[2].ApplicationSetName)
+	}
+}
+
+func TestConvertToRenderResultsIsGeneratedApp(t *testing.T) {
+	results := []appPlanResult{
+		{
+			Application:    "regular-new",
+			ChangeType:     models.ApplicationNew,
+			IsGeneratedApp: false,
+		},
+		{
+			Application:        "generated-new",
+			ApplicationSetName: "my-appset",
+			ChangeType:         models.ApplicationNew,
+			IsGeneratedApp:     true,
+		},
+		{
+			Application:        "generated-deleted",
+			ApplicationSetName: "my-appset",
+			ChangeType:         models.ApplicationDeleted,
+			IsGeneratedApp:     true,
+		},
+	}
+
+	rendered := convertToRenderResults(results)
+
+	if len(rendered) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(rendered))
+	}
+	if rendered[0].IsGeneratedApp {
+		t.Error("expected regular-new to not be a generated app")
+	}
+	if !rendered[1].IsGeneratedApp {
+		t.Error("expected generated-new to be a generated app")
+	}
+	if !rendered[2].IsGeneratedApp {
+		t.Error("expected generated-deleted to be a generated app")
+	}
+	if rendered[1].ApplicationSetName != "my-appset" {
+		t.Errorf("expected ApplicationSetName %q, got %q", "my-appset", rendered[1].ApplicationSetName)
+	}
+}
+
 func TestIsProtectedBranch(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -143,7 +143,7 @@ func TestGetManifests(t *testing.T) {
 	}
 
 	appName := apps[0].Name
-	manifests, revision, err := argoClient.GetManifests(testCtx, appName, nil)
+	manifests, revision, err := argoClient.GetManifests(testCtx, appName, &argocd.GetManifestsParams{FetchRevision: true})
 	if err != nil {
 		t.Fatalf("Failed to get manifests for %s: %v", appName, err)
 	}

@@ -41,14 +41,18 @@ func (c *Client) GetChangedFiles(ctx context.Context, owner, repo string, number
 
 		for _, d := range diffs {
 			status := diffStatus(d)
-			allFiles = append(allFiles, models.ChangedFile{
+			cf := models.ChangedFile{
 				Filename:  filePath(d),
 				Status:    status,
 				Additions: 0, // GitLab diff API does not provide line counts per file
 				Deletions: 0,
 				Changes:   0,
 				Patch:     d.Diff,
-			})
+			}
+			if d.RenamedFile && d.OldPath != d.NewPath {
+				cf.PreviousFilename = d.OldPath
+			}
+			allFiles = append(allFiles, cf)
 		}
 
 		if resp.NextPage == 0 {

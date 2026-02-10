@@ -21,6 +21,7 @@ import (
 	"time"
 
 	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/org/lemuria/internal/argocd"
@@ -173,4 +174,87 @@ func createTestApplicationWithBadImage(ctx context.Context, t *testing.T, client
 	}
 
 	t.Logf("Created test application with bad image: %s", name)
+}
+
+// createTestApplicationSet creates an ArgoCD ApplicationSet for testing.
+// It uses a list generator with 2 environments (dev, staging) and the
+// argoproj/argocd-example-apps guestbook app as the source.
+// Auto-sync is NOT enabled so sync tests can proceed.
+func createTestApplicationSet(ctx context.Context, t *testing.T, client *argocd.Client, name string) {
+	t.Helper()
+
+	appSet := &v1alpha1.ApplicationSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "argocd",
+		},
+		Spec: v1alpha1.ApplicationSetSpec{
+			GoTemplate:        true,
+			GoTemplateOptions: []string{"missingkey=error"},
+			Generators: []v1alpha1.ApplicationSetGenerator{
+				{
+					List: &v1alpha1.ListGenerator{
+						Elements: []apiextensionsv1.JSON{
+							{Raw: []byte(`{"env": "dev"}`)},
+							{Raw: []byte(`{"env": "staging"}`)},
+						},
+					},
+				},
+			},
+			Template: v1alpha1.ApplicationSetTemplate{
+				ApplicationSetTemplateMeta: v1alpha1.ApplicationSetTemplateMeta{
+					Name:      name + "-{{ .env }}",
+					Namespace: "argocd",
+				},
+				Spec: v1alpha1.ApplicationSpec{
+					Project: "default",
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://github.com/argoproj/argocd-example-apps.git",
+						TargetRevision: "HEAD",
+						Path:           "guestbook",
+					},
+					Destination: v1alpha1.ApplicationDestination{
+						Server:    "https://kubernetes.default.svc",
+						Namespace: "e2e-test-apps",
+					},
+				},
+			},
+		},
+	}
+
+	if err := client.CreateApplicationSet(ctx, appSet); err != nil {
+		t.Fatalf("Failed to create test ApplicationSet %s: %v", name, err)
+	}
+
+	t.Logf("Created test ApplicationSet: %s", name)
+}
+
+// deleteTestApplicationSet deletes an ArgoCD ApplicationSet.
+func deleteTestApplicationSet(ctx context.Context, t *testing.T, client *argocd.Client, name string) {
+	t.Helper()
+	if err := client.DeleteApplicationSet(ctx, name); err != nil {
+		t.Logf("Warning: failed to delete test ApplicationSet %s: %v", name, err)
+	}
+}
+
+// waitForAppSetAppsReady polls until all generated applications from an ApplicationSet
+// exist and are in a known state.
+func waitForAppSetAppsReady(ctx context.Context, t *testing.T, client *argocd.Client, appSetName string, expectedCount int, timeout time.Duration) []string {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		apps, err := client.GetApplicationsByApplicationSet(ctx, appSetName)
+		if err == nil && len(apps) >= expectedCount {
+			names := make([]string, len(apps))
+			for i, app := range apps {
+				names[i] = app.Name
+			}
+			t.Logf("ApplicationSet %s has %d ready apps: %v", appSetName, len(apps), names)
+			return names
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("Timed out waiting for ApplicationSet %s to have %d apps", appSetName, expectedCount)
+	return nil
 }

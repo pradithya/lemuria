@@ -433,6 +433,273 @@ spec:
 	})
 }
 
+func TestParseApplicationSetsFromYAML(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		wantCount int
+		wantNames []string
+	}{
+		{
+			name: "single ApplicationSet document",
+			content: `apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: my-appset
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+          - env: staging
+  template:
+    metadata:
+      name: my-appset-{{env}}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/org/repo
+        path: apps/{{env}}
+        targetRevision: main
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{env}}'
+`,
+			wantCount: 1,
+			wantNames: []string{"my-appset"},
+		},
+		{
+			name: "multi-document with mixed types",
+			content: `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: some-config
+data:
+  key: value
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: appset-one
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+  template:
+    metadata:
+      name: appset-one-{{env}}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/org/repo
+        path: apps
+        targetRevision: main
+      destination:
+        server: https://kubernetes.default.svc
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: standalone-app
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: standalone
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+`,
+			wantCount: 1,
+			wantNames: []string{"appset-one"},
+		},
+		{
+			name: "multiple ApplicationSets",
+			content: `apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: appset-a
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+  template:
+    metadata:
+      name: appset-a-{{env}}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/org/repo
+        path: a
+        targetRevision: main
+      destination:
+        server: https://kubernetes.default.svc
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: appset-b
+spec:
+  generators:
+    - list:
+        elements:
+          - env: prod
+  template:
+    metadata:
+      name: appset-b-{{env}}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/org/repo
+        path: b
+        targetRevision: main
+      destination:
+        server: https://kubernetes.default.svc
+`,
+			wantCount: 2,
+			wantNames: []string{"appset-a", "appset-b"},
+		},
+		{
+			name:      "empty YAML returns empty slice",
+			content:   "",
+			wantCount: 0,
+		},
+		{
+			name: "non-ApplicationSet CRs are skipped",
+			content: `apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: my-project
+spec:
+  description: test
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: manifests
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+`,
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			appSets, err := ParseApplicationSetsFromYAML([]byte(tt.content), "test.yaml")
+			if err != nil {
+				t.Fatalf("ParseApplicationSetsFromYAML() error = %v", err)
+			}
+			if len(appSets) != tt.wantCount {
+				t.Fatalf("got %d appsets, want %d", len(appSets), tt.wantCount)
+			}
+			for i, name := range tt.wantNames {
+				if i >= len(appSets) {
+					break
+				}
+				if appSets[i].Name != name {
+					t.Errorf("appSets[%d].Name = %q, want %q", i, appSets[i].Name, name)
+				}
+			}
+		})
+	}
+}
+
+func TestParseRawApplicationSetFromYAML(t *testing.T) {
+	t.Run("find by name", func(t *testing.T) {
+		content := []byte(`apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: target-appset
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+  template:
+    metadata:
+      name: target-appset-{{env}}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/org/repo
+        path: apps
+        targetRevision: main
+      destination:
+        server: https://kubernetes.default.svc
+`)
+		appSet, err := ParseRawApplicationSetFromYAML(content, "target-appset")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if appSet.Name != "target-appset" {
+			t.Errorf("expected name 'target-appset', got %q", appSet.Name)
+		}
+	})
+
+	t.Run("not found returns error", func(t *testing.T) {
+		content := []byte(`apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: other-appset
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+  template:
+    metadata:
+      name: other-appset-{{env}}
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/org/repo
+        path: apps
+        targetRevision: main
+      destination:
+        server: https://kubernetes.default.svc
+`)
+		_, err := ParseRawApplicationSetFromYAML(content, "nonexistent")
+		if err == nil {
+			t.Fatal("expected error for appset not found")
+		}
+	})
+
+	t.Run("skips Application CRs", func(t *testing.T) {
+		content := []byte(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: target-appset
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: manifests
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+`)
+		_, err := ParseRawApplicationSetFromYAML(content, "target-appset")
+		if err == nil {
+			t.Fatal("expected error when only Application CRs exist (not ApplicationSet)")
+		}
+	})
+
+	t.Run("empty YAML returns error", func(t *testing.T) {
+		_, err := ParseRawApplicationSetFromYAML([]byte(""), "my-appset")
+		if err == nil {
+			t.Fatal("expected error for empty YAML")
+		}
+	})
+}
+
 func TestParsedApplications_String(t *testing.T) {
 	tests := []struct {
 		name string

@@ -255,7 +255,7 @@ make e2e-setup
 
 This runs `e2e/scripts/setup.sh` which:
 1. Creates a k3d cluster named `lemuria-e2e`
-2. Installs ArgoCD v2.10.0 into the `argocd` namespace
+2. Installs ArgoCD v3.3.0 into the `argocd` namespace
 3. Installs Redis into the `redis` namespace
 4. Sets up port-forwards (ArgoCD on `localhost:8081`, Redis on `localhost:6379`)
 5. Generates an ArgoCD API token

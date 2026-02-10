@@ -242,6 +242,40 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		"count", len(affected),
 	)
 
+	// Expand ApplicationSet mappings from .lemuria.yaml
+	if repoConfig != nil {
+		for _, mapping := range repoConfig.Applications {
+			if mapping.ApplicationSet == "" {
+				continue
+			}
+			matched := vcs.FilterFilesByPatterns(
+				filesToChangedFiles(filePaths),
+				mapping.Paths,
+			)
+			if len(matched) == 0 {
+				continue
+			}
+			e.logger.Debug("applicationset mapping matched",
+				"applicationset", mapping.ApplicationSet,
+				"matched_files", len(matched),
+			)
+			expandedApps, err := e.expandApplicationSet(ctx, mapping.ApplicationSet)
+			if err != nil {
+				e.logger.Warn("failed to expand applicationset",
+					"applicationset", mapping.ApplicationSet,
+					"error", err,
+				)
+				continue
+			}
+			for _, app := range expandedApps {
+				if !containsAppByName(affected, app.Name) {
+					app.ChangeType = models.ApplicationExisting
+					affected = append(affected, app)
+				}
+			}
+		}
+	}
+
 	// Detect new and deleted applications from Application CR files
 	parsed, err := e.detectApplicationChanges(ctx, event)
 	if err != nil {
@@ -298,6 +332,33 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 						affected = append(affected, existingApp)
 						break
 					}
+				}
+			}
+		}
+
+		// Detect new/deleted applications from ApplicationSet CR changes
+		appSetChanges, appSetErr := e.detectApplicationSetChanges(ctx, event, files)
+		if appSetErr != nil {
+			e.logger.Warn("failed to detect applicationset changes from files", "error", appSetErr)
+		} else {
+			e.logger.Debug("detected applicationset changes from files",
+				"new_apps", len(appSetChanges.NewApps),
+				"deleted_apps", len(appSetChanges.DeletedApps),
+				"modified_appsets", len(appSetChanges.Modified),
+			)
+
+			for _, app := range appSetChanges.NewApps {
+				if !containsAppByName(affected, app.Name) && !containsAppByName(parsed.New, app.Name) {
+					app.IsGeneratedApp = true
+					parsed.New = append(parsed.New, app)
+					affected = append(affected, app)
+				}
+			}
+
+			for _, app := range appSetChanges.DeletedApps {
+				if !containsAppByName(parsed.Deleted, app.Name) {
+					app.IsGeneratedApp = true
+					parsed.Deleted = append(parsed.Deleted, app)
 				}
 			}
 		}
