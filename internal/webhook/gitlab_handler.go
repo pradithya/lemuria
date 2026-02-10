@@ -111,8 +111,8 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 func (h *GitLabHandler) validateToken(token string) bool {
 	expected := h.config.GitLab.WebhookSecret
 	if expected == "" {
-		// No secret configured, skip validation
-		return true
+		// No secret configured — reject all requests to prevent unauthenticated access.
+		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
 }

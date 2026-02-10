@@ -107,14 +107,13 @@ func TestGitLabHandlerHandle(t *testing.T) {
 			wantStatus:    http.StatusUnauthorized,
 		},
 		{
-			name:          "no secret configured skips validation",
+			name:          "no secret configured rejects request",
 			webhookSecret: "",
 			token:         "",
 			body:          validMRPayload,
 			eventType:     "Merge Request Hook",
 			autoplan:      false,
-			wantStatus:    http.StatusOK,
-			wantJSON:      "accepted",
+			wantStatus:    http.StatusUnauthorized,
 		},
 		{
 			name:          "malformed JSON returns 400",
@@ -244,16 +243,16 @@ func TestGitLabHandlerValidateToken(t *testing.T) {
 		want          bool
 	}{
 		{
-			name:          "no secret configured allows any token",
+			name:          "no secret configured rejects empty token",
 			webhookSecret: "",
 			token:         "",
-			want:          true,
+			want:          false,
 		},
 		{
-			name:          "no secret configured allows non-empty token",
+			name:          "no secret configured rejects non-empty token",
 			webhookSecret: "",
 			token:         "some-token",
-			want:          true,
+			want:          false,
 		},
 		{
 			name:          "correct token",

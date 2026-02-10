@@ -91,15 +91,16 @@ func (s *Server) setupRoutes() {
 		r.Get("/status", s.handleStatus)
 		r.Get("/locks", s.handleListLocks)
 
-		// Admin-only endpoints
-		r.Group(func(r chi.Router) {
-			if s.authMiddleware != nil {
+		// Admin-only endpoints — only registered when auth is enabled.
+		// When auth is disabled, admin endpoints must not be accessible.
+		if s.authMiddleware != nil {
+			r.Group(func(r chi.Router) {
 				r.Use(s.authMiddleware.RequireAdmin)
-			}
-			r.Delete("/locks/{app}", s.handleDeleteLock)
-			r.Get("/users", s.handleListUsers)
-			r.Put("/users/{id}/role", s.handleUpdateUserRole)
-		})
+				r.Delete("/locks/{app}", s.handleDeleteLock)
+				r.Get("/users", s.handleListUsers)
+				r.Put("/users/{id}/role", s.handleUpdateUserRole)
+			})
+		}
 	})
 
 	// Serve static frontend files (if auth enabled)
@@ -597,6 +598,15 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prevent admins from modifying their own role.
+	currentUser := auth.UserFromRequest(r)
+	if currentUser != nil && currentUser.ID == userID {
+		respondJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "cannot modify your own role",
+		})
+		return
+	}
+
 	if err := s.roleResolver.SetUserRole(r.Context(), userID, role); err != nil {
 		s.logger.Error("failed to set user role", "user_id", userID, "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
@@ -605,7 +615,6 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	currentUser := auth.UserFromRequest(r)
 	s.logger.Info("user role updated",
 		"target_user", userID,
 		"new_role", role,
