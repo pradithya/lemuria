@@ -21,6 +21,132 @@ import (
 	"testing"
 )
 
+func TestRequireCSRFHeader(t *testing.T) {
+	// dummyHandler is the next handler that should only be reached when CSRF check passes.
+	dummyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	handler := requireCSRFHeader(dummyHandler)
+
+	tests := []struct {
+		name       string
+		method     string
+		header     string // value of X-Requested-With; empty means omit
+		wantStatus int
+		wantError  bool
+	}{
+		{
+			name:       "GET without header succeeds",
+			method:     http.MethodGet,
+			header:     "",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "HEAD without header succeeds",
+			method:     http.MethodHead,
+			header:     "",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "OPTIONS without header succeeds",
+			method:     http.MethodOptions,
+			header:     "",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "POST without header is rejected",
+			method:     http.MethodPost,
+			header:     "",
+			wantStatus: http.StatusForbidden,
+			wantError:  true,
+		},
+		{
+			name:       "PUT without header is rejected",
+			method:     http.MethodPut,
+			header:     "",
+			wantStatus: http.StatusForbidden,
+			wantError:  true,
+		},
+		{
+			name:       "DELETE without header is rejected",
+			method:     http.MethodDelete,
+			header:     "",
+			wantStatus: http.StatusForbidden,
+			wantError:  true,
+		},
+		{
+			name:       "PATCH without header is rejected",
+			method:     http.MethodPatch,
+			header:     "",
+			wantStatus: http.StatusForbidden,
+			wantError:  true,
+		},
+		{
+			name:       "POST with correct header succeeds",
+			method:     http.MethodPost,
+			header:     "XMLHttpRequest",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "PUT with correct header succeeds",
+			method:     http.MethodPut,
+			header:     "XMLHttpRequest",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "DELETE with correct header succeeds",
+			method:     http.MethodDelete,
+			header:     "XMLHttpRequest",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "PATCH with correct header succeeds",
+			method:     http.MethodPatch,
+			header:     "XMLHttpRequest",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "POST with wrong header value is rejected",
+			method:     http.MethodPost,
+			header:     "fetch",
+			wantStatus: http.StatusForbidden,
+			wantError:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/api/v1/status", nil)
+			if tt.header != "" {
+				req.Header.Set("X-Requested-With", tt.header)
+			}
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", w.Code, tt.wantStatus)
+			}
+
+			// Verify JSON content type on all responses (both success and error).
+			ct := w.Header().Get("Content-Type")
+			if ct != "application/json" {
+				t.Errorf("Content-Type = %q, want %q", ct, "application/json")
+			}
+
+			if tt.wantError {
+				var body map[string]string
+				if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+					t.Fatalf("failed to decode JSON error body: %v", err)
+				}
+				if body["error"] == "" {
+					t.Error("expected non-empty 'error' field in JSON response")
+				}
+			}
+		})
+	}
+}
+
 func TestRespondJSON(t *testing.T) {
 	tests := []struct {
 		name       string

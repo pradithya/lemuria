@@ -252,14 +252,18 @@ func customRecoverer(logger *slog.Logger) func(next http.Handler) http.Handler {
 }
 
 // requireCSRFHeader is a middleware that requires the X-Requested-With header on
-// state-changing requests (POST, PUT, DELETE). This provides CSRF protection because
-// cross-origin requests cannot set custom headers without a CORS preflight.
+// state-changing requests (POST, PUT, DELETE, PATCH). This provides CSRF protection
+// by blocking "simple" cross-site form submissions that browsers allow without a
+// CORS preflight. Custom headers like X-Requested-With cannot be set by plain HTML
+// forms, so requiring one ensures the request originated from our JavaScript frontend.
 func requireCSRFHeader(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
 			if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
-				http.Error(w, "Forbidden - missing required header", http.StatusForbidden)
+				respondJSON(w, http.StatusForbidden, map[string]string{
+					"error": "Forbidden - missing required header",
+				})
 				return
 			}
 		}

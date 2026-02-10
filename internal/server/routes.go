@@ -86,11 +86,12 @@ func (s *Server) setupRoutes() {
 		if s.authMiddleware != nil {
 			r.Use(s.authMiddleware.Authenticate)
 			r.Use(s.authMiddleware.RequireAuth)
-		}
 
-		// VULN-07: Require X-Requested-With header on state-changing requests
-		// to provide CSRF protection beyond SameSite=Lax cookies.
-		r.Use(requireCSRFHeader)
+			// VULN-07: Require X-Requested-With header on state-changing requests
+			// to provide CSRF protection beyond SameSite=Lax cookies.
+			// Only needed when cookie-based auth is enabled.
+			r.Use(requireCSRFHeader)
+		}
 
 		r.Get("/status", s.handleStatus)
 		r.Get("/locks", s.handleListLocks)
