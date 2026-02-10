@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -236,10 +237,15 @@ func (s *Server) handleAuthProviders(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// isValidRedirectURL validates that the redirect URL is a safe relative path.
+func isValidRedirectURL(u string) bool {
+	return strings.HasPrefix(u, "/") && !strings.HasPrefix(u, "//")
+}
+
 // handleGitHubLogin initiates GitHub OAuth flow.
 func (s *Server) handleGitHubLogin(w http.ResponseWriter, r *http.Request) {
 	redirectURL := r.URL.Query().Get("redirect")
-	if redirectURL == "" {
+	if !isValidRedirectURL(redirectURL) {
 		redirectURL = "/"
 	}
 
@@ -312,7 +318,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 // handleGitLabLogin initiates GitLab OAuth flow.
 func (s *Server) handleGitLabLogin(w http.ResponseWriter, r *http.Request) {
 	redirectURL := r.URL.Query().Get("redirect")
-	if redirectURL == "" {
+	if !isValidRedirectURL(redirectURL) {
 		redirectURL = "/"
 	}
 
@@ -385,7 +391,7 @@ func (s *Server) handleGitLabCallback(w http.ResponseWriter, r *http.Request) {
 // handleOIDCLogin initiates OIDC flow.
 func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 	redirectURL := r.URL.Query().Get("redirect")
-	if redirectURL == "" {
+	if !isValidRedirectURL(redirectURL) {
 		redirectURL = "/"
 	}
 
