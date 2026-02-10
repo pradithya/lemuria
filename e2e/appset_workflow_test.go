@@ -28,6 +28,7 @@ func TestE2EPlanCommandWithApplicationSet(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
 	appSetName := uniqueAppName("e2e-appset")
 	repo := "test-owner/test-repo"
@@ -173,6 +174,7 @@ func TestE2ESyncCommandWithApplicationSet(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
 	appSetName := uniqueAppName("e2e-appset-sync")
 	repo := "test-owner/test-repo"
@@ -248,6 +250,7 @@ func TestE2EPlanAutoDetectApplicationSet(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
 	appSetName := uniqueAppName("e2e-appset-auto")
 	repo := "test-owner/test-repo"
@@ -319,6 +322,7 @@ func TestE2EPlanDetectsNewAppsFromAppSetChange(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
 	appSetName := uniqueAppName("e2e-appset-gen")
 	repo := "test-owner/test-repo"
@@ -447,6 +451,7 @@ func TestE2EPlanDetectsDeletedAppsFromAppSetChange(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")
 	}
+	t.Parallel()
 
 	appSetName := uniqueAppName("e2e-appset-del")
 	repo := "test-owner/test-repo"
