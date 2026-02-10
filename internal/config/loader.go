@@ -27,8 +27,9 @@ import (
 
 // Load reads and parses configuration files at the given paths.
 // Multiple files are merged in order - later files override earlier ones.
-// Environment variables override config values using double underscore (__) for hierarchy.
-// Example: ARGOCD__TOKEN overrides argocd.token
+// Environment variables with the LEMURIA_ prefix override config values.
+// Double underscore (__) denotes hierarchy; single underscores are preserved.
+// Example: LEMURIA_ARGOCD__TOKEN overrides argocd.token
 func Load(paths ...string) (*Config, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("at least one config path is required")

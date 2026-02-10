@@ -370,15 +370,15 @@ func TestRenderPlan(t *testing.T) {
 
 	expectations := []string{
 		"## Lemuria Plan",
-		"### Application: `my-app`",
+		"### Application: <code>my-app</code>",
 		"1 to create",
 		"1 to update",
 		"Deployment/my-app",
 		"ConfigMap/my-config",
 		"Locked by this PR",
-		"### Application: `locked-app`",
+		"### Application: <code>locked-app</code>",
 		"Locked by PR #99",
-		"### Application: `error-app`",
+		"### Application: <code>error-app</code>",
 		"Error",
 		"connection refused",
 		"lemuria sync",
@@ -408,7 +408,7 @@ func TestRenderNewAndDeletedApps(t *testing.T) {
 
 		expectations := []string{
 			"## Lemuria Plan",
-			"### Application: `new-app`",
+			"### Application: <code>new-app</code>",
 			"New application",
 			"will be created",
 			"apps/new-app.yaml",
@@ -434,7 +434,7 @@ func TestRenderNewAndDeletedApps(t *testing.T) {
 
 		expectations := []string{
 			"## Lemuria Plan",
-			"### Application: `deleted-app`",
+			"### Application: <code>deleted-app</code>",
 			"will be deleted",
 			"apps/deleted-app.yaml",
 		}
@@ -482,6 +482,219 @@ func TestRenderNewAndDeletedApps(t *testing.T) {
 			t.Error("expected deleted app to be mentioned")
 		}
 	})
+}
+
+func TestEscapeMarkdown(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "plain text unchanged",
+			input: "hello world",
+			want:  "hello world",
+		},
+		{
+			name:  "pipe characters escaped",
+			input: "key|value",
+			want:  `key\|value`,
+		},
+		{
+			name:  "brackets escaped",
+			input: "[link](url)",
+			want:  `\[link\]\(url\)`,
+		},
+		{
+			name:  "hash escaped",
+			input: "# heading",
+			want:  `\# heading`,
+		},
+		{
+			name:  "bold/italic characters escaped",
+			input: "**bold** and _italic_",
+			want:  `\*\*bold\*\* and \_italic\_`,
+		},
+		{
+			name:  "single backtick escaped",
+			input: "use `code` here",
+			want:  "use \\`code\\` here",
+		},
+		{
+			name:  "triple backticks escaped",
+			input: "```code block```",
+			want:  "\\`\\`\\`code block\\`\\`\\`",
+		},
+		{
+			name:  "angle brackets HTML-escaped",
+			input: "<script>alert('xss')</script>",
+			want:  "&lt;script&gt;alert\\('xss'\\)&lt;/script&gt;",
+		},
+		{
+			name:  "run of backticks in the middle",
+			input: "before````after",
+			want:  "before\\`\\`\\`\\`after",
+		},
+		{
+			name:  "mixed special characters",
+			input: "app|name with [brackets] and `backticks`",
+			want:  "app\\|name with \\[brackets\\] and \\`backticks\\`",
+		},
+		{
+			name:  "empty string",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := escapeMarkdown(tt.input)
+			if got != tt.want {
+				t.Errorf("escapeMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeDiffForMarkdown(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "no backticks unchanged",
+			input: "plain text\nwith newlines\n",
+			want:  "plain text\nwith newlines\n",
+		},
+		{
+			name:  "single backtick unchanged",
+			input: "one ` backtick",
+			want:  "one ` backtick",
+		},
+		{
+			name:  "two backticks get zero-width space",
+			input: "two ``backticks",
+			want:  "two ``\u200Bbackticks",
+		},
+		{
+			name:  "triple backticks broken by zero-width space",
+			input: "```fence```",
+			want:  "``\u200B`fence``\u200B`",
+		},
+		{
+			name:  "four backticks broken after second",
+			input: "````",
+			want:  "``\u200B``",
+		},
+		{
+			name:  "backticks separated by other chars",
+			input: "` ` `",
+			want:  "` ` `",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeDiffForMarkdown(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeDiffForMarkdown(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderError(t *testing.T) {
+	renderer := NewRenderer()
+
+	t.Run("simple error", func(t *testing.T) {
+		output := renderer.RenderError(testError("connection refused"))
+		if !strings.Contains(output, "## Lemuria Error") {
+			t.Error("expected error heading")
+		}
+		if !strings.Contains(output, "connection refused") {
+			t.Error("expected error message")
+		}
+	})
+
+	t.Run("error with backticks does not break fence", func(t *testing.T) {
+		output := renderer.RenderError(testError("bad input ``` causes issues"))
+		// The triple backtick in the error message should be sanitized
+		// so that it does not appear as a raw ``` that would close the fence
+		if strings.Contains(output, "bad input ``` causes") {
+			t.Error("expected triple backticks in error message to be sanitized")
+		}
+		// The output should still contain the error text (with sanitization)
+		if !strings.Contains(output, "bad input") {
+			t.Error("expected error message content to be present")
+		}
+	})
+}
+
+func TestRenderAppPlanEscapesError(t *testing.T) {
+	renderer := NewRenderer()
+
+	results := []PlanResult{
+		{
+			Application: "my-app",
+			Error:       testError("failed: [click here](http://evil.com)"),
+		},
+	}
+
+	output := renderer.RenderPlan(results, 1)
+
+	// The markdown link should be escaped
+	if strings.Contains(output, "[click here](http://evil.com)") {
+		t.Error("expected markdown link in error message to be escaped")
+	}
+	if !strings.Contains(output, "failed:") {
+		t.Error("expected error message content to be present")
+	}
+}
+
+func TestRenderAppPlanUsesHTMLCodeForAppName(t *testing.T) {
+	renderer := NewRenderer()
+
+	results := []PlanResult{
+		{
+			Application: "app`with`backticks",
+			Created:     1,
+			LockStatus:  "Locked by this PR",
+		},
+	}
+
+	output := renderer.RenderPlan(results, 1)
+
+	// App name should be wrapped in HTML <code> tags, not backtick fences
+	if !strings.Contains(output, "<code>app`with`backticks</code>") {
+		t.Errorf("expected HTML code tag for app name with backticks, got:\n%s", output)
+	}
+	// Should NOT use markdown backtick code spans
+	if strings.Contains(output, "`app`with`backticks`") {
+		t.Error("should not use markdown backticks for app name containing backticks")
+	}
+}
+
+func TestRenderSyncUsesHTMLCodeForAppName(t *testing.T) {
+	renderer := NewRenderer()
+
+	results := []SyncResultEntry{
+		{
+			Application: "app<br>injection",
+			Phase:       "Succeeded",
+		},
+	}
+
+	output := renderer.RenderSync(results)
+
+	// HTML special chars in app name should be escaped
+	if strings.Contains(output, "app<br>injection") {
+		t.Error("expected HTML entities in app name to be escaped")
+	}
+	if !strings.Contains(output, "<code>app&lt;br&gt;injection</code>") {
+		t.Errorf("expected HTML-escaped app name in code tags, got:\n%s", output)
+	}
 }
 
 // errTest is a test error.

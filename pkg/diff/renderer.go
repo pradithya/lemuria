@@ -16,6 +16,7 @@ package diff
 
 import (
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/org/lemuria/internal/models"
@@ -66,7 +67,7 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 	var sb strings.Builder
 
 	// Header with status indicator for new/deleted apps
-	header := fmt.Sprintf("### Application: `%s`", escapeMarkdown(result.Application))
+	header := fmt.Sprintf("### Application: <code>%s</code>", html.EscapeString(result.Application))
 	switch result.ChangeType {
 	case models.ApplicationNew:
 		header += " 🆕"
@@ -76,7 +77,7 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 	sb.WriteString(header + "\n\n")
 
 	if result.Error != nil {
-		sb.WriteString(fmt.Sprintf("❌ **Error:** %s\n\n", result.Error.Error()))
+		sb.WriteString(fmt.Sprintf("❌ **Error:** %s\n\n", escapeMarkdown(result.Error.Error())))
 		return sb.String()
 	}
 
@@ -203,10 +204,10 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 
 	allSucceeded := true
 	for _, result := range results {
-		sb.WriteString(fmt.Sprintf("### Application: `%s`\n\n", escapeMarkdown(result.Application)))
+		sb.WriteString(fmt.Sprintf("### Application: <code>%s</code>\n\n", html.EscapeString(result.Application)))
 
 		if result.Error != nil {
-			sb.WriteString(fmt.Sprintf("❌ **Error:** %s\n\n", result.Error.Error()))
+			sb.WriteString(fmt.Sprintf("❌ **Error:** %s\n\n", escapeMarkdown(result.Error.Error())))
 			allSucceeded = false
 			continue
 		}
@@ -218,7 +219,7 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 			sb.WriteString("⏳ **Sync in progress**\n\n")
 			allSucceeded = false
 		default:
-			sb.WriteString(fmt.Sprintf("❌ **Sync failed:** %s\n\n", result.Message))
+			sb.WriteString(fmt.Sprintf("❌ **Sync failed:** %s\n\n", escapeMarkdown(result.Message)))
 			allSucceeded = false
 		}
 
@@ -419,8 +420,10 @@ func healthStatusIcon(status string) string {
 }
 
 // RenderError formats an error as a markdown comment.
+// Uses sanitizeDiffForMarkdown to prevent backtick sequences in the error
+// message from terminating the fenced code block.
 func (r *Renderer) RenderError(err error) string {
-	return fmt.Sprintf("## Lemuria Error\n\n```\n%s\n```\n", escapeMarkdown(err.Error()))
+	return fmt.Sprintf("## Lemuria Error\n\n```\n%s\n```\n", sanitizeDiffForMarkdown(err.Error()))
 }
 
 // RenderHelp formats the help message.

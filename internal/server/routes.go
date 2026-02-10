@@ -598,7 +598,7 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch the previous role before updating, for audit logging
-	previousRole := ""
+	previousRole := "none"
 	if prevRole, found, err := s.roleResolver.GetUserRole(r.Context(), userID); err == nil && found {
 		previousRole = string(prevRole)
 	}
