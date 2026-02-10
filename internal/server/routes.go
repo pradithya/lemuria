@@ -88,6 +88,10 @@ func (s *Server) setupRoutes() {
 			r.Use(s.authMiddleware.RequireAuth)
 		}
 
+		// VULN-07: Require X-Requested-With header on state-changing requests
+		// to provide CSRF protection beyond SameSite=Lax cookies.
+		r.Use(requireCSRFHeader)
+
 		r.Get("/status", s.handleStatus)
 		r.Get("/locks", s.handleListLocks)
 
@@ -102,7 +106,12 @@ func (s *Server) setupRoutes() {
 		})
 	})
 
-	// Serve static frontend files (if auth enabled)
+	// Serve static frontend files (if auth enabled).
+	// VULN-06: Static files (JS, CSS, index.html) are served without authentication.
+	// This is intentional: the SPA must load to render the login page. All sensitive
+	// data is served exclusively through /api/v1 endpoints which are auth-protected.
+	// The frontend shows a login form for unauthenticated users and only fetches data
+	// after successful authentication.
 	if s.authMiddleware != nil {
 		s.setupStaticFiles()
 	}

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -217,8 +218,53 @@ func (s *Server) setupMiddleware() {
 	s.router.Use(middleware.RequestID)
 	s.router.Use(middleware.RealIP)
 	s.router.Use(s.requestLogger)
-	s.router.Use(middleware.Recoverer)
+	s.router.Use(customRecoverer(s.logger))
+	s.router.Use(securityHeaders)
 	s.router.Use(middleware.Timeout(60 * time.Second))
+}
+
+// securityHeaders is a middleware that sets HTTP security headers on all responses.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// customRecoverer returns a middleware that recovers from panics, logs the stack trace
+// server-side, and returns a generic 500 error to the client (VULN-26: prevents leaking
+// stack traces in HTTP response bodies).
+func customRecoverer(logger *slog.Logger) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if rvr := recover(); rvr != nil {
+					logger.Error("panic recovered", "panic", rvr, "stack", string(debug.Stack()))
+					http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				}
+			}()
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// requireCSRFHeader is a middleware that requires the X-Requested-With header on
+// state-changing requests (POST, PUT, DELETE). This provides CSRF protection because
+// cross-origin requests cannot set custom headers without a CORS preflight.
+func requireCSRFHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
+			if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+				http.Error(w, "Forbidden - missing required header", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // requestLogger is a middleware that logs HTTP requests.

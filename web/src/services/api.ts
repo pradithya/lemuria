@@ -29,6 +29,7 @@ class ApiClient {
     const url = `${API_BASE}${path}`;
     const headers: Record<string, string> = {
       'Accept': 'application/json',
+      'X-Requested-With': 'XMLHttpRequest',
       ...(options.headers as Record<string, string>),
     };
 
