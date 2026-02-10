@@ -133,7 +133,7 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	}
 
 	// Create progressive comment tracker
-	tracker := newSyncCommentTracker(e.vcs, e.renderer, e.logger, event, appNames)
+	tracker := newSyncCommentTracker(e.vcs, e.logger, event, appNames)
 
 	// Post initial progress comment
 	tracker.postInitial(ctx)
@@ -525,25 +525,23 @@ func mergeResourceHealth(result *models.SyncResult, healthInfo []models.Resource
 
 // syncCommentTracker manages the lifecycle of a progressive sync comment.
 type syncCommentTracker struct {
-	mu        sync.Mutex
-	vcs       VCSClient
-	renderer  *diff.Renderer
-	logger    *slog.Logger
-	event     *models.PREvent
-	appNames  []string
-	results   []syncResult
-	completed []bool
-	commentID int64
+	mu         sync.Mutex
+	vcs        VCSClient
+	logger     *slog.Logger
+	event      *models.PREvent
+	appNames   []string
+	results    []syncResult
+	completed  []bool
+	commentID  int64
 	lastUpdate time.Time
 }
 
 // minUpdateInterval is the minimum time between intermediate comment updates.
 const minUpdateInterval = 1 * time.Minute
 
-func newSyncCommentTracker(vcs VCSClient, renderer *diff.Renderer, logger *slog.Logger, event *models.PREvent, appNames []string) *syncCommentTracker {
+func newSyncCommentTracker(vcs VCSClient, logger *slog.Logger, event *models.PREvent, appNames []string) *syncCommentTracker {
 	return &syncCommentTracker{
 		vcs:       vcs,
-		renderer:  renderer,
 		logger:    logger,
 		event:     event,
 		appNames:  appNames,

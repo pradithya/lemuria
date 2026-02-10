@@ -222,7 +222,7 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 			allSucceeded = false
 		}
 
-		if result.Message != "" && result.Phase != "Failed" {
+		if result.Message != "" && (result.Phase == "Succeeded" || result.Phase == "Running") {
 			sb.WriteString(fmt.Sprintf("**Message:** %s\n\n", result.Message))
 		}
 

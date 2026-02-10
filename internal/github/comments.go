@@ -73,8 +73,10 @@ func (c *Client) editComment(ctx context.Context, owner, repo string, commentID 
 
 // UpdateComment updates an existing comment (VCS interface method).
 // The number parameter is ignored for GitHub since commentID is sufficient.
+// The Lemuria marker is prepended to preserve comment identification.
 func (c *Client) UpdateComment(ctx context.Context, owner, repo string, _ int, commentID int64, body string) error {
-	_, err := c.editComment(ctx, owner, repo, commentID, body)
+	markedBody := CommentMarker + "\n" + body
+	_, err := c.editComment(ctx, owner, repo, commentID, markedBody)
 	return err
 }
 
