@@ -173,7 +173,9 @@ redis:
     tag: "7"
   auth:
     # -- Enable Redis authentication
-    enabled: false
+    enabled: true
+    # -- Default Redis password. Use existingSecret in production.
+    password: "change-me-in-production"
   master:
     persistence:
       # -- Enable Redis data persistence

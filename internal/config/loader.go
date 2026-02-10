@@ -16,6 +16,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/knadh/koanf/parsers/yaml"
@@ -150,6 +151,30 @@ func (c *Config) IsRepoAllowed(repo string) bool {
 	}
 
 	return false
+}
+
+// WarnInsecureConfig checks the configuration for common insecure values and
+// logs a warning for each detection. This is intended to alert operators during
+// startup without preventing the application from running (so tests still pass).
+func WarnInsecureConfig(cfg *Config, logger *slog.Logger) {
+	// Check session_secret for insecure keywords
+	if cfg.Auth.Enabled && cfg.Auth.SessionSecret != "" {
+		lower := strings.ToLower(cfg.Auth.SessionSecret)
+		if strings.Contains(lower, "dev-") || strings.Contains(lower, "change") {
+			logger.Warn("INSECURE CONFIG: session_secret appears to be a development placeholder; set a strong random value in production",
+				"hint", "session_secret contains 'dev-' or 'change'")
+		}
+	}
+
+	// Check if any basic auth password equals the username
+	if cfg.Auth.Basic != nil {
+		for _, user := range cfg.Auth.Basic.Users {
+			if user.Password == user.Username {
+				logger.Warn("INSECURE CONFIG: basic auth password equals username; use a strong password in production",
+					"username", user.Username)
+			}
+		}
+	}
 }
 
 // matchRepoPattern checks if repo matches the pattern (supports wildcards).

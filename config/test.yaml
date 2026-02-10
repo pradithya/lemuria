@@ -12,20 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Test configuration for local development
+# ==========================================================================
+# TEST-ONLY CONFIGURATION - DO NOT USE IN PRODUCTION
+# ==========================================================================
+# This file contains intentionally insecure values for local development
+# and testing. All secrets, passwords, and tokens here are placeholders.
+# For production, use environment variables or Kubernetes Secrets.
+# ==========================================================================
+
 server:
   port: 4141
   host: "0.0.0.0"
   base_url: "http://localhost:4141"
 
 github:
-  webhook_secret: "test-webhook-secret"
+  webhook_secret: "test-webhook-secret"  # TEST ONLY - use a strong random secret in production
   app_id: 12345
   app_private_key: "config/test-key.pem"
 
 argocd:
   server_url: "https://localhost:8080"
-  token: "test-argocd-token"
+  token: "test-argocd-token"  # TEST ONLY - use a real token in production
   insecure: true
 
 redis:
@@ -42,17 +49,18 @@ defaults:
 
 auth:
   enabled: true
-  session_secret: "dev-session-secret-change-in-production"
+  session_secret: "dev-session-secret-change-in-production"  # TEST ONLY - use a strong random secret in production
   session_ttl: 24h
   cookie_secure: false  # Allow non-HTTPS for local dev
   default_role: "user"
 
   # Basic auth for local development
+  # TEST ONLY - passwords match usernames for convenience; never do this in production
   basic:
     users:
       - username: admin
-        password: admin
+        password: admin  # TEST ONLY
         role: admin
       - username: user
-        password: user
+        password: user  # TEST ONLY
         role: user
