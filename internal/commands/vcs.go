@@ -28,6 +28,7 @@ type VCSClient interface {
 	GetPR(ctx context.Context, owner, repo string, number int) (*models.PullRequestDetail, error)
 	IsPRApproved(ctx context.Context, owner, repo string, number int) (bool, error)
 	PostComment(ctx context.Context, owner, repo string, number int, body string, isPlan bool) (*models.CommentResult, error)
+	UpdateComment(ctx context.Context, owner, repo string, number int, commentID int64, body string) error
 	AddReaction(ctx context.Context, owner, repo string, commentID int64, reaction string) error
 	InvalidatePlanComments(ctx context.Context, owner, repo string, number int) error
 	MergePullRequest(ctx context.Context, owner, repo string, number int, title, message, method string) error

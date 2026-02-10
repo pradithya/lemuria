@@ -54,8 +54,8 @@ func (c *Client) CreateComment(ctx context.Context, owner, repo string, number i
 	return comment, nil
 }
 
-// UpdateComment updates an existing comment.
-func (c *Client) UpdateComment(ctx context.Context, owner, repo string, commentID int64, body string) (*github.IssueComment, error) {
+// editComment updates an existing comment (internal helper).
+func (c *Client) editComment(ctx context.Context, owner, repo string, commentID int64, body string) (*github.IssueComment, error) {
 	client, err := c.GetInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err
@@ -69,6 +69,13 @@ func (c *Client) UpdateComment(ctx context.Context, owner, repo string, commentI
 	}
 
 	return comment, nil
+}
+
+// UpdateComment updates an existing comment (VCS interface method).
+// The number parameter is ignored for GitHub since commentID is sufficient.
+func (c *Client) UpdateComment(ctx context.Context, owner, repo string, _ int, commentID int64, body string) error {
+	_, err := c.editComment(ctx, owner, repo, commentID, body)
+	return err
 }
 
 // DeleteComment deletes a comment.
@@ -139,7 +146,7 @@ func (c *Client) UpsertComment(ctx context.Context, owner, repo string, number i
 	}
 
 	if existing != nil {
-		return c.UpdateComment(ctx, owner, repo, existing.GetID(), markedBody)
+		return c.editComment(ctx, owner, repo, existing.GetID(), markedBody)
 	}
 
 	return c.CreateComment(ctx, owner, repo, number, markedBody)
@@ -211,7 +218,7 @@ func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string,
 					newBody = newBody[:markerEnd+1] + StaleNotice + newBody[markerEnd+1:]
 				}
 
-				_, err := c.UpdateComment(ctx, owner, repo, comment.GetID(), newBody)
+				_, err := c.editComment(ctx, owner, repo, comment.GetID(), newBody)
 				if err != nil {
 					return fmt.Errorf("invalidating comment %d: %w", comment.GetID(), err)
 				}

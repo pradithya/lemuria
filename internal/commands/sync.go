@@ -17,6 +17,10 @@ package commands
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
@@ -122,17 +126,29 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		}
 	}
 
+	// Build app names for tracker
+	appNames := make([]string, len(locks))
+	for i, l := range locks {
+		appNames[i] = l.Application
+	}
+
+	// Create progressive comment tracker
+	tracker := newSyncCommentTracker(e.vcs, e.renderer, e.logger, event, appNames)
+
+	// Post initial progress comment
+	tracker.postInitial(ctx)
+
 	// Sync each application
 	e.logger.Debug("starting sync for applications",
 		"count", len(locks),
 	)
-	var results []syncResult
-	for _, l := range locks {
+	results := make([]syncResult, len(locks))
+	for i, l := range locks {
 		e.logger.Debug("syncing application",
 			"app", l.Application,
 		)
-		result := e.syncApplication(ctx, l, cmd, event)
-		results = append(results, result)
+		results[i] = e.syncApplication(ctx, l, cmd, event)
+		tracker.updateResult(ctx, i, results[i])
 	}
 
 	// Check if all syncs succeeded
@@ -171,9 +187,9 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		}
 	}
 
-	// Render and post results
+	// Post final results (update existing comment or fall back to new comment)
 	output := e.renderSyncResults(results)
-	return e.postComment(ctx, event, "", output)
+	return tracker.postFinal(ctx, output)
 }
 
 // syncResult holds the result of syncing a single application.
@@ -278,6 +294,14 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 		"phase", syncResult.Phase,
 		"message", syncResult.Message,
 	)
+
+	// Fetch per-resource health and merge into sync result
+	healthInfo, err := e.argocd.GetResourceHealth(ctx, l.Application)
+	if err != nil {
+		e.logger.Warn("failed to fetch resource health", "app", l.Application, "error", err)
+	} else {
+		mergeResourceHealth(syncResult, healthInfo)
+	}
 
 	// Release lock on successful sync (unless dry-run)
 	if !cmd.DryRun && syncResult.Phase == models.SyncPhaseSucceeded {
@@ -482,4 +506,141 @@ func IsProtectedBranch(branch string) bool {
 		}
 	}
 	return false
+}
+
+// mergeResourceHealth merges per-resource health info into sync result resources.
+func mergeResourceHealth(result *models.SyncResult, healthInfo []models.ResourceHealthInfo) {
+	healthMap := make(map[string]models.ResourceHealthInfo, len(healthInfo))
+	for _, h := range healthInfo {
+		healthMap[h.Resource.String()] = h
+	}
+	for i := range result.Resources {
+		key := result.Resources[i].Resource.String()
+		if h, ok := healthMap[key]; ok {
+			result.Resources[i].HealthStatus = h.HealthStatus
+			result.Resources[i].HealthMessage = h.HealthMessage
+		}
+	}
+}
+
+// syncCommentTracker manages the lifecycle of a progressive sync comment.
+type syncCommentTracker struct {
+	mu        sync.Mutex
+	vcs       VCSClient
+	renderer  *diff.Renderer
+	logger    *slog.Logger
+	event     *models.PREvent
+	appNames  []string
+	results   []syncResult
+	completed []bool
+	commentID int64
+	lastUpdate time.Time
+}
+
+// minUpdateInterval is the minimum time between intermediate comment updates.
+const minUpdateInterval = 1 * time.Minute
+
+func newSyncCommentTracker(vcs VCSClient, renderer *diff.Renderer, logger *slog.Logger, event *models.PREvent, appNames []string) *syncCommentTracker {
+	return &syncCommentTracker{
+		vcs:       vcs,
+		renderer:  renderer,
+		logger:    logger,
+		event:     event,
+		appNames:  appNames,
+		results:   make([]syncResult, len(appNames)),
+		completed: make([]bool, len(appNames)),
+	}
+}
+
+// postInitial posts the initial progress comment showing all apps as "Waiting...".
+func (t *syncCommentTracker) postInitial(ctx context.Context) {
+	body := t.renderProgress()
+	result, err := t.vcs.PostComment(ctx, t.event.Repo.Owner, t.event.Repo.Name, t.event.PR.Number, body, false)
+	if err != nil {
+		t.logger.Warn("failed to post initial sync comment", "error", err)
+		return
+	}
+	t.mu.Lock()
+	t.commentID = result.ID
+	t.lastUpdate = time.Now()
+	t.mu.Unlock()
+}
+
+// updateResult records a result and throttled-updates the comment.
+func (t *syncCommentTracker) updateResult(ctx context.Context, i int, result syncResult) {
+	t.mu.Lock()
+	t.results[i] = result
+	t.completed[i] = true
+	commentID := t.commentID
+	shouldUpdate := commentID != 0 && time.Since(t.lastUpdate) >= minUpdateInterval
+	t.mu.Unlock()
+
+	if !shouldUpdate {
+		return
+	}
+
+	body := t.renderProgress()
+	if err := t.vcs.UpdateComment(ctx, t.event.Repo.Owner, t.event.Repo.Name, t.event.PR.Number, commentID, body); err != nil {
+		t.logger.Warn("failed to update sync comment", "error", err)
+		return
+	}
+	t.mu.Lock()
+	t.lastUpdate = time.Now()
+	t.mu.Unlock()
+}
+
+// postFinal updates the comment with the final rendered output, or falls back to PostComment.
+func (t *syncCommentTracker) postFinal(ctx context.Context, body string) error {
+	t.mu.Lock()
+	commentID := t.commentID
+	t.mu.Unlock()
+
+	if commentID != 0 {
+		if err := t.vcs.UpdateComment(ctx, t.event.Repo.Owner, t.event.Repo.Name, t.event.PR.Number, commentID, body); err != nil {
+			t.logger.Warn("failed to update final sync comment, falling back to new comment", "error", err)
+			_, err = t.vcs.PostComment(ctx, t.event.Repo.Owner, t.event.Repo.Name, t.event.PR.Number, body, false)
+			return err
+		}
+		return nil
+	}
+
+	// Fallback: initial post failed, post a new comment
+	_, err := t.vcs.PostComment(ctx, t.event.Repo.Owner, t.event.Repo.Name, t.event.PR.Number, body, false)
+	return err
+}
+
+// renderProgress renders a progress table showing app statuses.
+func (t *syncCommentTracker) renderProgress() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var sb strings.Builder
+	sb.WriteString("## Lemuria Sync\n\n")
+	sb.WriteString("⏳ **Sync in progress...**\n\n")
+	sb.WriteString("| Application | Status |\n")
+	sb.WriteString("|-------------|--------|\n")
+
+	for i, name := range t.appNames {
+		if t.completed[i] {
+			r := t.results[i]
+			if r.Error != nil {
+				sb.WriteString(fmt.Sprintf("| `%s` | ❌ Error |\n", name))
+			} else if r.Result != nil {
+				switch r.Result.Phase {
+				case models.SyncPhaseSucceeded:
+					sb.WriteString(fmt.Sprintf("| `%s` | ✅ Succeeded |\n", name))
+				case models.SyncPhaseFailed, models.SyncPhaseError:
+					sb.WriteString(fmt.Sprintf("| `%s` | ❌ %s |\n", name, r.Result.Phase))
+				default:
+					sb.WriteString(fmt.Sprintf("| `%s` | ⏳ %s |\n", name, r.Result.Phase))
+				}
+			} else {
+				sb.WriteString(fmt.Sprintf("| `%s` | ❌ Error |\n", name))
+			}
+		} else {
+			sb.WriteString(fmt.Sprintf("| `%s` | ⏳ Waiting... |\n", name))
+		}
+	}
+
+	return sb.String()
 }

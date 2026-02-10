@@ -166,9 +166,18 @@ const (
 
 // ResourceResult represents the sync result for a single resource.
 type ResourceResult struct {
-	Resource ResourceKey `json:"resource"`
-	Status   string      `json:"status"`
-	Message  string      `json:"message"`
+	Resource      ResourceKey  `json:"resource"`
+	Status        string       `json:"status"`
+	Message       string       `json:"message"`
+	HealthStatus  HealthStatus `json:"healthStatus"`
+	HealthMessage string       `json:"healthMessage"`
+}
+
+// ResourceHealthInfo holds the health status of a single resource from ArgoCD.
+type ResourceHealthInfo struct {
+	Resource      ResourceKey  `json:"resource"`
+	HealthStatus  HealthStatus `json:"healthStatus"`
+	HealthMessage string       `json:"healthMessage"`
 }
 
 // IsMultiSource returns true if the application has multiple sources.
