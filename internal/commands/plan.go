@@ -200,12 +200,11 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 
 		// Try to generate diff for new app by reading spec from head branch
 		if app.SourceFile != "" {
-			headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.HeadRef)
-			if err != nil {
-				slog.Warn("failed to read application CR from head branch for new app, skipping diff",
+			headContent, ok := headContents[app.SourceFile]
+			if !ok {
+				slog.Warn("application CR not found in head contents for new app, skipping diff",
 					"app", app.Name,
 					"source_file", app.SourceFile,
-					"error", err,
 				)
 				return result
 			}
@@ -278,13 +277,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		// Optionally read base branch spec for override
 		var baseAppSpec *v1alpha1.Application
 		if app.SourceFile != "" {
-			baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.BaseRef)
-			if err != nil {
-				slog.Warn("failed to read application CR from base branch for deleted app, falling back to live spec",
-					"app", app.Name,
-					"error", err,
-				)
-			} else {
+			if baseContent, ok := baseContents[app.SourceFile]; ok {
 				parsed, parseErr := argocd.ParseRawApplicationFromYAML(baseContent, app.Name)
 				if parseErr != nil {
 					slog.Warn("failed to parse application CR from base branch for deleted app, falling back to live spec",
@@ -294,6 +287,11 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 				} else {
 					baseAppSpec = parsed
 				}
+			} else {
+				slog.Warn("application CR not found in base contents for deleted app, falling back to live spec",
+					"app", app.Name,
+					"source_file", app.SourceFile,
+				)
 			}
 		}
 
