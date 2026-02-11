@@ -1,0 +1,25 @@
+{{- if .Values.config.queue.enabled -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "lemuria.fullname" . }}-test-worker"
+  labels:
+    {{- include "lemuria.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  containers:
+    - name: check-worker
+      image: busybox:1.36
+      command: ['sh', '-c']
+      args:
+        - |
+          # Verify the worker deployment has ready replicas
+          wget -q -O- --timeout=10 \
+            "https://kubernetes.default.svc/apis/apps/v1/namespaces/$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)/deployments/{{ include "lemuria.fullname" . }}-worker" \
+            --header="Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+            --no-check-certificate \
+          | grep -q '"readyReplicas"'
+  restartPolicy: Never
+{{- end }}

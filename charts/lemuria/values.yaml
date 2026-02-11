@@ -108,6 +108,19 @@ tolerations: []
 # -- Affinity rules for pod scheduling
 affinity: {}
 
+# Worker deployment configuration (background job processor)
+worker:
+  # -- Number of worker replicas
+  replicaCount: 1
+  # -- Worker resource limits and requests
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
 # Lemuria configuration (non-sensitive values stored in ConfigMap)
 # Sensitive values are stored in Secret and injected via environment variables
 config:
@@ -130,6 +143,11 @@ config:
     address: "localhost:6379"
     # -- Redis database number
     db: 0
+  queue:
+    # -- Enable background job queue
+    enabled: false
+    # -- Number of concurrent workers
+    concurrency: 10
   defaults:
     # -- Enable autoplan on PR
     autoplan: true

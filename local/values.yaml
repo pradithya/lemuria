@@ -46,6 +46,9 @@ config:
     require_approval: true
     auto_merge: true
     merge_method: "squash"
+  queue:
+    enabled: true
+    concurrency: 10
   auth:
     enabled: true
     session_ttl: "24h"
@@ -61,6 +64,16 @@ config:
         - profile
       allowed_domains:
         - "utilitytools.app"
+
+worker:
+  replicaCount: 1
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi
 
 # Sensitive config (stored in Secret, merged on top of config above)
 secrets:
