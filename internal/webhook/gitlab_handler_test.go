@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/org/lemuria/internal/config"
+	"github.com/org/lemuria/internal/queue"
 )
 
 func TestGitLabHandlerHandle(t *testing.T) {
@@ -232,6 +233,121 @@ func TestGitLabHandlerHandle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGitLabHandlerNilQueueClientFallsBackToGoroutine(t *testing.T) {
+	const secret = "gl-test-secret"
+	cfg := &config.Config{
+		GitLab: config.GitLabConfig{WebhookSecret: secret},
+	}
+
+	// Construct with nil queue client — goroutine fallback path
+	h := NewGitLabHandler(cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	if h.queueClient != nil {
+		t.Error("expected nil queueClient")
+	}
+
+	body := []byte(`{
+		"object_kind": "merge_request",
+		"event_type": "merge_request",
+		"project": {
+			"path_with_namespace": "g/r",
+			"web_url": "https://gitlab.com/g/r",
+			"http_url_to_repo": "https://gitlab.com/g/r.git"
+		},
+		"object_attributes": {
+			"iid": 1, "title": "T", "state": "opened", "action": "open",
+			"work_in_progress": false, "draft": false,
+			"source_branch": "f", "target_branch": "m",
+			"last_commit": {"id": "a"},
+			"url": "https://gitlab.com/g/r/-/merge_requests/1"
+		},
+		"user": {"username": "d", "id": 1, "avatar_url": ""}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook/gitlab", bytes.NewReader(body))
+	req.Header.Set("X-Gitlab-Token", secret)
+	req.Header.Set("X-Gitlab-Event", "Merge Request Hook")
+
+	rec := httptest.NewRecorder()
+	h.Handle(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp["status"]; got != "accepted" {
+		t.Errorf("status = %q, want %q", got, "accepted")
+	}
+}
+
+func TestGitLabHandlerWithQueueClient(t *testing.T) {
+	const secret = "gl-test-secret"
+	cfg := &config.Config{
+		GitLab: config.GitLabConfig{WebhookSecret: secret},
+		Redis:  config.RedisConfig{Address: "localhost:6379"},
+	}
+
+	// Create a queue client (it won't actually connect to Redis in this test
+	// since enqueue will fail and fall back to goroutine)
+	qClient := queue.NewClient(cfg.Redis, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer func() {
+		err := qClient.Close()
+		if err != nil {
+			t.Fatalf("failed to close queue client: %v", err)
+		}
+	}()
+
+	h := NewGitLabHandler(cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), qClient)
+
+	if h.queueClient == nil {
+		t.Error("expected non-nil queueClient")
+	}
+
+	body := []byte(`{
+		"object_kind": "merge_request",
+		"event_type": "merge_request",
+		"project": {
+			"path_with_namespace": "g/r",
+			"web_url": "https://gitlab.com/g/r",
+			"http_url_to_repo": "https://gitlab.com/g/r.git"
+		},
+		"object_attributes": {
+			"iid": 1, "title": "T", "state": "opened", "action": "open",
+			"work_in_progress": false, "draft": false,
+			"source_branch": "f", "target_branch": "m",
+			"last_commit": {"id": "a"},
+			"url": "https://gitlab.com/g/r/-/merge_requests/1"
+		},
+		"user": {"username": "d", "id": 1, "avatar_url": ""}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook/gitlab", bytes.NewReader(body))
+	req.Header.Set("X-Gitlab-Token", secret)
+	req.Header.Set("X-Gitlab-Event", "Merge Request Hook")
+	req.Header.Set("X-Gitlab-Event-UUID", "test-delivery-queue")
+
+	rec := httptest.NewRecorder()
+	h.Handle(rec, req)
+
+	// Even if Redis is unreachable, the handler should still return accepted
+	// (falls back to goroutine processing)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp["status"]; got != "accepted" {
+		t.Errorf("status = %q, want %q", got, "accepted")
 	}
 }
 

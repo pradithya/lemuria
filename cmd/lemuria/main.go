@@ -18,9 +18,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/org/lemuria/internal/config"
+	"github.com/org/lemuria/internal/queue"
 	"github.com/org/lemuria/internal/server"
 	"github.com/urfave/cli/v3"
 )
@@ -42,8 +47,22 @@ func main() {
 				Usage:   "Path to configuration file (can be specified multiple times, files are merged in order)",
 				Value:   []string{"lemuria.yaml"},
 			},
+			&cli.StringFlag{
+				Name:  "mode",
+				Usage: "Run mode: server or worker",
+				Value: "server",
+			},
 		},
-		Action: runServer,
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			switch cmd.String("mode") {
+			case "server":
+				return runServer(ctx, cmd)
+			case "worker":
+				return runWorker(ctx, cmd)
+			default:
+				return fmt.Errorf("unknown mode %q, expected \"server\" or \"worker\"", cmd.String("mode"))
+			}
+		},
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
@@ -69,6 +88,7 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 	logger.Info("starting lemuria",
 		"version", version,
 		"commit", commit,
+		"mode", "server",
 		"config_files", configPaths,
 		"log_level", cfg.Server.LogLevel,
 	)
@@ -85,8 +105,96 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 		}
 	}()
 
+	// Start Prometheus metrics server
+	if cfg.Server.MetricsPort > 0 {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("/metrics", promhttp.Handler())
+
+		metricsAddr := fmt.Sprintf(":%d", cfg.Server.MetricsPort)
+		go func() {
+			logger.Info("starting metrics server", "addr", metricsAddr)
+			if err := http.ListenAndServe(metricsAddr, metricsMux); err != nil {
+				logger.Error("metrics server error", "error", err)
+			}
+		}()
+	}
+
 	if err := srv.Run(); err != nil {
 		return fmt.Errorf("server error: %w", err)
+	}
+
+	return nil
+}
+
+func runWorker(ctx context.Context, cmd *cli.Command) error {
+	configPaths := cmd.StringSlice("config")
+
+	cfg, err := config.Load(configPaths...)
+	if err != nil {
+		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: parseLogLevel(cfg.Server.LogLevel),
+	}))
+
+	logger.Info("starting lemuria",
+		"version", version,
+		"commit", commit,
+		"mode", "worker",
+		"config_files", configPaths,
+		"concurrency", cfg.Queue.Concurrency,
+	)
+
+	deps, err := server.InitDependencies(cfg, logger)
+	if err != nil {
+		return fmt.Errorf("failed to initialize dependencies: %w", err)
+	}
+	defer func() {
+		if err := deps.Close(); err != nil {
+			logger.Error("error closing dependencies", "error", err)
+		}
+	}()
+
+	handler := queue.NewWebhookHandler(
+		cfg,
+		deps.GithubExecutor,
+		deps.GitlabExecutor,
+		deps.GithubClient,
+		deps.GitlabClient,
+		logger,
+	)
+
+	worker := queue.NewWorker(cfg.Redis, cfg.Queue, logger)
+	worker.RegisterHandler(queue.TypeWebhookProcess, handler)
+
+	// Start Prometheus metrics server with queue collector
+	if cfg.Server.MetricsPort > 0 {
+		collector := queue.NewQueueCollector(cfg.Redis, logger)
+		defer func() {
+			err = collector.Close()
+			if err != nil {
+				logger.Error("error closing queue collector", "error", err)
+			}
+		}()
+
+		reg := prometheus.NewRegistry()
+		reg.MustRegister(collector)
+
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+
+		metricsAddr := fmt.Sprintf(":%d", cfg.Server.MetricsPort)
+		go func() {
+			logger.Info("starting metrics server", "addr", metricsAddr)
+			if err := http.ListenAndServe(metricsAddr, metricsMux); err != nil {
+				logger.Error("metrics server error", "error", err)
+			}
+		}()
+	}
+
+	if err := worker.Run(); err != nil {
+		return fmt.Errorf("worker error: %w", err)
 	}
 
 	return nil

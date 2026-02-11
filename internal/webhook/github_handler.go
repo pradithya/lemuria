@@ -25,6 +25,7 @@ import (
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/github"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/queue"
 )
 
 // GitHubHandler processes GitHub webhook events.
@@ -34,16 +35,20 @@ type GitHubHandler struct {
 	cmdExecutor  *commands.Executor
 	logger       *slog.Logger
 	validator    *Validator
+	queueClient  *queue.Client
 }
 
 // NewGitHubHandler creates a new GitHub webhook handler.
-func NewGitHubHandler(cfg *config.Config, gh *github.Client, executor *commands.Executor, logger *slog.Logger) *GitHubHandler {
+// If queueClient is non-nil, events are enqueued for async processing instead of
+// being handled in a fire-and-forget goroutine.
+func NewGitHubHandler(cfg *config.Config, gh *github.Client, executor *commands.Executor, logger *slog.Logger, queueClient *queue.Client) *GitHubHandler {
 	return &GitHubHandler{
 		config:       cfg,
 		githubClient: gh,
 		cmdExecutor:  executor,
 		logger:       logger,
 		validator:    NewValidator(cfg.GitHub.WebhookSecret),
+		queueClient:  queueClient,
 	}
 }
 
@@ -102,7 +107,14 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Process the event asynchronously
-	go h.processEvent(context.Background(), event)
+	if h.queueClient != nil {
+		if err := h.queueClient.EnqueueWebhook(deliveryID, event); err != nil {
+			h.logger.Error("failed to enqueue webhook", "error", err, "delivery_id", deliveryID)
+			go h.processEvent(context.Background(), event) // fallback
+		}
+	} else {
+		go h.processEvent(context.Background(), event)
+	}
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "accepted"}); err != nil {
