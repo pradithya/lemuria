@@ -25,14 +25,22 @@ type Config struct {
 	Redis    RedisConfig    `koanf:"redis"`
 	Defaults DefaultsConfig `koanf:"defaults"`
 	Auth     AuthConfig     `koanf:"auth"`
+	Queue    QueueConfig    `koanf:"queue"`
+}
+
+// QueueConfig holds task queue settings.
+type QueueConfig struct {
+	Enabled     bool `koanf:"enabled"`
+	Concurrency int  `koanf:"concurrency"`
 }
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Port     int    `koanf:"port"`
-	Host     string `koanf:"host"`
-	BaseURL  string `koanf:"base_url"`
-	LogLevel string `koanf:"log_level"`
+	Port        int    `koanf:"port"`
+	Host        string `koanf:"host"`
+	BaseURL     string `koanf:"base_url"`
+	LogLevel    string `koanf:"log_level"`
+	MetricsPort int    `koanf:"metrics_port"`
 }
 
 // GitHubConfig holds GitHub App authentication settings.
@@ -167,9 +175,10 @@ type SyncRequirement struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ServerConfig{
-			Port:     4141,
-			Host:     "0.0.0.0",
-			LogLevel: "info",
+			Port:        4141,
+			Host:        "0.0.0.0",
+			LogLevel:    "info",
+			MetricsPort: 9090,
 		},
 		Redis: RedisConfig{
 			Address: "localhost:6379",
@@ -187,6 +196,10 @@ func DefaultConfig() *Config {
 			SessionTTL:   24 * time.Hour,
 			CookieSecure: true,
 			DefaultRole:  "user",
+		},
+		Queue: QueueConfig{
+			Enabled:     false,
+			Concurrency: 10,
 		},
 	}
 }

@@ -22,10 +22,13 @@ import (
 	"log/slog"
 	"net/http"
 
+	"fmt"
+
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/gitlab"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/queue"
 )
 
 // GitLabHandler processes GitLab webhook events.
@@ -34,15 +37,19 @@ type GitLabHandler struct {
 	gitlabClient *gitlab.Client
 	cmdExecutor  *commands.Executor
 	logger       *slog.Logger
+	queueClient  *queue.Client
 }
 
 // NewGitLabHandler creates a new GitLab webhook handler.
-func NewGitLabHandler(cfg *config.Config, gl *gitlab.Client, executor *commands.Executor, logger *slog.Logger) *GitLabHandler {
+// If queueClient is non-nil, events are enqueued for async processing instead of
+// being handled in a fire-and-forget goroutine.
+func NewGitLabHandler(cfg *config.Config, gl *gitlab.Client, executor *commands.Executor, logger *slog.Logger, queueClient *queue.Client) *GitLabHandler {
 	return &GitLabHandler{
 		config:       cfg,
 		gitlabClient: gl,
 		cmdExecutor:  executor,
 		logger:       logger,
+		queueClient:  queueClient,
 	}
 }
 
@@ -99,7 +106,18 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Process the event asynchronously
-	go h.processEvent(context.Background(), event)
+	if h.queueClient != nil {
+		deliveryID := r.Header.Get("X-Gitlab-Event-UUID")
+		if deliveryID == "" {
+			deliveryID = fmt.Sprintf("gl-%s-%d-%d", event.Repo.FullName, event.PR.Number, event.ReceivedAt.UnixNano())
+		}
+		if err := h.queueClient.EnqueueWebhook(deliveryID, event); err != nil {
+			h.logger.Error("failed to enqueue webhook", "error", err, "delivery_id", deliveryID)
+			go h.processEvent(context.Background(), event) // fallback
+		}
+	} else {
+		go h.processEvent(context.Background(), event)
+	}
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "accepted"}); err != nil {

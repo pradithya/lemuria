@@ -193,6 +193,10 @@ stop-redis:
 run-backend: build-go
 	./bin/lemuria -config $(CONFIG)
 
+# Run the queue worker
+run-worker: build-go
+	./bin/lemuria --mode worker -config $(CONFIG)
+
 # Run the frontend dev server
 run-frontend:
 	cd web && $(NPM) install && $(NPM) run dev
@@ -360,6 +364,7 @@ help:
 	@echo "  make run            - Run Redis, backend, and frontend dev server"
 	@echo "  make run-redis      - Start Redis in Docker"
 	@echo "  make run-backend    - Run backend server only"
+	@echo "  make run-worker     - Run queue worker only"
 	@echo "  make run-frontend   - Run frontend dev server only"
 	@echo "  make stop           - Stop all development services"
 	@echo ""

@@ -37,6 +37,7 @@ import (
 	"github.com/org/lemuria/internal/gitlab"
 	"github.com/org/lemuria/internal/lock"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/queue"
 	"github.com/org/lemuria/internal/webhook"
 )
 
@@ -56,6 +57,7 @@ type Server struct {
 	lockManager          lock.Manager
 	githubExecutor       *commands.Executor // executor using GitHub VCS client
 	gitlabExecutor       *commands.Executor // executor using GitLab VCS client
+	queueClient          *queue.Client      // queue client for async processing (nil if queue disabled)
 
 	// Auth components (nil if auth disabled)
 	redisClient         *redis.Client
@@ -71,48 +73,37 @@ type Server struct {
 
 // New creates a new Server instance.
 func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
-	// Initialize Argo CD client
-	argoClient, err := argocd.NewClient(cfg.ArgoCD)
+	deps, err := InitDependencies(cfg, logger)
 	if err != nil {
-		return nil, fmt.Errorf("creating Argo CD client: %w", err)
-	}
-
-	// Initialize lock manager
-	lockMgr, err := lock.NewRedisManager(cfg.Redis)
-	if err != nil {
-		return nil, fmt.Errorf("creating lock manager: %w", err)
+		return nil, err
 	}
 
 	s := &Server{
-		config:      cfg,
-		router:      chi.NewRouter(),
-		logger:      logger,
-		argoClient:  argoClient,
-		lockManager: lockMgr,
+		config:         cfg,
+		router:         chi.NewRouter(),
+		logger:         logger,
+		argoClient:     deps.ArgoClient,
+		lockManager:    deps.LockManager,
+		githubClient:   deps.GithubClient,
+		gitlabClient:   deps.GitlabClient,
+		githubExecutor: deps.GithubExecutor,
+		gitlabExecutor: deps.GitlabExecutor,
 	}
 
-	// Initialize GitHub provider if configured
+	// Initialize queue client if enabled
+	var qClient *queue.Client
+	if cfg.Queue.Enabled {
+		qClient = queue.NewClient(cfg.Redis, logger)
+		s.queueClient = qClient
+		logger.Info("task queue enabled")
+	}
+
+	// Initialize webhook handlers
 	if cfg.HasGitHub() {
-		ghClient, err := github.NewClient(cfg.GitHub)
-		if err != nil {
-			return nil, fmt.Errorf("creating GitHub client: %w", err)
-		}
-		s.githubClient = ghClient
-		s.githubExecutor = commands.NewExecutor(ghClient, argoClient, lockMgr, cfg, logger)
-		s.githubWebhookHandler = webhook.NewGitHubHandler(cfg, ghClient, s.githubExecutor, logger)
-		logger.Info("GitHub provider initialized")
+		s.githubWebhookHandler = webhook.NewGitHubHandler(cfg, deps.GithubClient, deps.GithubExecutor, logger, qClient)
 	}
-
-	// Initialize GitLab provider if configured
 	if cfg.HasGitLab() {
-		glClient, err := gitlab.NewClient(cfg.GitLab)
-		if err != nil {
-			return nil, fmt.Errorf("creating GitLab client: %w", err)
-		}
-		s.gitlabClient = glClient
-		s.gitlabExecutor = commands.NewExecutor(glClient, argoClient, lockMgr, cfg, logger)
-		s.gitlabWebhookHandler = webhook.NewGitLabHandler(cfg, glClient, s.gitlabExecutor, logger)
-		logger.Info("GitLab provider initialized")
+		s.gitlabWebhookHandler = webhook.NewGitLabHandler(cfg, deps.GitlabClient, deps.GitlabExecutor, logger, qClient)
 	}
 
 	// Initialize auth components if enabled
@@ -302,6 +293,11 @@ func (s *Server) Run() error {
 func (s *Server) Close() error {
 	if s.loginRateLimiter != nil {
 		s.loginRateLimiter.Stop()
+	}
+	if s.queueClient != nil {
+		if err := s.queueClient.Close(); err != nil {
+			s.logger.Error("error closing queue client", "error", err)
+		}
 	}
 	if s.lockManager != nil {
 		if err := s.lockManager.Close(); err != nil {

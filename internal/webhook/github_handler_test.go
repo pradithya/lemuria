@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/org/lemuria/internal/config"
+	"github.com/org/lemuria/internal/queue"
 )
 
 func TestGitHubHandlerHandle(t *testing.T) {
@@ -234,5 +235,113 @@ func TestGitHubHandlerHandle(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGitHubHandlerNilQueueClientFallsBackToGoroutine(t *testing.T) {
+	const secret = "gh-test-secret"
+	cfg := &config.Config{
+		GitHub: config.GitHubConfig{WebhookSecret: secret},
+	}
+
+	// Construct with nil queue client — goroutine fallback path
+	h := NewGitHubHandler(cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+
+	if h.queueClient != nil {
+		t.Error("expected nil queueClient")
+	}
+
+	body := []byte(`{
+		"action": "opened",
+		"number": 1,
+		"pull_request": {
+			"number": 1, "title": "T", "state": "open", "draft": false, "merged": false,
+			"head": {"sha": "a", "ref": "f"}, "base": {"ref": "m"},
+			"user": {"login": "d", "id": 1}, "html_url": "https://github.com/o/r/pull/1"
+		},
+		"repository": {"name": "r", "full_name": "o/r", "owner": {"login": "o"},
+			"clone_url": "https://github.com/o/r.git", "html_url": "https://github.com/o/r"},
+		"sender": {"login": "d", "id": 1}
+	}`)
+	sig := computeHMAC(body, secret)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook/github", bytes.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", sig)
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Delivery", "test-delivery-id")
+
+	rec := httptest.NewRecorder()
+	h.Handle(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp["status"]; got != "accepted" {
+		t.Errorf("status = %q, want %q", got, "accepted")
+	}
+}
+
+func TestGitHubHandlerWithQueueClient(t *testing.T) {
+	const secret = "gh-test-secret"
+	cfg := &config.Config{
+		GitHub: config.GitHubConfig{WebhookSecret: secret},
+		Redis:  config.RedisConfig{Address: "localhost:6379"},
+	}
+
+	// Create a queue client (it won't actually connect to Redis in this test
+	// since enqueue will fail and fall back to goroutine)
+	qClient := queue.NewClient(cfg.Redis, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer func() {
+		err := qClient.Close()
+		if err != nil {
+			t.Fatalf("failed to close queue client: %v", err)
+		}
+	}()
+
+	h := NewGitHubHandler(cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), qClient)
+
+	if h.queueClient == nil {
+		t.Error("expected non-nil queueClient")
+	}
+
+	body := []byte(`{
+		"action": "opened",
+		"number": 1,
+		"pull_request": {
+			"number": 1, "title": "T", "state": "open", "draft": false, "merged": false,
+			"head": {"sha": "a", "ref": "f"}, "base": {"ref": "m"},
+			"user": {"login": "d", "id": 1}, "html_url": "https://github.com/o/r/pull/1"
+		},
+		"repository": {"name": "r", "full_name": "o/r", "owner": {"login": "o"},
+			"clone_url": "https://github.com/o/r.git", "html_url": "https://github.com/o/r"},
+		"sender": {"login": "d", "id": 1}
+	}`)
+	sig := computeHMAC(body, secret)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook/github", bytes.NewReader(body))
+	req.Header.Set("X-Hub-Signature-256", sig)
+	req.Header.Set("X-GitHub-Event", "pull_request")
+	req.Header.Set("X-GitHub-Delivery", "test-delivery-queue")
+
+	rec := httptest.NewRecorder()
+	h.Handle(rec, req)
+
+	// Even if Redis is unreachable, the handler should still return accepted
+	// (falls back to goroutine processing)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got := resp["status"]; got != "accepted" {
+		t.Errorf("status = %q, want %q", got, "accepted")
 	}
 }
