@@ -2,7 +2,7 @@
         k8s-deploy k8s-delete k8s-status k8s-logs k8s-port-forward k8s-restart \
         k3d-create k3d-delete k3d-build k3d-deploy k3d-all \
         helm-lint helm-template helm-template-ci helm-test helm-test-install helm-package helm-deploy helm-delete helm-dep \
-        tools install-tools setup-hooks \
+        tools install-tools install-go-tools install-helm-plugins setup-hooks \
         deps lint fmt fmt-check generate frontend-deps frontend-type-check frontend-build \
         license-check license-fix \
         help
@@ -101,9 +101,10 @@ HELM_UNITTEST_VERSION ?= v0.5.2
 # Install all development tools
 tools: install-tools
 
-install-tools:
-	@echo "Installing development tools..."
-	@echo ""
+install-tools: install-go-tools install-helm-plugins
+	@echo "All development tools installed!"
+
+install-go-tools:
 	@echo "Installing Go tools..."
 	@echo "  Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(GOBIN) $(GOLANGCI_LINT_VERSION)
@@ -111,7 +112,8 @@ install-tools:
 	@go install golang.org/x/tools/cmd/goimports@$(GOIMPORTS_VERSION)
 	@echo "  Installing addlicense $(ADDLICENSE_VERSION)..."
 	@go install github.com/google/addlicense@$(ADDLICENSE_VERSION)
-	@echo ""
+
+install-helm-plugins:
 	@echo "Installing Helm plugins..."
 	@if helm plugin list 2>/dev/null | grep -q unittest; then \
 		echo "  Removing existing helm-unittest plugin..."; \
@@ -119,8 +121,6 @@ install-tools:
 	fi
 	@echo "  Installing helm-unittest $(HELM_UNITTEST_VERSION)..."
 	@helm plugin install https://github.com/helm-unittest/helm-unittest.git --version $(HELM_UNITTEST_VERSION)
-	@echo ""
-	@echo "All development tools installed!"
 
 # Setup git hooks
 setup-hooks:
