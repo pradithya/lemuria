@@ -19,15 +19,83 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 
 	"github.com/org/lemuria/internal/models"
 )
+
+// SyncOptions configures a sync operation.
+type SyncOptions struct {
+	Revision  string
+	Prune     bool
+	DryRun    bool
+	Resources []SyncResource
+	Timeout   time.Duration // Maximum time to wait for sync and healthy state. 0 means use default (10m).
+}
+
+// SyncResource identifies a specific resource to sync.
+type SyncResource struct {
+	Group     string `json:"group"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// RollbackOptions configures a rollback operation.
+type RollbackOptions struct {
+	ID     int64
+	Prune  bool
+	DryRun bool
+}
+
+// appSyncStatus holds the operation state and health from the ArgoCD API.
+type appSyncStatus struct {
+	OperationPhase string
+	HealthStatus   string
+	Message        string
+	SyncResult     struct {
+		Revision  string
+		Resources []syncResourceResult
+	}
+}
+
+type syncResourceResult struct {
+	Group     string `json:"group"`
+	Version   string `json:"version"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	Message   string `json:"message"`
+	HookType  string `json:"hookType,omitempty"`
+}
+
+// watchEvent represents a single event from the ArgoCD Watch API stream.
+type watchEvent struct {
+	Result struct {
+		Type        string `json:"type"`
+		Application struct {
+			Status struct {
+				Health struct {
+					Status string `json:"status"`
+				} `json:"health"`
+				OperationState *struct {
+					Phase      string `json:"phase"`
+					Message    string `json:"message"`
+					SyncResult struct {
+						Revision  string               `json:"revision"`
+						Resources []syncResourceResult `json:"resources"`
+					} `json:"syncResult"`
+				} `json:"operationState"`
+			} `json:"status"`
+		} `json:"application"`
+	} `json:"result"`
+}
 
 // ListApplications returns all applications from Argo CD.
 func (c *Client) ListApplications(ctx context.Context) ([]models.Application, error) {
@@ -63,71 +131,6 @@ func (c *Client) GetApplication(ctx context.Context, name string) (*models.Appli
 
 	app := convertV1alpha1Application(resp, "")
 	return &app, nil
-}
-
-// convertV1alpha1Application converts a v1alpha1.Application to our domain model.
-// sourceFile is the git file path where this app CR is defined (empty for API-sourced apps).
-func convertV1alpha1Application(app v1alpha1.Application, sourceFile string) models.Application {
-	result := models.Application{
-		Name:                 app.Name,
-		Namespace:            app.Namespace,
-		Project:              app.Spec.Project,
-		DestinationServer:    app.Spec.Destination.Server,
-		DestinationNamespace: app.Spec.Destination.Namespace,
-		SyncStatus:           models.SyncStatus(app.Status.Sync.Status),
-		HealthStatus:         models.HealthStatus(app.Status.Health.Status),
-		Labels:               app.Labels,
-		AutoSyncEnabled:      app.Spec.SyncPolicy != nil && app.Spec.SyncPolicy.Automated != nil,
-		SourceFile:           sourceFile,
-	}
-
-	if result.Namespace == "" {
-		result.Namespace = "argocd"
-	}
-
-	if result.Project == "" {
-		result.Project = "default"
-	}
-
-	// Single source
-	if app.Spec.Source != nil {
-		result.RepoURL = app.Spec.Source.RepoURL
-		result.Path = app.Spec.Source.Path
-		result.TargetRevision = app.Spec.Source.TargetRevision
-	}
-
-	// Multi-source
-	if len(app.Spec.Sources) > 0 {
-		result.Sources = make([]models.ApplicationSource, len(app.Spec.Sources))
-		for i, src := range app.Spec.Sources {
-			result.Sources[i] = models.ApplicationSource{
-				RepoURL:        src.RepoURL,
-				Path:           src.Path,
-				TargetRevision: src.TargetRevision,
-				Chart:          src.Chart,
-			}
-			if src.Helm != nil {
-				result.Sources[i].Helm = &models.HelmSource{
-					ValueFiles: src.Helm.ValueFiles,
-					Values:     src.Helm.Values,
-				}
-			}
-		}
-	}
-
-	// ApplicationSet name from label or ownerReferences
-	if appSetName, ok := app.Labels["argocd.argoproj.io/application-set-name"]; ok {
-		result.ApplicationSetName = appSetName
-	} else {
-		for _, owner := range app.OwnerReferences {
-			if owner.Kind == "ApplicationSet" {
-				result.ApplicationSetName = owner.Name
-				break
-			}
-		}
-	}
-
-	return result
 }
 
 // GetResourceHealth fetches per-resource health information for an application.
@@ -198,10 +201,123 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 	return c.waitForSyncComplete(ctx, name, timeout)
 }
 
+// FindApplicationsByRepo returns applications that reference the given repository.
+func (c *Client) FindApplicationsByRepo(ctx context.Context, repoURL string) ([]models.Application, error) {
+	apps, err := c.ListApplications(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	normalizedRepo := NormalizeRepoURL(repoURL)
+	var matched []models.Application
+	for _, app := range apps {
+		for _, appURL := range app.GetRepoURLs() {
+			if NormalizeRepoURL(appURL) == normalizedRepo {
+				matched = append(matched, app)
+				break
+			}
+		}
+	}
+
+	return matched, nil
+}
+
+// UpdateApplicationSpec updates only the spec of an existing application.
+func (c *Client) UpdateApplicationSpec(ctx context.Context, name string, spec v1alpha1.ApplicationSpec) error {
+	if err := c.put(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/spec", nil, &spec, nil); err != nil {
+		return fmt.Errorf("updating application spec %s: %w", name, err)
+	}
+	return nil
+}
+
+// GetApplicationHistory returns the deployment history for an application.
+func (c *Client) GetApplicationHistory(ctx context.Context, name string) ([]v1alpha1.RevisionHistory, error) {
+	var resp v1alpha1.Application
+	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
+		return nil, fmt.Errorf("getting application history for %s: %w", name, err)
+	}
+
+	return resp.Status.History, nil
+}
+
+// RollbackApplication rolls back an application to a previous deployment.
+func (c *Client) RollbackApplication(ctx context.Context, name string, opts *RollbackOptions) (*models.SyncResult, error) {
+	if opts == nil || opts.ID == 0 {
+		return nil, fmt.Errorf("rollback ID is required")
+	}
+
+	payload := map[string]any{
+		"id": opts.ID,
+	}
+
+	if opts.Prune {
+		payload["prune"] = true
+	}
+	if opts.DryRun {
+		payload["dryRun"] = true
+	}
+
+	var resp struct {
+		Status struct {
+			OperationState struct {
+				Phase   string `json:"phase"`
+				Message string `json:"message"`
+			} `json:"operationState"`
+		} `json:"status"`
+	}
+
+	if err := c.post(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/rollback", nil, payload, &resp); err != nil {
+		return nil, fmt.Errorf("rolling back application %s: %w", name, err)
+	}
+
+	return &models.SyncResult{
+		Application: name,
+		Phase:       models.SyncPhase(resp.Status.OperationState.Phase),
+		Message:     resp.Status.OperationState.Message,
+	}, nil
+}
+
+// CreateApplication creates a new application in ArgoCD.
+func (c *Client) CreateApplication(ctx context.Context, app *v1alpha1.Application) error {
+	if err := c.post(ctx, "/api/v1/applications", nil, app, nil); err != nil {
+		return fmt.Errorf("creating application: %w", err)
+	}
+	return nil
+}
+
+// DeleteApplication deletes an application from ArgoCD.
+func (c *Client) DeleteApplication(ctx context.Context, name string, cascade bool) error {
+	query := url.Values{}
+	if cascade {
+		query.Set("cascade", "true")
+	} else {
+		query.Set("cascade", "false")
+	}
+
+	if err := c.delete(ctx, "/api/v1/applications/"+url.PathEscape(name), query); err != nil {
+		return fmt.Errorf("deleting application %s: %w", name, err)
+	}
+	return nil
+}
+
+// GetApplicationRaw returns the application as a typed v1alpha1.Application.
+func (c *Client) GetApplicationRaw(ctx context.Context, name string) (*v1alpha1.Application, error) {
+	var resp v1alpha1.Application
+	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
+		return nil, fmt.Errorf("getting application %s: %w", name, err)
+	}
+	return &resp, nil
+}
+
 // defaultSyncWaitTimeout is the default maximum time to wait for a sync operation
 // to complete and the application to become healthy, used when no timeout is
 // specified in SyncOptions. Aligned with ArgoCD's default operation timeout.
 const defaultSyncWaitTimeout = 10 * time.Minute
+
+// healthStabilizationPeriod is the duration to wait after seeing Healthy status
+// to confirm it's stable. This catches cases where health briefly shows Healthy
+// before transitioning to Degraded (e.g., when a pod fails to pull an image).
+const healthStabilizationPeriod = 10 * time.Second
 
 // waitForSyncComplete watches the application using the streaming Watch API until
 // the operation reaches a terminal phase and the application becomes healthy.
@@ -211,40 +327,91 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 	watchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	slog.Debug("waiting for sync to complete", "application", name, "timeout", timeout)
+
 	events, err := c.watchApplication(watchCtx, name)
 	if err != nil {
 		return nil, fmt.Errorf("watching application %s: %w", name, err)
 	}
 
 	var syncResult *models.SyncResult
+	var healthyAt time.Time // When we first saw Healthy status
 
 	for event := range events {
 		status := extractAppSyncStatus(&event)
 		phase := models.SyncPhase(status.OperationPhase)
+		healthStatus := models.HealthStatus(status.HealthStatus)
+
+		slog.Debug("received watch event",
+			"application", name,
+			"phase", phase,
+			"health", healthStatus,
+			"syncCompleted", syncResult != nil,
+			"healthyAt", healthyAt,
+		)
 
 		// Wait for sync to reach a terminal phase.
 		if syncResult == nil {
 			switch phase {
 			case models.SyncPhaseSucceeded, models.SyncPhaseFailed, models.SyncPhaseError:
+				slog.Debug("sync reached terminal phase",
+					"application", name,
+					"phase", phase,
+					"health", healthStatus,
+				)
 				syncResult = buildSyncResult(name, status)
 				if phase != models.SyncPhaseSucceeded {
+					slog.Debug("sync failed, returning early",
+						"application", name,
+						"phase", phase,
+					)
 					return syncResult, nil
 				}
+				slog.Debug("sync succeeded, now waiting for health",
+					"application", name,
+					"currentHealth", healthStatus,
+				)
 			default:
 				continue
 			}
 		}
 
 		// Sync succeeded — wait for health to become Healthy or reach a terminal state.
-		healthStatus := models.HealthStatus(status.HealthStatus)
 		switch healthStatus {
 		case models.HealthStatusHealthy:
-			// Success: application is healthy
-			syncResult.HealthStatus = healthStatus
-			return syncResult, nil
+			// Track when we first saw Healthy
+			if healthyAt.IsZero() {
+				healthyAt = time.Now()
+				slog.Debug("application became healthy, starting stabilization period",
+					"application", name,
+					"stabilizationPeriod", healthStabilizationPeriod,
+				)
+			}
+
+			// Check if we've been healthy long enough
+			if time.Since(healthyAt) >= healthStabilizationPeriod {
+				slog.Debug("health stabilized, sync complete",
+					"application", name,
+					"stableDuration", time.Since(healthyAt),
+				)
+				syncResult.HealthStatus = healthStatus
+				return syncResult, nil
+			}
+
+			// Still in stabilization period, continue watching
+			slog.Debug("health stabilization in progress",
+				"application", name,
+				"elapsed", time.Since(healthyAt),
+				"remaining", healthStabilizationPeriod-time.Since(healthyAt),
+			)
+			continue
 
 		case models.HealthStatusDegraded:
 			// Failure: application entered degraded state
+			slog.Debug("application health degraded",
+				"application", name,
+				"wasHealthy", !healthyAt.IsZero(),
+			)
 			syncResult.Phase = models.SyncPhaseFailed
 			syncResult.HealthStatus = healthStatus
 			syncResult.Message = "application health is Degraded"
@@ -252,22 +419,42 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 
 		case models.HealthStatusSuspended:
 			// Suspended is a valid terminal state (user-intended)
+			slog.Debug("application is suspended",
+				"application", name,
+			)
 			syncResult.HealthStatus = healthStatus
 			return syncResult, nil
 
 		case models.HealthStatusMissing, models.HealthStatusUnknown:
 			// Failure: unexpected terminal health state
+			slog.Debug("application health is missing or unknown",
+				"application", name,
+				"health", healthStatus,
+			)
 			syncResult.Phase = models.SyncPhaseFailed
 			syncResult.HealthStatus = healthStatus
 			syncResult.Message = fmt.Sprintf("application health is %s", healthStatus)
 			return syncResult, nil
 
 		case models.HealthStatusProgressing, "":
-			// Still progressing, continue waiting
+			// Reset healthy timer if we go back to progressing
+			if !healthyAt.IsZero() {
+				slog.Debug("health changed from Healthy to Progressing, resetting stabilization",
+					"application", name,
+				)
+				healthyAt = time.Time{}
+			}
+			slog.Debug("application still progressing, waiting for next event",
+				"application", name,
+			)
 			continue
 
 		default:
 			// Unknown health status, treat as failure
+			slog.Debug("unexpected health status",
+				"application", name,
+				"health", healthStatus,
+			)
 			syncResult.Phase = models.SyncPhaseFailed
 			syncResult.HealthStatus = healthStatus
 			syncResult.Message = fmt.Sprintf("unexpected health status: %s", healthStatus)
@@ -277,10 +464,28 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 
 	// Stream ended (timeout or connection closed) before health stabilized.
 	if syncResult == nil {
+		slog.Debug("timeout waiting for sync operation",
+			"application", name,
+		)
 		return nil, fmt.Errorf("timeout waiting for sync to complete for %s", name)
 	}
 
+	// If we saw healthy but didn't stabilize, still consider it a success
+	// (the stream ended, likely due to timeout, but last known state was healthy)
+	if !healthyAt.IsZero() {
+		slog.Debug("stream ended during stabilization, accepting healthy state",
+			"application", name,
+			"healthyDuration", time.Since(healthyAt),
+		)
+		syncResult.HealthStatus = models.HealthStatusHealthy
+		return syncResult, nil
+	}
+
 	// Sync completed but health didn't become healthy before timeout.
+	slog.Debug("timeout waiting for healthy state after sync",
+		"application", name,
+		"lastHealth", syncResult.HealthStatus,
+	)
 	return &models.SyncResult{
 		Application:  syncResult.Application,
 		Revision:     syncResult.Revision,
@@ -289,28 +494,6 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 		Resources:    syncResult.Resources,
 		HealthStatus: models.HealthStatusProgressing,
 	}, nil
-}
-
-// watchEvent represents a single event from the ArgoCD Watch API stream.
-type watchEvent struct {
-	Result struct {
-		Type        string `json:"type"`
-		Application struct {
-			Status struct {
-				Health struct {
-					Status string `json:"status"`
-				} `json:"health"`
-				OperationState *struct {
-					Phase      string `json:"phase"`
-					Message    string `json:"message"`
-					SyncResult struct {
-						Revision  string               `json:"revision"`
-						Resources []syncResourceResult `json:"resources"`
-					} `json:"syncResult"`
-				} `json:"operationState"`
-			} `json:"status"`
-		} `json:"application"`
-	} `json:"result"`
 }
 
 // watchApplication opens a streaming connection to the ArgoCD Watch API
@@ -386,26 +569,69 @@ func extractAppSyncStatus(event *watchEvent) *appSyncStatus {
 	return result
 }
 
-// appSyncStatus holds the operation state and health from the ArgoCD API.
-type appSyncStatus struct {
-	OperationPhase string
-	HealthStatus   string
-	Message        string
-	SyncResult     struct {
-		Revision  string
-		Resources []syncResourceResult
+// convertV1alpha1Application converts a v1alpha1.Application to our domain model.
+// sourceFile is the git file path where this app CR is defined (empty for API-sourced apps).
+func convertV1alpha1Application(app v1alpha1.Application, sourceFile string) models.Application {
+	result := models.Application{
+		Name:                 app.Name,
+		Namespace:            app.Namespace,
+		Project:              app.Spec.Project,
+		DestinationServer:    app.Spec.Destination.Server,
+		DestinationNamespace: app.Spec.Destination.Namespace,
+		SyncStatus:           models.SyncStatus(app.Status.Sync.Status),
+		HealthStatus:         models.HealthStatus(app.Status.Health.Status),
+		Labels:               app.Labels,
+		AutoSyncEnabled:      app.Spec.SyncPolicy != nil && app.Spec.SyncPolicy.Automated != nil,
+		SourceFile:           sourceFile,
 	}
-}
 
-type syncResourceResult struct {
-	Group     string `json:"group"`
-	Version   string `json:"version"`
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	Message   string `json:"message"`
-	HookType  string `json:"hookType,omitempty"`
+	if result.Namespace == "" {
+		result.Namespace = "argocd"
+	}
+
+	if result.Project == "" {
+		result.Project = "default"
+	}
+
+	// Single source
+	if app.Spec.Source != nil {
+		result.RepoURL = app.Spec.Source.RepoURL
+		result.Path = app.Spec.Source.Path
+		result.TargetRevision = app.Spec.Source.TargetRevision
+	}
+
+	// Multi-source
+	if len(app.Spec.Sources) > 0 {
+		result.Sources = make([]models.ApplicationSource, len(app.Spec.Sources))
+		for i, src := range app.Spec.Sources {
+			result.Sources[i] = models.ApplicationSource{
+				RepoURL:        src.RepoURL,
+				Path:           src.Path,
+				TargetRevision: src.TargetRevision,
+				Chart:          src.Chart,
+			}
+			if src.Helm != nil {
+				result.Sources[i].Helm = &models.HelmSource{
+					ValueFiles: src.Helm.ValueFiles,
+					Values:     src.Helm.Values,
+				}
+			}
+		}
+	}
+
+	// ApplicationSet name from label or ownerReferences
+	if appSetName, ok := app.Labels["argocd.argoproj.io/application-set-name"]; ok {
+		result.ApplicationSetName = appSetName
+	} else {
+		for _, owner := range app.OwnerReferences {
+			if owner.Kind == "ApplicationSet" {
+				result.ApplicationSetName = owner.Name
+				break
+			}
+		}
+	}
+
+	return result
 }
 
 // buildSyncResult converts an appSyncStatus into a SyncResult.
@@ -440,148 +666,4 @@ func buildSyncResult(name string, status *appSyncStatus) *models.SyncResult {
 	}
 
 	return result
-}
-
-// SyncOptions configures a sync operation.
-type SyncOptions struct {
-	Revision  string
-	Prune     bool
-	DryRun    bool
-	Resources []SyncResource
-	Timeout   time.Duration // Maximum time to wait for sync and healthy state. 0 means use default (10m).
-}
-
-// SyncResource identifies a specific resource to sync.
-type SyncResource struct {
-	Group     string `json:"group"`
-	Kind      string `json:"kind"`
-	Name      string `json:"name"`
-	Namespace string `json:"namespace,omitempty"`
-}
-
-// FindApplicationsByRepo returns applications that reference the given repository.
-func (c *Client) FindApplicationsByRepo(ctx context.Context, repoURL string) ([]models.Application, error) {
-	apps, err := c.ListApplications(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	normalizedRepo := NormalizeRepoURL(repoURL)
-	var matched []models.Application
-	for _, app := range apps {
-		for _, appURL := range app.GetRepoURLs() {
-			if NormalizeRepoURL(appURL) == normalizedRepo {
-				matched = append(matched, app)
-				break
-			}
-		}
-	}
-
-	return matched, nil
-}
-
-// NormalizeRepoURL removes protocol and .git suffix for comparison.
-func NormalizeRepoURL(u string) string {
-	// Convert to lowercase first for case-insensitive prefix matching
-	u = strings.ToLower(u)
-	u = strings.TrimPrefix(u, "https://")
-	u = strings.TrimPrefix(u, "http://")
-	u = strings.TrimPrefix(u, "git@")
-	u = strings.Replace(u, ":", "/", 1)
-	u = strings.TrimSuffix(u, ".git")
-	return u
-}
-
-// UpdateApplicationSpec updates only the spec of an existing application.
-func (c *Client) UpdateApplicationSpec(ctx context.Context, name string, spec v1alpha1.ApplicationSpec) error {
-	if err := c.put(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/spec", nil, &spec, nil); err != nil {
-		return fmt.Errorf("updating application spec %s: %w", name, err)
-	}
-	return nil
-}
-
-// GetApplicationHistory returns the deployment history for an application.
-func (c *Client) GetApplicationHistory(ctx context.Context, name string) ([]v1alpha1.RevisionHistory, error) {
-	var resp v1alpha1.Application
-	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
-		return nil, fmt.Errorf("getting application history for %s: %w", name, err)
-	}
-
-	return resp.Status.History, nil
-}
-
-// RollbackOptions configures a rollback operation.
-type RollbackOptions struct {
-	ID     int64
-	Prune  bool
-	DryRun bool
-}
-
-// RollbackApplication rolls back an application to a previous deployment.
-func (c *Client) RollbackApplication(ctx context.Context, name string, opts *RollbackOptions) (*models.SyncResult, error) {
-	if opts == nil || opts.ID == 0 {
-		return nil, fmt.Errorf("rollback ID is required")
-	}
-
-	payload := map[string]any{
-		"id": opts.ID,
-	}
-
-	if opts.Prune {
-		payload["prune"] = true
-	}
-	if opts.DryRun {
-		payload["dryRun"] = true
-	}
-
-	var resp struct {
-		Status struct {
-			OperationState struct {
-				Phase   string `json:"phase"`
-				Message string `json:"message"`
-			} `json:"operationState"`
-		} `json:"status"`
-	}
-
-	if err := c.post(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/rollback", nil, payload, &resp); err != nil {
-		return nil, fmt.Errorf("rolling back application %s: %w", name, err)
-	}
-
-	return &models.SyncResult{
-		Application: name,
-		Phase:       models.SyncPhase(resp.Status.OperationState.Phase),
-		Message:     resp.Status.OperationState.Message,
-	}, nil
-}
-
-// CreateApplication creates a new application in ArgoCD.
-func (c *Client) CreateApplication(ctx context.Context, app *v1alpha1.Application) error {
-	if err := c.post(ctx, "/api/v1/applications", nil, app, nil); err != nil {
-		return fmt.Errorf("creating application: %w", err)
-	}
-	return nil
-}
-
-// DeleteApplication deletes an application from ArgoCD.
-func (c *Client) DeleteApplication(ctx context.Context, name string, cascade bool) error {
-	query := url.Values{}
-	if cascade {
-		query.Set("cascade", "true")
-	} else {
-		query.Set("cascade", "false")
-	}
-
-	if err := c.delete(ctx, "/api/v1/applications/"+url.PathEscape(name), query); err != nil {
-		return fmt.Errorf("deleting application %s: %w", name, err)
-	}
-	return nil
-}
-
-// GetApplicationRaw returns the application as a typed v1alpha1.Application.
-func (c *Client) GetApplicationRaw(ctx context.Context, name string) (*v1alpha1.Application, error) {
-	var resp v1alpha1.Application
-	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
-		return nil, fmt.Errorf("getting application %s: %w", name, err)
-	}
-	return &resp, nil
 }
