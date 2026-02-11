@@ -27,8 +27,8 @@ import (
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
-	"github.com/org/lemuria/internal/vcs"
 	"github.com/org/lemuria/internal/queue"
+	"github.com/org/lemuria/internal/vcs"
 )
 
 // GitLabHandler processes GitLab webhook events.

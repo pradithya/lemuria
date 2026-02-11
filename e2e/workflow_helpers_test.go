@@ -195,38 +195,6 @@ func gitlabNotePayload(fullPath, projectName string, mrIID int, headSHA, sourceB
 	return data
 }
 
-// gitlabMRPayload builds a GitLab Merge Request Hook webhook JSON body.
-func gitlabMRPayload(action, fullPath, projectName string, mrIID int, headSHA, sourceBranch, targetBranch string) []byte {
-	payload := map[string]any{
-		"object_attributes": map[string]any{
-			"iid":           mrIID,
-			"title":         "Test MR",
-			"state":         "opened",
-			"action":        action,
-			"draft":         false,
-			"source_branch": sourceBranch,
-			"target_branch": targetBranch,
-			"last_commit": map[string]any{
-				"id": headSHA,
-			},
-			"url": fmt.Sprintf("https://gitlab.com/%s/-/merge_requests/%d", fullPath, mrIID),
-		},
-		"project": map[string]any{
-			"name":                projectName,
-			"path_with_namespace": fullPath,
-			"web_url":             "https://gitlab.com/" + fullPath,
-			"git_http_url":        "https://gitlab.com/" + fullPath + ".git",
-		},
-		"user": map[string]any{
-			"username": "test-user",
-			"name":     "Test User",
-			"id":       1,
-		},
-	}
-	data, _ := json.Marshal(payload)
-	return data
-}
-
 // ============================================================================
 // HTTP Request Helpers
 // ============================================================================
@@ -287,7 +255,7 @@ func sendGitLabWebhook(t *testing.T, serverURL, eventType string, payload []byte
 func assertAccepted(t *testing.T, resp *http.Response) {
 	t.Helper()
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Expected 200 OK, got %d: %s", resp.StatusCode, body)
 	}
