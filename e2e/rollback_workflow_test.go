@@ -19,8 +19,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/org/lemuria/internal/commands"
 )
 
 func TestE2ERollbackCommand(t *testing.T) {
@@ -42,37 +40,24 @@ func TestE2ERollbackCommand(t *testing.T) {
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor := newTestExecutor(mockGH, nil)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
 	// Step 1: Run plan to acquire lock
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "lemuria plan -a "+appName)
-	planCmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
 
 	// Step 2: Run rollback
 	mockGH.Reset()
-	rollbackEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "lemuria rollback -a "+appName)
-	rollbackCmd := &commands.Command{
-		Name:        commands.CommandRollback,
-		Application: appName,
-	}
+	rollbackPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria rollback -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", rollbackPayload))
 
-	err := executor.Execute(testCtx, rollbackCmd, rollbackEvent)
-	if err != nil {
-		t.Fatalf("Rollback command failed: %v", err)
-	}
-
-	// Assert: rollback comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected rollback result comment to be posted")
-	}
-
+	// Wait for rollback comment
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Rollback comment: %.300s", lastComment.Body)
 

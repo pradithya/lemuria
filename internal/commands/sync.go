@@ -25,6 +25,7 @@ import (
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/vcs"
 	"github.com/org/lemuria/pkg/diff"
 )
 
@@ -545,7 +546,7 @@ func mergeResourceHealth(result *models.SyncResult, healthInfo []models.Resource
 // syncCommentTracker manages the lifecycle of a progressive sync comment.
 type syncCommentTracker struct {
 	mu         sync.Mutex
-	vcs        VCSClient
+	vcs        vcs.Client
 	event      *models.PREvent
 	appNames   []string
 	results    []syncResult
@@ -557,7 +558,7 @@ type syncCommentTracker struct {
 // minUpdateInterval is the minimum time between intermediate comment updates.
 const minUpdateInterval = 1 * time.Minute
 
-func newSyncCommentTracker(vcs VCSClient, event *models.PREvent, appNames []string) *syncCommentTracker {
+func newSyncCommentTracker(vcs vcs.Client, event *models.PREvent, appNames []string) *syncCommentTracker {
 	return &syncCommentTracker{
 		vcs:       vcs,
 		event:     event,

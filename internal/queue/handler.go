@@ -24,9 +24,8 @@ import (
 
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
-	"github.com/org/lemuria/internal/github"
-	"github.com/org/lemuria/internal/gitlab"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/vcs"
 )
 
 // WebhookHandler processes webhook tasks dequeued from the task queue.
@@ -34,8 +33,8 @@ type WebhookHandler struct {
 	config         *config.Config
 	githubExecutor *commands.Executor
 	gitlabExecutor *commands.Executor
-	githubClient   *github.Client
-	gitlabClient   *gitlab.Client
+	githubVCS      vcs.Client
+	gitlabVCS      vcs.Client
 }
 
 // NewWebhookHandler creates a new webhook task handler.
@@ -43,15 +42,15 @@ func NewWebhookHandler(
 	cfg *config.Config,
 	githubExecutor *commands.Executor,
 	gitlabExecutor *commands.Executor,
-	githubClient *github.Client,
-	gitlabClient *gitlab.Client,
+	githubVCS vcs.Client,
+	gitlabVCS vcs.Client,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		config:         cfg,
 		githubExecutor: githubExecutor,
 		gitlabExecutor: gitlabExecutor,
-		githubClient:   githubClient,
-		gitlabClient:   gitlabClient,
+		githubVCS:      githubVCS,
+		gitlabVCS:      gitlabVCS,
 	}
 }
 
@@ -162,43 +161,30 @@ func (h *WebhookHandler) handleComment(ctx context.Context, executor *commands.E
 
 // enrichPRInfo fetches full PR/MR details from the VCS provider.
 func (h *WebhookHandler) enrichPRInfo(ctx context.Context, event *models.PREvent) error {
+	var vcsClient vcs.Client
 	switch event.Provider {
 	case models.VCSProviderGitHub:
-		if h.githubClient == nil {
-			return fmt.Errorf("no GitHub client configured: %w", asynq.SkipRetry)
-		}
-		pr, err := h.githubClient.GetPRRaw(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
-		if err != nil {
-			return err
-		}
-		if pr.Head != nil {
-			event.PR.HeadSHA = pr.Head.GetSHA()
-			event.PR.HeadRef = pr.Head.GetRef()
-		}
-		if pr.Base != nil {
-			event.PR.BaseRef = pr.Base.GetRef()
-		}
-		event.PR.State = models.PRState(pr.GetState())
-		event.PR.Title = pr.GetTitle()
-		event.PR.Draft = pr.GetDraft()
-		event.PR.Merged = pr.GetMerged()
-
+		vcsClient = h.githubVCS
 	case models.VCSProviderGitLab:
-		if h.gitlabClient == nil {
-			return fmt.Errorf("no GitLab client configured: %w", asynq.SkipRetry)
-		}
-		detail, err := h.gitlabClient.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
-		if err != nil {
-			return err
-		}
-		event.PR.HeadSHA = detail.HeadSHA
-		event.PR.HeadRef = detail.HeadRef
-		event.PR.BaseRef = detail.BaseRef
-		event.PR.State = detail.State
-		event.PR.Title = detail.Title
-		event.PR.Draft = detail.Draft
-		event.PR.Merged = detail.Merged
+		vcsClient = h.gitlabVCS
 	}
+
+	if vcsClient == nil {
+		return fmt.Errorf("no VCS client configured for provider %q: %w", event.Provider, asynq.SkipRetry)
+	}
+
+	detail, err := vcsClient.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+	if err != nil {
+		return err
+	}
+
+	event.PR.HeadSHA = detail.HeadSHA
+	event.PR.HeadRef = detail.HeadRef
+	event.PR.BaseRef = detail.BaseRef
+	event.PR.State = detail.State
+	event.PR.Title = detail.Title
+	event.PR.Draft = detail.Draft
+	event.PR.Merged = detail.Merged
 
 	return nil
 }

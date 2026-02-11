@@ -15,39 +15,26 @@
 package e2e
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/org/lemuria/internal/commands"
 )
 
 func TestE2EHelpCommand(t *testing.T) {
 	mockGH := NewMockVCSClient()
-	executor := newTestExecutor(mockGH, nil)
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
-	event := newPREvent("test-owner/test-repo", "test-owner", "test-repo", 900, "", "", "", "lemuria help")
-	cmd := &commands.Command{
-		Name: commands.CommandHelp,
-	}
+	payload := githubCommentPayload("test-owner/test-repo", "test-owner", "test-repo", 900, "lemuria help")
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	resp := sendGitHubWebhook(t, ts.URL, "issue_comment", payload)
+	assertAccepted(t, resp)
 
-	// Use a background context for this simple test
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	err := executor.Execute(ctx, cmd, event)
-	if err != nil {
-		t.Fatalf("Help command failed: %v", err)
-	}
-
-	// Assert: help comment posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected help comment to be posted")
-	}
-
+	// Wait for help comment
+	comments := waitForComment(t, mockGH, 1, 30*time.Second)
 	lastComment := comments[len(comments)-1]
+
 	if !strings.Contains(lastComment.Body, "Help") {
 		t.Error("Expected 'Help' in comment body")
 	}
@@ -58,29 +45,17 @@ func TestE2EHelpCommand(t *testing.T) {
 
 func TestE2EHelpCommandGitLab(t *testing.T) {
 	mockVCS := NewMockVCSClient()
-	executor := newTestExecutor(mockVCS, nil)
+	ts := newTestServer(mockVCS, nil)
+	defer ts.Close()
 
-	event := newGitLabPREvent("mygroup/myproject", "mygroup", "myproject", 900, "", "", "", "lemuria help")
-	cmd := &commands.Command{
-		Name: commands.CommandHelp,
-	}
+	payload := gitlabNotePayload("mygroup/myproject", "myproject", 900, "", "feature-branch", "main", "lemuria help")
+	resp := sendGitLabWebhook(t, ts.URL, "Note Hook", payload)
+	assertAccepted(t, resp)
 
-	// Use a background context for this simple test
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	err := executor.Execute(ctx, cmd, event)
-	if err != nil {
-		t.Fatalf("Help command failed: %v", err)
-	}
-
-	// Assert: help comment posted
-	comments := mockVCS.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected help comment to be posted")
-	}
-
+	// Wait for help comment
+	comments := waitForComment(t, mockVCS, 1, 30*time.Second)
 	lastComment := comments[len(comments)-1]
+
 	if !strings.Contains(lastComment.Body, "Help") {
 		t.Error("Expected 'Help' in comment body")
 	}

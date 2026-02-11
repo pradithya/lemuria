@@ -24,14 +24,15 @@ import (
 	"github.com/org/lemuria/internal/github"
 	"github.com/org/lemuria/internal/gitlab"
 	"github.com/org/lemuria/internal/lock"
+	"github.com/org/lemuria/internal/vcs"
 )
 
 // Dependencies holds the core dependencies shared between server and worker modes.
 type Dependencies struct {
 	ArgoClient     *argocd.Client
 	LockManager    lock.Manager
-	GithubClient   *github.Client
-	GitlabClient   *gitlab.Client
+	GithubVCS      vcs.Client
+	GitlabVCS      vcs.Client
 	GithubExecutor *commands.Executor
 	GitlabExecutor *commands.Executor
 }
@@ -59,7 +60,7 @@ func InitDependencies(cfg *config.Config) (*Dependencies, error) {
 		if err != nil {
 			return nil, fmt.Errorf("creating GitHub client: %w", err)
 		}
-		deps.GithubClient = ghClient
+		deps.GithubVCS = ghClient
 		deps.GithubExecutor = commands.NewExecutor(ghClient, argoClient, lockMgr, cfg)
 		slog.Info("GitHub provider initialized")
 	}
@@ -69,7 +70,7 @@ func InitDependencies(cfg *config.Config) (*Dependencies, error) {
 		if err != nil {
 			return nil, fmt.Errorf("creating GitLab client: %w", err)
 		}
-		deps.GitlabClient = glClient
+		deps.GitlabVCS = glClient
 		deps.GitlabExecutor = commands.NewExecutor(glClient, argoClient, lockMgr, cfg)
 		slog.Info("GitLab provider initialized")
 	}

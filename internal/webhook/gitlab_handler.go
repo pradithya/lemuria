@@ -26,28 +26,28 @@ import (
 
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
-	"github.com/org/lemuria/internal/gitlab"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/vcs"
 	"github.com/org/lemuria/internal/queue"
 )
 
 // GitLabHandler processes GitLab webhook events.
 type GitLabHandler struct {
-	config       *config.Config
-	gitlabClient *gitlab.Client
-	cmdExecutor  *commands.Executor
-	queueClient  *queue.Client
+	config      *config.Config
+	vcsClient   vcs.Client
+	cmdExecutor *commands.Executor
+	queueClient *queue.Client
 }
 
 // NewGitLabHandler creates a new GitLab webhook handler.
 // If queueClient is non-nil, events are enqueued for async processing instead of
 // being handled in a fire-and-forget goroutine.
-func NewGitLabHandler(cfg *config.Config, gl *gitlab.Client, executor *commands.Executor, queueClient *queue.Client) *GitLabHandler {
+func NewGitLabHandler(cfg *config.Config, vcsClient vcs.Client, executor *commands.Executor, queueClient *queue.Client) *GitLabHandler {
 	return &GitLabHandler{
-		config:       cfg,
-		gitlabClient: gl,
-		cmdExecutor:  executor,
-		queueClient:  queueClient,
+		config:      cfg,
+		vcsClient:   vcsClient,
+		cmdExecutor: executor,
+		queueClient: queueClient,
 	}
 }
 
@@ -236,9 +236,9 @@ func (h *GitLabHandler) handleComment(ctx context.Context, event *models.PREvent
 	}
 }
 
-// enrichMRInfo fetches full MR details from GitLab and populates missing fields.
+// enrichMRInfo fetches full MR details from the VCS provider and populates missing fields.
 func (h *GitLabHandler) enrichMRInfo(ctx context.Context, event *models.PREvent) error {
-	mr, err := h.gitlabClient.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+	mr, err := h.vcsClient.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 	if err != nil {
 		return err
 	}

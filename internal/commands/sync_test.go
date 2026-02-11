@@ -22,9 +22,10 @@ import (
 
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/vcs"
 )
 
-// mockVCSForSync is a minimal VCSClient mock for sync requirement tests.
+// mockVCSForSync is a minimal vcs.Client mock for sync requirement tests.
 type mockVCSForSync struct {
 	repoConfigData []byte
 	prApproved     bool
@@ -105,7 +106,7 @@ func (m *mockLockManagerForSync) GetPlan(context.Context, string, int) (string, 
 func (m *mockLockManagerForSync) Ping(context.Context) error { return nil }
 func (m *mockLockManagerForSync) Close() error               { return nil }
 
-func newSyncTestExecutor(vcsClient VCSClient, cfg *config.Config) *Executor {
+func newSyncTestExecutor(vcsClient vcs.Client, cfg *config.Config) *Executor {
 	return &Executor{
 		vcs:    vcsClient,
 		lock:   &mockLockManagerForSync{},

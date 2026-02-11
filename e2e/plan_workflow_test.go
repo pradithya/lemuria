@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
@@ -45,34 +44,27 @@ func TestE2EPlanCommand(t *testing.T) {
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-
-	executor := newTestExecutor(mockGH, nil)
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
 	headSHA := "abc123plan"
-	event := newPREvent(
+	payload := githubCommentPayload(
 		"test-owner/test-repo", "test-owner", "test-repo",
-		100, headSHA, "feature-branch", "main",
-		"lemuria plan -a test-app",
+		100, "lemuria plan -a test-app",
 	)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	resp := sendGitHubWebhook(t, ts.URL, "issue_comment", payload)
+	assertAccepted(t, resp)
 
-	cmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-
-	err = executor.Execute(testCtx, cmd, event)
-	if err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
-
-	// Assert: comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected at least one comment to be posted")
-	}
-
+	// Wait for plan comment
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Posted comment (truncated): %.200s...", lastComment.Body)
+
+	// Allow time for secondary effects (reaction, invalidation)
+	waitForProcessingDone()
 
 	if !lastComment.IsPlan {
 		t.Error("Expected plan comment to have isPlan=true")
@@ -113,12 +105,12 @@ func TestE2EPlanCommand(t *testing.T) {
 	}
 
 	// Assert: reaction was added
-	if len(mockGH.Reactions) == 0 {
+	if len(mockGH.GetReactions()) == 0 {
 		t.Error("Expected reaction to be added to comment")
 	}
 
 	// Assert: old plan comments were invalidated
-	if len(mockGH.InvalidatedPRs) == 0 {
+	if len(mockGH.GetInvalidatedPRs()) == 0 {
 		t.Error("Expected old plan comments to be invalidated")
 	}
 
@@ -196,33 +188,29 @@ spec:
 	cfg := &config.Config{
 		ArgoCD: config.ArgoCDConfig{
 			DiffMode:       "branch",
-			TempAppTimeout: 90 * time.Second,
+			TempAppTimeout: 15 * time.Second,
 		},
 		Defaults: config.DefaultsConfig{
 			RequireApproval: false,
 		},
 	}
-	executor := newTestExecutor(mockGH, cfg)
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
 
 	// Run plan in auto-detect mode (no -a flag)
-	event := newPREvent(
+	payload := githubCommentPayload(
 		"test-owner/test-repo", "test-owner", "test-repo",
-		1100, "abc123", "feature-branch", "main",
-		"lemuria plan",
+		1100, "lemuria plan",
 	)
-	cmd := &commands.Command{Name: commands.CommandPlan}
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = "abc123"
+	resp := sendGitHubWebhook(t, ts.URL, "issue_comment", payload)
+	assertAccepted(t, resp)
 
-	err := executor.Execute(testCtx, cmd, event)
-	if err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
-
-	// Assert: a comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected at least one comment to be posted")
-	}
-
+	// Wait for plan comment. Plan for external helm apps creates temporary
+	// ArgoCD apps for diff generation, which can take up to TempAppTimeout (90s).
+	comments := waitForComment(t, mockGH, 1, 120*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Plan comment (truncated): %.500s...", lastComment.Body)
 
@@ -237,6 +225,7 @@ spec:
 	}
 
 	// Assert: lock was acquired
+	waitForProcessingDone()
 	lock, err := lockManager.Get(testCtx, appName)
 	if err != nil {
 		t.Fatalf("Failed to get lock: %v", err)
@@ -272,18 +261,18 @@ func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor := newTestExecutor(mockGH, nil)
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
+
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
 
 	// Run plan with a specific HeadSHA
-	event := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+appName)
-	cmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-
-	if err := executor.Execute(testCtx, cmd, event); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
 
 	// Assert: PlanRevision is set on the lock via Get
 	lock, err := lockManager.Get(testCtx, appName)
@@ -332,25 +321,24 @@ func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
 
 	// Assert: sync with the same HeadSHA does NOT report stale plan
 	mockGH.Reset()
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
-	syncCmd := &commands.Command{Name: commands.CommandSync}
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
 
-	if err := executor.Execute(testCtx, syncCmd, syncEvent); err != nil {
-		t.Fatalf("Sync command failed: %v", err)
-	}
-
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected sync result comment")
-	}
-	lastComment := comments[len(comments)-1]
+	syncComments := waitForComment(t, mockGH, 1, 60*time.Second)
+	lastComment := syncComments[len(syncComments)-1]
 	if strings.Contains(lastComment.Body, "stale") {
 		t.Errorf("Sync should NOT report stale plan when HeadSHA matches PlanRevision, got: %s", lastComment.Body)
 	}
 
+	// Wait for sync update and check plan diff inclusion
+	waitForProcessingDone()
 	if len(lock.PlanDiffs) > 0 && !strings.Contains(lastComment.Body, "auto-sync enabled") {
-		if !strings.Contains(lastComment.Body, "Plan Diff") {
-			t.Errorf("Sync comment should include 'Plan Diff' section when PlanDiffs are stored")
+		updatedComments := mockGH.GetUpdatedComments()
+		if len(updatedComments) > 0 {
+			lastUpdate := updatedComments[len(updatedComments)-1]
+			if !strings.Contains(lastUpdate.Body, "Plan Diff") {
+				t.Errorf("Sync comment should include 'Plan Diff' section when PlanDiffs are stored")
+			}
 		}
 	}
 }
@@ -376,34 +364,25 @@ func TestE2EPlanCommandGitLab(t *testing.T) {
 
 	mockVCS := NewMockVCSClient()
 	mockVCS.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-
-	executor := newTestExecutor(mockVCS, nil)
+	ts := newTestServer(mockVCS, nil)
+	defer ts.Close()
 
 	headSHA := "abc123gitlab"
-	event := newGitLabPREvent(
-		"mygroup/myproject", "mygroup", "myproject",
+	payload := gitlabNotePayload(
+		"mygroup/myproject", "myproject",
 		100, headSHA, "feature-branch", "main",
 		"lemuria plan -a test-app",
 	)
+	resp := sendGitLabWebhook(t, ts.URL, "Note Hook", payload)
+	assertAccepted(t, resp)
 
-	cmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-
-	err = executor.Execute(testCtx, cmd, event)
-	if err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
-
-	// Assert: comment was posted
-	comments := mockVCS.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected at least one comment to be posted")
-	}
-
+	// Wait for plan comment
+	comments := waitForComment(t, mockVCS, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Posted comment (truncated): %.200s...", lastComment.Body)
+
+	// Allow time for secondary effects
+	waitForProcessingDone()
 
 	if !lastComment.IsPlan {
 		t.Error("Expected plan comment to have isPlan=true")
@@ -428,12 +407,12 @@ func TestE2EPlanCommandGitLab(t *testing.T) {
 		lock.Application, lock.PRNumber, lock.User, lock.PlanRevision)
 
 	// Assert: reaction was added
-	if len(mockVCS.Reactions) == 0 {
+	if len(mockVCS.GetReactions()) == 0 {
 		t.Error("Expected reaction to be added to comment")
 	}
 
 	// Assert: old plan comments were invalidated
-	if len(mockVCS.InvalidatedPRs) == 0 {
+	if len(mockVCS.GetInvalidatedPRs()) == 0 {
 		t.Error("Expected old plan comments to be invalidated")
 	}
 }

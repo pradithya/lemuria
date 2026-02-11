@@ -23,30 +23,30 @@ import (
 
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
-	"github.com/org/lemuria/internal/github"
 	"github.com/org/lemuria/internal/models"
 	"github.com/org/lemuria/internal/queue"
+	"github.com/org/lemuria/internal/vcs"
 )
 
 // GitHubHandler processes GitHub webhook events.
 type GitHubHandler struct {
-	config       *config.Config
-	githubClient *github.Client
-	cmdExecutor  *commands.Executor
-	validator    *Validator
-	queueClient  *queue.Client
+	config      *config.Config
+	vcsClient   vcs.Client
+	cmdExecutor *commands.Executor
+	validator   *Validator
+	queueClient *queue.Client
 }
 
 // NewGitHubHandler creates a new GitHub webhook handler.
 // If queueClient is non-nil, events are enqueued for async processing instead of
 // being handled in a fire-and-forget goroutine.
-func NewGitHubHandler(cfg *config.Config, gh *github.Client, executor *commands.Executor, queueClient *queue.Client) *GitHubHandler {
+func NewGitHubHandler(cfg *config.Config, vcsClient vcs.Client, executor *commands.Executor, queueClient *queue.Client) *GitHubHandler {
 	return &GitHubHandler{
-		config:       cfg,
-		githubClient: gh,
-		cmdExecutor:  executor,
-		validator:    NewValidator(cfg.GitHub.WebhookSecret),
-		queueClient:  queueClient,
+		config:      cfg,
+		vcsClient:   vcsClient,
+		cmdExecutor: executor,
+		validator:   NewValidator(cfg.GitHub.WebhookSecret),
+		queueClient: queueClient,
 	}
 }
 
@@ -224,24 +224,20 @@ func (h *GitHubHandler) handleComment(ctx context.Context, event *models.PREvent
 	}
 }
 
-// enrichPRInfo fetches full PR details from GitHub and populates missing fields.
+// enrichPRInfo fetches full PR details from the VCS provider and populates missing fields.
 func (h *GitHubHandler) enrichPRInfo(ctx context.Context, event *models.PREvent) error {
-	pr, err := h.githubClient.GetPRRaw(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
+	detail, err := h.vcsClient.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 	if err != nil {
 		return err
 	}
 
-	if pr.Head != nil {
-		event.PR.HeadSHA = pr.Head.GetSHA()
-		event.PR.HeadRef = pr.Head.GetRef()
-	}
-	if pr.Base != nil {
-		event.PR.BaseRef = pr.Base.GetRef()
-	}
-	event.PR.State = models.PRState(pr.GetState())
-	event.PR.Title = pr.GetTitle()
-	event.PR.Draft = pr.GetDraft()
-	event.PR.Merged = pr.GetMerged()
+	event.PR.HeadSHA = detail.HeadSHA
+	event.PR.HeadRef = detail.HeadRef
+	event.PR.BaseRef = detail.BaseRef
+	event.PR.State = detail.State
+	event.PR.Title = detail.Title
+	event.PR.Draft = detail.Draft
+	event.PR.Merged = detail.Merged
 
 	slog.Debug("enriched PR info from API",
 		"pr", event.PR.Number,

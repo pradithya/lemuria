@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/org/lemuria/internal/commands"
+	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
 
@@ -47,28 +47,23 @@ func TestE2EPlanCommandWithApplicationSet(t *testing.T) {
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor := newTestExecutor(mockGH, nil)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
 	// Run plan with -a <appset-name>
-	event := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+appSetName)
-	cmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appSetName,
-	}
+	payload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appSetName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", payload))
 
-	err := executor.Execute(testCtx, cmd, event)
-	if err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
-
-	// Assert: comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected at least one comment to be posted")
-	}
-
+	// Wait for plan comment
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Posted comment (truncated): %.500s...", lastComment.Body)
+
+	// Allow time for secondary effects
+	waitForProcessingDone()
 
 	// Assert: plan comment mentions all generated apps
 	for _, name := range appNames {
@@ -160,12 +155,12 @@ func TestE2EPlanCommandWithApplicationSet(t *testing.T) {
 	}
 
 	// Assert: reaction was added
-	if len(mockGH.Reactions) == 0 {
+	if len(mockGH.GetReactions()) == 0 {
 		t.Error("Expected reaction to be added to comment")
 	}
 
 	// Assert: old plan comments were invalidated
-	if len(mockGH.InvalidatedPRs) == 0 {
+	if len(mockGH.GetInvalidatedPRs()) == 0 {
 		t.Error("Expected old plan comments to be invalidated")
 	}
 }
@@ -193,18 +188,17 @@ func TestE2ESyncCommandWithApplicationSet(t *testing.T) {
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor := newTestExecutor(mockGH, nil)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
 	// Step 1: Run plan to acquire locks for all generated apps
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+appSetName)
-	planCmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appSetName,
-	}
-
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appSetName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
 
 	// Verify locks acquired
 	for _, name := range appNames {
@@ -216,20 +210,11 @@ func TestE2ESyncCommandWithApplicationSet(t *testing.T) {
 
 	// Step 2: Run sync (all at once, no -a flag)
 	mockGH.Reset()
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
-	syncCmd := &commands.Command{Name: commands.CommandSync}
-
-	err := executor.Execute(testCtx, syncCmd, syncEvent)
-	if err != nil {
-		t.Fatalf("Sync command failed: %v", err)
-	}
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
 
 	// Assert: sync comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected sync result comment to be posted")
-	}
-
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Sync comment: %.500s", lastComment.Body)
 
@@ -281,23 +266,18 @@ applications:
 		{Filename: "apps/guestbook/values.yaml", Status: models.FileStatusModified},
 	}
 
-	executor := newTestExecutor(mockGH, nil)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
-	// Run plan without -a flag (auto-detect mode)
-	event := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan")
-	cmd := &commands.Command{Name: commands.CommandPlan}
+	// Run plan without -a flag (auto-detect mode) via issue_comment webhook
+	payload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", payload))
 
-	err := executor.Execute(testCtx, cmd, event)
-	if err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
-
-	// Assert: a comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected at least one comment to be posted")
-	}
-
+	// Wait for plan comment
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Plan comment (truncated): %.500s...", lastComment.Body)
 
@@ -412,21 +392,29 @@ spec:
 	mockGH.FileContents[crFilePath+"@main"] = []byte(baseYAML)
 	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(headYAML)
 
-	executor := newTestExecutor(mockGH, nil)
-
-	// Run autoplan
-	event := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "")
-	err := executor.RunAutoplan(testCtx, event)
-	if err != nil {
-		t.Fatalf("Autoplan failed: %v", err)
+	// Autoplan requires Autoplan=true in config and a PR opened event
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "live",
+			TempAppTimeout: 15 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			Autoplan:        true,
+			RequireApproval: false,
+		},
 	}
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
 
-	// Assert: comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected at least one comment to be posted")
-	}
+	// Use autoplan event: PR opened (pull_request webhook with action "opened")
+	payload := githubPRPayload("opened", repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "pull_request", payload))
 
+	// Wait for plan comment
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Plan comment (truncated): %.800s...", lastComment.Body)
 
@@ -537,21 +525,29 @@ spec:
 	mockGH.FileContents[crFilePath+"@main"] = []byte(baseYAML)
 	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(headYAML)
 
-	executor := newTestExecutor(mockGH, nil)
-
-	// Run autoplan
-	event := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "")
-	err := executor.RunAutoplan(testCtx, event)
-	if err != nil {
-		t.Fatalf("Autoplan failed: %v", err)
+	// Autoplan requires Autoplan=true in config and a PR opened event
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "live",
+			TempAppTimeout: 15 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			Autoplan:        true,
+			RequireApproval: false,
+		},
 	}
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
 
-	// Assert: comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected at least one comment to be posted")
-	}
+	// Use autoplan event: PR opened (pull_request webhook with action "opened")
+	payload := githubPRPayload("opened", repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "pull_request", payload))
 
+	// Wait for plan comment
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Plan comment (truncated): %.800s...", lastComment.Body)
 

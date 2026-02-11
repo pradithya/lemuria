@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package commands
+package vcs
 
 import (
 	"context"
@@ -20,8 +20,8 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
-// VCSClient defines the VCS operations needed by the Executor.
-type VCSClient interface {
+// Client defines the VCS operations needed by the Executor.
+type Client interface {
 	GetChangedFiles(ctx context.Context, owner, repo string, number int) ([]models.ChangedFile, error)
 	GetRepoConfig(ctx context.Context, owner, repo, ref string) ([]byte, error)
 	GetFileContent(ctx context.Context, owner, repo, path, ref string) ([]byte, error)

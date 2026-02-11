@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
@@ -47,18 +46,17 @@ func TestE2ESyncCommand(t *testing.T) {
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor := newTestExecutor(mockGH, nil)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
 	// Step 1: Run plan to acquire lock
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+appName)
-	planCmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
 
 	// Verify lock acquired with PlanRevision
 	lock, err := lockManager.Get(testCtx, appName)
@@ -71,22 +69,11 @@ func TestE2ESyncCommand(t *testing.T) {
 
 	// Step 2: Run sync with the same HeadSHA (plan is fresh)
 	mockGH.Reset()
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
-	syncCmd := &commands.Command{
-		Name: commands.CommandSync,
-	}
-
-	err = executor.Execute(testCtx, syncCmd, syncEvent)
-	if err != nil {
-		t.Fatalf("Sync command failed: %v", err)
-	}
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
 
 	// Assert: initial progress comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected initial sync progress comment to be posted")
-	}
-
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	initialComment := comments[len(comments)-1]
 	t.Logf("Initial sync comment: %.300s", initialComment.Body)
 
@@ -95,11 +82,7 @@ func TestE2ESyncCommand(t *testing.T) {
 	}
 
 	// Assert: final result was posted as an update
-	updatedComments := mockGH.GetUpdatedComments()
-	if len(updatedComments) == 0 {
-		t.Fatal("Expected sync result to be posted as an update")
-	}
-
+	updatedComments := waitForUpdatedComment(t, mockGH, 1, 120*time.Second)
 	lastUpdate := updatedComments[len(updatedComments)-1]
 	t.Logf("Final sync comment: %.300s", lastUpdate.Body)
 
@@ -185,21 +168,25 @@ spec:
 	cfg := &config.Config{
 		ArgoCD: config.ArgoCDConfig{
 			DiffMode:       "branch",
-			TempAppTimeout: 90 * time.Second,
+			TempAppTimeout: 15 * time.Second,
 		},
 		Defaults: config.DefaultsConfig{
 			RequireApproval: false,
 		},
 	}
-	executor := newTestExecutor(mockGH, cfg)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
 
 	// Step 1: Run plan to acquire lock and store SourceFile
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan")
-	planCmd := &commands.Command{Name: commands.CommandPlan}
-
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
+	// Note: plan for external helm apps creates temporary ArgoCD apps for diff
+	// generation, which can take up to TempAppTimeout (90s) to complete.
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 120*time.Second)
+	waitForProcessingDone()
 
 	// Assert: lock was acquired with SourceFile set
 	lock, err := lockManager.Get(testCtx, appName)
@@ -216,25 +203,17 @@ spec:
 
 	// Step 2: Run sync
 	mockGH.Reset()
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
-	syncCmd := &commands.Command{Name: commands.CommandSync}
-
-	if err := executor.Execute(testCtx, syncCmd, syncEvent); err != nil {
-		t.Fatalf("Sync command failed: %v", err)
-	}
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
 
 	// Assert: initial comment was posted
-	comments := mockGH.GetPostedComments()
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	if len(comments) == 0 {
 		t.Fatal("Expected initial sync progress comment to be posted")
 	}
 
 	// Assert: final result was posted as an update
-	updatedComments := mockGH.GetUpdatedComments()
-	if len(updatedComments) == 0 {
-		t.Fatal("Expected sync result to be posted as an update")
-	}
-
+	updatedComments := waitForUpdatedComment(t, mockGH, 1, 180*time.Second)
 	lastUpdate := updatedComments[len(updatedComments)-1]
 	t.Logf("Sync comment: %.500s", lastUpdate.Body)
 
@@ -354,7 +333,7 @@ spec:
 	}
 	t.Logf("Locks acquired: %d apps for PR #%d", len(locks), prNumber)
 
-	// Step 2: Sync all locked apps
+	// Step 2: Sync all locked apps via webhook
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
 	mockGH.FileContents[helmCRFilePath+"@feature-branch"] = []byte(helmHeadYAML)
@@ -362,33 +341,30 @@ spec:
 	cfg := &config.Config{
 		ArgoCD: config.ArgoCDConfig{
 			DiffMode:       "live",
-			TempAppTimeout: 90 * time.Second,
+			TempAppTimeout: 15 * time.Second,
 		},
 		Defaults: config.DefaultsConfig{
 			RequireApproval: false,
 		},
 	}
-	executor := newTestExecutor(mockGH, cfg)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
 
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
-	syncCmd := &commands.Command{Name: commands.CommandSync}
-
-	if err := executor.Execute(testCtx, syncCmd, syncEvent); err != nil {
-		t.Fatalf("Sync command failed: %v", err)
-	}
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
 
 	// Assert: initial comment was posted
-	comments := mockGH.GetPostedComments()
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	if len(comments) == 0 {
 		t.Fatal("Expected initial sync progress comment")
 	}
 
 	// Assert: final result was posted as an update
-	updatedComments := mockGH.GetUpdatedComments()
-	if len(updatedComments) == 0 {
-		t.Fatal("Expected sync result to be posted as an update")
-	}
-
+	// Sync of mixed apps (git + helm) may take a while due to health stabilization.
+	updatedComments := waitForUpdatedComment(t, mockGH, 1, 180*time.Second)
 	lastUpdate := updatedComments[len(updatedComments)-1]
 	t.Logf("Sync comment: %.800s", lastUpdate.Body)
 
@@ -443,18 +419,19 @@ func TestE2ESyncStalePlan(t *testing.T) {
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor := newTestExecutor(mockGH, nil)
 
 	// Step 1: Run plan to acquire lock with a specific HeadSHA
 	planSHA := "abc123original"
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, planSHA, "feature-branch", "main", "lemuria plan -a "+appName)
-	planCmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = planSHA
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
+
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
 
 	// Verify plan revision was stored on the lock
 	lock, err := lockManager.Get(testCtx, appName)
@@ -467,22 +444,12 @@ func TestE2ESyncStalePlan(t *testing.T) {
 
 	// Step 2: Run sync with a DIFFERENT HeadSHA to trigger stale plan
 	mockGH.Reset()
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "def456newpush", "feature-branch", "main", "lemuria sync")
-	syncCmd := &commands.Command{
-		Name: commands.CommandSync,
-	}
-
-	err = executor.Execute(testCtx, syncCmd, syncEvent)
-	if err != nil {
-		t.Fatalf("Sync command returned error: %v", err)
-	}
+	mockGH.PRHeadSHA = "def456newpush"
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
 
 	// Assert: sync rejected with stale plan message
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected comment about stale plan")
-	}
-
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Stale plan comment: %.300s", lastComment.Body)
 
@@ -501,25 +468,17 @@ func TestE2ESyncNoLock(t *testing.T) {
 	prNumber := 600
 
 	mockGH := NewMockVCSClient()
-	executor := newTestExecutor(mockGH, nil)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
 	// Run sync without plan first (no locks)
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "lemuria sync")
-	syncCmd := &commands.Command{
-		Name: commands.CommandSync,
-	}
-
-	err := executor.Execute(testCtx, syncCmd, syncEvent)
-	if err != nil {
-		t.Fatalf("Sync command returned error: %v", err)
-	}
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
 
 	// Assert: sync rejected with no locks message
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected comment about no locks")
-	}
-
+	comments := waitForComment(t, mockGH, 1, 30*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("No lock comment: %.200s", lastComment.Body)
 
@@ -555,26 +514,25 @@ func TestE2ESyncDegradedHealth(t *testing.T) {
 	cfg := &config.Config{
 		ArgoCD: config.ArgoCDConfig{
 			DiffMode:       "live",
-			TempAppTimeout: 2 * time.Minute,
-			SyncTimeout:    90 * time.Second,
+			TempAppTimeout: 15 * time.Second,
+			SyncTimeout:    30 * time.Second,
 		},
 		Defaults: config.DefaultsConfig{
 			RequireApproval: false,
 			AutoMerge:       false,
 		},
 	}
-	executor := newTestExecutor(mockGH, cfg)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
 
 	// Step 1: Run plan to acquire lock
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria plan -a "+appName)
-	planCmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
 
 	// Verify lock acquired
 	lock, err := lockManager.Get(testCtx, appName)
@@ -584,28 +542,17 @@ func TestE2ESyncDegradedHealth(t *testing.T) {
 
 	// Step 2: Run sync - this should fail due to Degraded health
 	mockGH.Reset()
-	syncEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main", "lemuria sync")
-	syncCmd := &commands.Command{
-		Name: commands.CommandSync,
-	}
-
-	err = executor.Execute(testCtx, syncCmd, syncEvent)
-	if err != nil {
-		t.Fatalf("Sync command returned error: %v", err)
-	}
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
 
 	// Assert: initial comment was posted
-	comments := mockGH.GetPostedComments()
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
 	if len(comments) == 0 {
 		t.Fatal("Expected initial sync progress comment to be posted")
 	}
 
 	// Assert: final result was posted as an update
-	updatedComments := mockGH.GetUpdatedComments()
-	if len(updatedComments) == 0 {
-		t.Fatal("Expected sync result to be posted as an update")
-	}
-
+	updatedComments := waitForUpdatedComment(t, mockGH, 1, 120*time.Second)
 	lastUpdate := updatedComments[len(updatedComments)-1]
 	t.Logf("Sync comment for degraded app: %.800s", lastUpdate.Body)
 

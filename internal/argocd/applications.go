@@ -337,7 +337,45 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 	var syncResult *models.SyncResult
 	var healthyAt time.Time // When we first saw Healthy status
 
-	for event := range events {
+	// stabilizationTimer fires after the health stabilization period.
+	// It's nil until the app first becomes healthy and is stopped if health
+	// regresses (e.g., back to Progressing). This ensures we don't block
+	// indefinitely on the watch channel waiting for events that may never come.
+	var stabilizationTimer *time.Timer
+	defer func() {
+		if stabilizationTimer != nil {
+			stabilizationTimer.Stop()
+		}
+	}()
+
+	for {
+		var event watchEvent
+		var ok bool
+
+		// When a stabilization timer is running, use select so we can
+		// return as soon as the timer fires, even without a new event.
+		if stabilizationTimer != nil {
+			select {
+			case event, ok = <-events:
+				if !ok {
+					// Channel closed — handle below the loop.
+					goto streamEnded
+				}
+			case <-stabilizationTimer.C:
+				slog.Debug("health stabilized, sync complete",
+					"application", name,
+					"stableDuration", time.Since(healthyAt),
+				)
+				syncResult.HealthStatus = models.HealthStatusHealthy
+				return syncResult, nil
+			}
+		} else {
+			event, ok = <-events
+			if !ok {
+				goto streamEnded
+			}
+		}
+
 		status := extractAppSyncStatus(&event)
 		phase := models.SyncPhase(status.OperationPhase)
 		healthStatus := models.HealthStatus(status.HealthStatus)
@@ -382,13 +420,15 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			// Track when we first saw Healthy
 			if healthyAt.IsZero() {
 				healthyAt = time.Now()
+				stabilizationTimer = time.NewTimer(healthStabilizationPeriod)
 				slog.Debug("application became healthy, starting stabilization period",
 					"application", name,
 					"stabilizationPeriod", healthStabilizationPeriod,
 				)
 			}
 
-			// Check if we've been healthy long enough
+			// An event arrived while the timer is still running — check if
+			// the stabilization period has already elapsed.
 			if time.Since(healthyAt) >= healthStabilizationPeriod {
 				slog.Debug("health stabilized, sync complete",
 					"application", name,
@@ -443,6 +483,10 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 					"application", name,
 				)
 				healthyAt = time.Time{}
+				if stabilizationTimer != nil {
+					stabilizationTimer.Stop()
+					stabilizationTimer = nil
+				}
 			}
 			slog.Debug("application still progressing, waiting for next event",
 				"application", name,
@@ -461,6 +505,8 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			return syncResult, nil
 		}
 	}
+
+streamEnded:
 
 	// Stream ended (timeout or connection closed) before health stabilized.
 	if syncResult == nil {

@@ -31,10 +31,7 @@ import (
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/auth"
-	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
-	"github.com/org/lemuria/internal/github"
-	"github.com/org/lemuria/internal/gitlab"
 	"github.com/org/lemuria/internal/lock"
 	"github.com/org/lemuria/internal/models"
 	"github.com/org/lemuria/internal/queue"
@@ -48,15 +45,11 @@ type Server struct {
 	httpServer *http.Server
 
 	// VCS providers and their handlers
-	githubClient         *github.Client
-	gitlabClient         *gitlab.Client
 	githubWebhookHandler *webhook.GitHubHandler // GitHub webhook handler
 	gitlabWebhookHandler *webhook.GitLabHandler // GitLab webhook handler
 	argoClient           *argocd.Client
 	lockManager          lock.Manager
-	githubExecutor       *commands.Executor // executor using GitHub VCS client
-	gitlabExecutor       *commands.Executor // executor using GitLab VCS client
-	queueClient          *queue.Client      // queue client for async processing (nil if queue disabled)
+	queueClient          *queue.Client // queue client for async processing (nil if queue disabled)
 
 	// Auth components (nil if auth disabled)
 	redisClient         *redis.Client
@@ -70,22 +63,23 @@ type Server struct {
 	loginRateLimiter    *RateLimiter
 }
 
-// New creates a new Server instance.
+// New creates a new Server instance using production dependencies.
 func New(cfg *config.Config) (*Server, error) {
 	deps, err := InitDependencies(cfg)
 	if err != nil {
 		return nil, err
 	}
+	return NewFromDeps(cfg, deps)
+}
 
+// NewFromDeps creates a new Server instance from pre-built dependencies.
+// This allows tests to inject mock VCS clients.
+func NewFromDeps(cfg *config.Config, deps *Dependencies) (*Server, error) {
 	s := &Server{
-		config:         cfg,
-		router:         chi.NewRouter(),
-		argoClient:     deps.ArgoClient,
-		lockManager:    deps.LockManager,
-		githubClient:   deps.GithubClient,
-		gitlabClient:   deps.GitlabClient,
-		githubExecutor: deps.GithubExecutor,
-		gitlabExecutor: deps.GitlabExecutor,
+		config:      cfg,
+		router:      chi.NewRouter(),
+		argoClient:  deps.ArgoClient,
+		lockManager: deps.LockManager,
 	}
 
 	// Initialize queue client if enabled
@@ -97,11 +91,11 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	// Initialize webhook handlers
-	if cfg.HasGitHub() {
-		s.githubWebhookHandler = webhook.NewGitHubHandler(cfg, deps.GithubClient, deps.GithubExecutor, qClient)
+	if deps.GithubVCS != nil {
+		s.githubWebhookHandler = webhook.NewGitHubHandler(cfg, deps.GithubVCS, deps.GithubExecutor, qClient)
 	}
-	if cfg.HasGitLab() {
-		s.gitlabWebhookHandler = webhook.NewGitLabHandler(cfg, deps.GitlabClient, deps.GitlabExecutor, qClient)
+	if deps.GitlabVCS != nil {
+		s.gitlabWebhookHandler = webhook.NewGitLabHandler(cfg, deps.GitlabVCS, deps.GitlabExecutor, qClient)
 	}
 
 	// Initialize auth components if enabled
@@ -129,6 +123,11 @@ func New(cfg *config.Config) (*Server, error) {
 	}
 
 	return s, nil
+}
+
+// Handler returns the server's HTTP handler (the chi router).
+func (s *Server) Handler() http.Handler {
+	return s.router
 }
 
 // setupAuth initializes authentication components.

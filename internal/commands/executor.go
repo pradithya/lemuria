@@ -29,7 +29,7 @@ import (
 
 // Executor handles command execution.
 type Executor struct {
-	vcs      VCSClient
+	vcs      vcs.Client
 	argocd   *argocd.Client
 	lock     lock.Manager
 	config   *config.Config
@@ -37,7 +37,7 @@ type Executor struct {
 }
 
 // NewExecutor creates a new command executor.
-func NewExecutor(vcsClient VCSClient, argo *argocd.Client, lockMgr lock.Manager, cfg *config.Config) *Executor {
+func NewExecutor(vcsClient vcs.Client, argo *argocd.Client, lockMgr lock.Manager, cfg *config.Config) *Executor {
 	return &Executor{
 		vcs:      vcsClient,
 		argocd:   argo,

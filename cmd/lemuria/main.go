@@ -162,8 +162,8 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 		cfg,
 		deps.GithubExecutor,
 		deps.GitlabExecutor,
-		deps.GithubClient,
-		deps.GitlabClient,
+		deps.GithubVCS,
+		deps.GitlabVCS,
 	)
 
 	worker := queue.NewWorker(cfg.Redis, cfg.Queue)

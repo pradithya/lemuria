@@ -19,9 +19,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/org/lemuria/internal/commands"
-	"github.com/org/lemuria/internal/models"
 )
 
 func TestE2EUnlockCommand(t *testing.T) {
@@ -42,17 +39,16 @@ func TestE2EUnlockCommand(t *testing.T) {
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor := newTestExecutor(mockGH, nil)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
 	// Step 1: Run plan to acquire lock
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "lemuria plan -a "+appName)
-	planCmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
 
 	// Verify lock acquired
 	lock, err := lockManager.Get(testCtx, appName)
@@ -62,22 +58,11 @@ func TestE2EUnlockCommand(t *testing.T) {
 
 	// Step 2: Run unlock
 	mockGH.Reset()
-	unlockEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "lemuria unlock")
-	unlockCmd := &commands.Command{
-		Name: commands.CommandUnlock,
-	}
+	unlockPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria unlock")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", unlockPayload))
 
-	err = executor.Execute(testCtx, unlockCmd, unlockEvent)
-	if err != nil {
-		t.Fatalf("Unlock command failed: %v", err)
-	}
-
-	// Assert: unlock comment was posted
-	comments := mockGH.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected unlock result comment to be posted")
-	}
-
+	// Wait for unlock comment
+	comments := waitForComment(t, mockGH, 1, 30*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Unlock comment: %.300s", lastComment.Body)
 
@@ -89,6 +74,7 @@ func TestE2EUnlockCommand(t *testing.T) {
 	}
 
 	// Assert: lock was released
+	waitForProcessingDone()
 	lock, err = lockManager.Get(testCtx, appName)
 	if err != nil {
 		t.Fatalf("Failed to check lock: %v", err)
@@ -117,17 +103,15 @@ func TestE2ELockConflictBetweenPRs(t *testing.T) {
 	// PR #1: Plan and acquire lock
 	mockGH1 := NewMockVCSClient()
 	mockGH1.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor1 := newTestExecutor(mockGH1, nil)
+	mockGH1.PRHeadRef = "feature-branch-1"
+	mockGH1.PRBaseRef = "main"
+	ts1 := newTestServer(mockGH1, nil)
+	defer ts1.Close()
 
-	event1 := newPREvent(repo, "test-owner", "test-repo", 701, "", "feature-branch-1", "main", "lemuria plan -a "+appName)
-	cmd1 := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-
-	if err := executor1.Execute(testCtx, cmd1, event1); err != nil {
-		t.Fatalf("PR #1 plan failed: %v", err)
-	}
+	planPayload1 := githubCommentPayload(repo, "test-owner", "test-repo", 701, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts1.URL, "issue_comment", planPayload1))
+	waitForComment(t, mockGH1, 1, 60*time.Second)
+	waitForProcessingDone()
 
 	// Verify PR #1 holds the lock
 	lock, err := lockManager.Get(testCtx, appName)
@@ -141,24 +125,16 @@ func TestE2ELockConflictBetweenPRs(t *testing.T) {
 	// PR #2: Try to plan the same app
 	mockGH2 := NewMockVCSClient()
 	mockGH2.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor2 := newTestExecutor(mockGH2, nil)
+	mockGH2.PRHeadRef = "feature-branch-2"
+	mockGH2.PRBaseRef = "main"
+	ts2 := newTestServer(mockGH2, nil)
+	defer ts2.Close()
 
-	event2 := newPREvent(repo, "test-owner", "test-repo", 702, "", "feature-branch-2", "main", "lemuria plan -a "+appName)
-	cmd2 := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
+	planPayload2 := githubCommentPayload(repo, "test-owner", "test-repo", 702, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts2.URL, "issue_comment", planPayload2))
 
-	if err := executor2.Execute(testCtx, cmd2, event2); err != nil {
-		t.Fatalf("PR #2 plan returned error: %v", err)
-	}
-
-	// Assert: PR #2 sees lock conflict
-	comments := mockGH2.GetPostedComments()
-	if len(comments) == 0 {
-		t.Fatal("Expected comment for PR #2")
-	}
-
+	// Wait for conflict comment on PR #2
+	comments := waitForComment(t, mockGH2, 1, 60*time.Second)
 	lastComment := comments[len(comments)-1]
 	t.Logf("Lock conflict comment: %.300s", lastComment.Body)
 
@@ -194,17 +170,16 @@ func TestE2EUnlockAll(t *testing.T) {
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
-	executor := newTestExecutor(mockGH, nil)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
 
 	// Acquire lock via plan
-	planEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "lemuria plan -a "+appName)
-	planCmd := &commands.Command{
-		Name:        commands.CommandPlan,
-		Application: appName,
-	}
-	if err := executor.Execute(testCtx, planCmd, planEvent); err != nil {
-		t.Fatalf("Plan command failed: %v", err)
-	}
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
 
 	// Verify lock acquired
 	lock, err := lockManager.Get(testCtx, appName)
@@ -212,22 +187,10 @@ func TestE2EUnlockAll(t *testing.T) {
 		t.Fatalf("Expected lock to be acquired: %v", err)
 	}
 
-	// Run UnlockAll (simulating PR close)
-	closeEvent := newPREvent(repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main", "")
-	closeEvent.Type = models.EventTypePullRequest
-	closeEvent.Action = models.PRActionClosed
+	// Send PR closed event (pull_request webhook with action=closed)
+	closePayload := githubPRPayload("closed", repo, "test-owner", "test-repo", prNumber, "", "feature-branch", "main")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "pull_request", closePayload))
 
-	err = executor.UnlockAll(testCtx, closeEvent)
-	if err != nil {
-		t.Fatalf("UnlockAll failed: %v", err)
-	}
-
-	// Assert: lock was released
-	lock, err = lockManager.Get(testCtx, appName)
-	if err != nil {
-		t.Fatalf("Failed to check lock: %v", err)
-	}
-	if lock != nil {
-		t.Error("Expected lock to be released after UnlockAll")
-	}
+	// Wait for lock to be released (UnlockAll doesn't post a comment)
+	waitForLockRelease(t, appName, 30*time.Second)
 }

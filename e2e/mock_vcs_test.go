@@ -22,7 +22,7 @@ import (
 	"github.com/org/lemuria/internal/models"
 )
 
-// MockVCSClient implements commands.VCSClient for E2E tests.
+// MockVCSClient implements vcs.Client for E2E tests.
 type MockVCSClient struct {
 	mu sync.Mutex
 
@@ -33,6 +33,9 @@ type MockVCSClient struct {
 	FileContents   map[string][]byte // key: "path@ref"
 	PRApproved     bool
 	PRMergeable    bool
+	PRHeadRef      string
+	PRBaseRef      string
+	PRHeadSHA      string
 
 	// Recorded interactions
 	PostedComments  []PostedComment
@@ -134,6 +137,9 @@ func (m *MockVCSClient) GetPR(_ context.Context, _, _ string, _ int) (*models.Pu
 	return &models.PullRequestDetail{
 		State:     models.PRStateOpen,
 		Mergeable: m.PRMergeable,
+		HeadRef:   m.PRHeadRef,
+		BaseRef:   m.PRBaseRef,
+		HeadSHA:   m.PRHeadSHA,
 	}, nil
 }
 
@@ -241,6 +247,24 @@ func (m *MockVCSClient) GetMergeCalls() []MergeCall {
 	defer m.mu.Unlock()
 	result := make([]MergeCall, len(m.MergeCalls))
 	copy(result, m.MergeCalls)
+	return result
+}
+
+// GetReactions returns a copy of the recorded reactions.
+func (m *MockVCSClient) GetReactions() []Reaction {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]Reaction, len(m.Reactions))
+	copy(result, m.Reactions)
+	return result
+}
+
+// GetInvalidatedPRs returns a copy of the recorded invalidated PRs.
+func (m *MockVCSClient) GetInvalidatedPRs() []InvalidatedPR {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]InvalidatedPR, len(m.InvalidatedPRs))
+	copy(result, m.InvalidatedPRs)
 	return result
 }
 
