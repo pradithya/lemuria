@@ -836,6 +836,116 @@ func TestComputeThreeWayDiff(t *testing.T) {
 	}
 }
 
+func TestComputeManifestsDiff_AllCreates(t *testing.T) {
+	target := []models.Manifest{
+		{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Name:       "web",
+			Namespace:  "default",
+			Raw:        `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default"},"spec":{"replicas":3}}`,
+		},
+		{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Name:       "config",
+			Namespace:  "default",
+			Raw:        `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"config","namespace":"default"},"data":{"key":"val"}}`,
+		},
+	}
+
+	diffs := computeManifestsDiff(nil, target)
+
+	if len(diffs) != 2 {
+		t.Fatalf("expected 2 diffs, got %d", len(diffs))
+	}
+
+	for _, d := range diffs {
+		if d.Action != models.DiffActionCreate {
+			t.Errorf("expected action Create for %s, got %s", d.Resource.String(), d.Action)
+		}
+		if d.Diff == "" {
+			t.Errorf("expected non-empty diff for %s", d.Resource.String())
+		}
+		if !strings.Contains(d.Diff, "+") {
+			t.Errorf("expected diff to contain additions for %s", d.Resource.String())
+		}
+	}
+}
+
+func TestComputeManifestsDiff_AllDeletes(t *testing.T) {
+	current := []models.Manifest{
+		{
+			APIVersion: "apps/v1",
+			Kind:       "Deployment",
+			Name:       "web",
+			Namespace:  "default",
+			Raw:        `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default"},"spec":{"replicas":2}}`,
+		},
+		{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+			Name:       "config",
+			Namespace:  "default",
+			Raw:        `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"config","namespace":"default"},"data":{"key":"val"}}`,
+		},
+	}
+
+	diffs := computeManifestsDiff(current, nil)
+
+	if len(diffs) != 2 {
+		t.Fatalf("expected 2 diffs, got %d", len(diffs))
+	}
+
+	for _, d := range diffs {
+		if d.Action != models.DiffActionDelete {
+			t.Errorf("expected action Delete for %s, got %s", d.Resource.String(), d.Action)
+		}
+		if d.Diff == "" {
+			t.Errorf("expected non-empty diff for %s", d.Resource.String())
+		}
+		if !strings.Contains(d.Diff, "-") {
+			t.Errorf("expected diff to contain deletions for %s", d.Resource.String())
+		}
+	}
+}
+
+func TestComputeLiveVsTargetDiff_AllDeletes(t *testing.T) {
+	liveResources := []ManagedResource{
+		{
+			Group:               "apps",
+			Kind:                "Deployment",
+			Namespace:           "default",
+			Name:                "web",
+			NormalizedLiveState: `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default"},"spec":{"replicas":2}}`,
+		},
+		{
+			Kind:      "ConfigMap",
+			Namespace: "default",
+			Name:      "config",
+			LiveState: `{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"config","namespace":"default"},"data":{"key":"val"}}`,
+		},
+	}
+
+	diffs := computeLiveVsTargetDiff(liveResources, nil)
+
+	if len(diffs) != 2 {
+		t.Fatalf("expected 2 diffs, got %d", len(diffs))
+	}
+
+	for _, d := range diffs {
+		if d.Action != models.DiffActionDelete {
+			t.Errorf("expected action Delete for %s, got %s", d.Resource.String(), d.Action)
+		}
+		if d.Diff == "" {
+			t.Errorf("expected non-empty diff for %s", d.Resource.String())
+		}
+		if !strings.Contains(d.Diff, "-") {
+			t.Errorf("expected diff to contain deletions for %s", d.Resource.String())
+		}
+	}
+}
+
 func TestSummarizeDiffs(t *testing.T) {
 	diffs := []models.ManifestDiff{
 		{Action: models.DiffActionCreate},

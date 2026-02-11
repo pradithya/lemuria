@@ -170,6 +170,62 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			"app", app.Name,
 		)
 		result.LockStatus = "New application"
+
+		// Try to generate diff for new app by reading spec from head branch
+		if app.SourceFile != "" {
+			headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.HeadRef)
+			if err != nil {
+				slog.Warn("failed to read application CR from head branch for new app, skipping diff",
+					"app", app.Name,
+					"source_file", app.SourceFile,
+					"error", err,
+				)
+				return result
+			}
+
+			headAppSpec, parseErr := argocd.ParseRawApplicationFromYAML(headContent, app.Name)
+			if parseErr != nil {
+				slog.Warn("failed to parse application CR from head branch for new app, skipping diff",
+					"app", app.Name,
+					"error", parseErr,
+				)
+				return result
+			}
+
+			timeout := e.config.ArgoCD.TempAppTimeout
+			if timeout == 0 {
+				timeout = 2 * time.Minute
+			}
+
+			diffs, diffErr := e.argocd.DiffNewApp(ctx, headAppSpec, argocd.DiffOptions{
+				TargetBranch: event.PR.HeadRef,
+				PRNumber:     event.PR.Number,
+				PRRepo:       event.Repo.HTMLURL,
+				Timeout:      timeout,
+			})
+			if diffErr != nil {
+				slog.Warn("failed to generate diff for new application, skipping diff",
+					"app", app.Name,
+					"error", diffErr,
+				)
+				return result
+			}
+
+			result.Diffs = diffs
+			result.Summary = argocd.SummarizeDiffs(diffs)
+
+			// Store plan
+			var planSummary string
+			var planDiffs []models.PlanDiffEntry
+			if len(diffs) > 0 {
+				planSummary = formatPlanSummary(result.Summary)
+				planDiffs = toPlanDiffEntries(diffs)
+			}
+			if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
+				slog.Warn("failed to store plan for new app", "app", app.Name, "error", err)
+			}
+		}
+
 		return result
 	}
 
@@ -180,6 +236,70 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		)
 		result.LockStatus = "Will be deleted"
 		result.Warning = "This application will be removed after the PR is merged."
+
+		// Try to generate diff for deleted app
+		diffMode := argocd.DiffMode(e.config.ArgoCD.DiffMode)
+		if diffMode == "" {
+			diffMode = argocd.DiffModeBranch
+		}
+
+		timeout := e.config.ArgoCD.TempAppTimeout
+		if timeout == 0 {
+			timeout = 2 * time.Minute
+		}
+
+		// Optionally read base branch spec for override
+		var baseAppSpec *v1alpha1.Application
+		if app.SourceFile != "" {
+			baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.BaseRef)
+			if err != nil {
+				slog.Warn("failed to read application CR from base branch for deleted app, falling back to live spec",
+					"app", app.Name,
+					"error", err,
+				)
+			} else {
+				parsed, parseErr := argocd.ParseRawApplicationFromYAML(baseContent, app.Name)
+				if parseErr != nil {
+					slog.Warn("failed to parse application CR from base branch for deleted app, falling back to live spec",
+						"app", app.Name,
+						"error", parseErr,
+					)
+				} else {
+					baseAppSpec = parsed
+				}
+			}
+		}
+
+		diffs, diffErr := e.argocd.DiffDeletedApp(ctx, app.Name, argocd.DiffOptions{
+			Mode:        diffMode,
+			BaseBranch:  event.PR.BaseRef,
+			PRNumber:    event.PR.Number,
+			PRRepo:      event.Repo.HTMLURL,
+			Timeout:     timeout,
+			BaseAppSpec: baseAppSpec,
+		})
+		if diffErr != nil {
+			slog.Warn("failed to generate diff for deleted application, continuing without diff",
+				"app", app.Name,
+				"error", diffErr,
+			)
+			return result
+		}
+
+		result.Diffs = diffs
+		result.Summary = argocd.SummarizeDiffs(diffs)
+
+		// Store plan
+		var planSummary string
+		var planDiffs []models.PlanDiffEntry
+		if len(diffs) > 0 {
+			planSummary = formatPlanSummary(result.Summary)
+			planDiffs = toPlanDiffEntries(diffs)
+		}
+		if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
+			slog.Warn("failed to store plan for deleted app", "app", app.Name, "error", err)
+		}
+
 		return result
 	}
 

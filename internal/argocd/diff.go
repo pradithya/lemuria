@@ -78,6 +78,143 @@ type DiffOptions struct {
 	HeadAppSpec *v1alpha1.Application // Application spec from head branch (nil = use live ArgoCD)
 }
 
+// DiffNewApp computes a diff for a new application that doesn't yet exist in ArgoCD.
+// It diffs empty (nil) current manifests against the head branch manifests, so all
+// resources appear as creates.
+func (c *Client) DiffNewApp(ctx context.Context, appSpec *v1alpha1.Application, opts DiffOptions) ([]models.ManifestDiff, error) {
+	if opts.Timeout == 0 {
+		opts.Timeout = 2 * time.Minute
+	}
+
+	tempMgr := NewTempAppManager(c)
+
+	// Create temp app using the provided spec (from head branch)
+	targetAppName, err := tempMgr.CreateTempApp(ctx, TempAppConfig{
+		OriginalAppName: appSpec.Name,
+		TargetBranch:    opts.TargetBranch,
+		PRNumber:        opts.PRNumber,
+		PRRepo:          opts.PRRepo,
+		Suffix:          "head",
+		AppSpecOverride: appSpec,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating temp app for new application: %w", err)
+	}
+	defer func() {
+		_ = tempMgr.DeleteTempApp(context.Background(), targetAppName)
+	}()
+
+	// Wait for manifests
+	targetManifests, err := tempMgr.WaitForManifests(ctx, targetAppName, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for manifests for new application: %w", err)
+	}
+
+	// Diff nil (empty) current against target — everything is a create
+	return computeManifestsDiff(nil, targetManifests), nil
+}
+
+// DiffDeletedApp computes a diff for an application that will be deleted.
+// It diffs current manifests against empty (nil) target, so all resources
+// appear as deletes. Respects the configured diff mode.
+func (c *Client) DiffDeletedApp(ctx context.Context, appName string, opts DiffOptions) ([]models.ManifestDiff, error) {
+	if opts.Timeout == 0 {
+		opts.Timeout = 2 * time.Minute
+	}
+
+	tempMgr := NewTempAppManager(c)
+
+	switch opts.Mode {
+	case DiffModeLive:
+		return c.diffDeletedLive(ctx, appName)
+	case DiffModeBoth:
+		return c.diffDeletedBoth(ctx, tempMgr, appName, opts)
+	default:
+		// Default to branch mode
+		return c.diffDeletedBranch(ctx, tempMgr, appName, opts)
+	}
+}
+
+// diffDeletedBranch diffs base branch manifests against empty target for a deleted app.
+func (c *Client) diffDeletedBranch(ctx context.Context, tempMgr *TempAppManager, appName string, opts DiffOptions) ([]models.ManifestDiff, error) {
+	if opts.BaseBranch == "" {
+		return nil, fmt.Errorf("base branch is required for branch diff mode")
+	}
+
+	// Create temp app from base branch
+	baseAppName, err := tempMgr.CreateTempApp(ctx, TempAppConfig{
+		OriginalAppName: appName,
+		TargetBranch:    opts.BaseBranch,
+		PRNumber:        opts.PRNumber,
+		PRRepo:          opts.PRRepo,
+		Suffix:          "base",
+		AppSpecOverride: opts.BaseAppSpec,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating base temp app for deleted application: %w", err)
+	}
+	defer func() {
+		_ = tempMgr.DeleteTempApp(context.Background(), baseAppName)
+	}()
+
+	baseManifests, err := tempMgr.WaitForManifests(ctx, baseAppName, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for base manifests for deleted application: %w", err)
+	}
+
+	// Diff base manifests against nil target — everything is a delete
+	return computeManifestsDiff(baseManifests, nil), nil
+}
+
+// diffDeletedLive diffs live managed resources against empty target for a deleted app.
+func (c *Client) diffDeletedLive(ctx context.Context, appName string) ([]models.ManifestDiff, error) {
+	liveResources, err := c.getManagedResources(ctx, appName)
+	if err != nil {
+		return nil, fmt.Errorf("getting live resources for deleted application: %w", err)
+	}
+
+	// Diff live resources against nil target — everything is a delete
+	return computeLiveVsTargetDiff(liveResources, nil), nil
+}
+
+// diffDeletedBoth performs a 3-way diff for a deleted app: base branch manifests,
+// empty target, and live cluster state.
+func (c *Client) diffDeletedBoth(ctx context.Context, tempMgr *TempAppManager, appName string, opts DiffOptions) ([]models.ManifestDiff, error) {
+	if opts.BaseBranch == "" {
+		return nil, fmt.Errorf("base branch is required for both diff mode")
+	}
+
+	// Get live state
+	liveResources, err := c.getManagedResources(ctx, appName)
+	if err != nil {
+		return nil, fmt.Errorf("getting live resources for deleted application: %w", err)
+	}
+
+	// Create temp app from base branch
+	baseAppName, err := tempMgr.CreateTempApp(ctx, TempAppConfig{
+		OriginalAppName: appName,
+		TargetBranch:    opts.BaseBranch,
+		PRNumber:        opts.PRNumber,
+		PRRepo:          opts.PRRepo,
+		Suffix:          "base",
+		AppSpecOverride: opts.BaseAppSpec,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating base temp app for deleted application: %w", err)
+	}
+	defer func() {
+		_ = tempMgr.DeleteTempApp(context.Background(), baseAppName)
+	}()
+
+	baseManifests, err := tempMgr.WaitForManifests(ctx, baseAppName, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for base manifests for deleted application: %w", err)
+	}
+
+	// 3-way diff: base manifests, nil target, live resources
+	return computeThreeWayDiff(baseManifests, nil, liveResources), nil
+}
+
 // GetApplicationDiff computes diff using temporary applications.
 // This handles multi-source apps with external Helm charts correctly.
 //
