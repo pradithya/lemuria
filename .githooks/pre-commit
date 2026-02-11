@@ -1,0 +1,17 @@
+#!/bin/bash
+# Pre-commit hook to run linting, formatting, and license checks
+
+set -e
+
+echo "Running pre-commit checks..."
+
+echo "=> make fmt"
+make fmt
+
+echo "=> make lint"
+make lint
+
+echo "=> make license-check"
+make license-check
+
+echo "All pre-commit checks passed!"
