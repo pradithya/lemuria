@@ -2,7 +2,7 @@
         k8s-deploy k8s-delete k8s-status k8s-logs k8s-port-forward k8s-restart \
         k3d-create k3d-delete k3d-build k3d-deploy k3d-all \
         helm-lint helm-template helm-template-ci helm-test helm-test-install helm-package helm-deploy helm-delete helm-dep \
-        tools install-tools \
+        tools install-tools setup-hooks \
         deps lint fmt fmt-check generate frontend-deps frontend-type-check frontend-build \
         license-check license-fix \
         help
@@ -121,6 +121,12 @@ install-tools:
 	@helm plugin install https://github.com/helm-unittest/helm-unittest.git --version $(HELM_UNITTEST_VERSION)
 	@echo ""
 	@echo "All development tools installed!"
+
+# Setup git hooks
+setup-hooks:
+	@echo "Configuring git to use .githooks directory..."
+	@git config core.hooksPath .githooks
+	@echo "Git hooks installed! Pre-commit hook will run: make fmt, make lint, make license-check"
 
 # Lint code
 lint:
