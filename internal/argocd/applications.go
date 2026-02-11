@@ -197,6 +197,9 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 		timeout = opts.Timeout
 	}
 
+	// Brief initial delay to allow ArgoCD to register the operation.
+	time.Sleep(1 * time.Second)
+
 	// Poll until the operation reaches a terminal phase.
 	return c.waitForSyncComplete(ctx, name, timeout)
 }
