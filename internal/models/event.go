@@ -129,7 +129,7 @@ type UserInfo struct {
 type ChangedFile struct {
 	Filename         string     `json:"filename"`
 	PreviousFilename string     `json:"previous_filename,omitempty"` // set for renames
-	Status           FileStatus `json:"status"`                     // added, removed, modified, renamed
+	Status           FileStatus `json:"status"`                      // added, removed, modified, renamed
 	Additions        int        `json:"additions"`
 	Deletions        int        `json:"deletions"`
 	Changes          int        `json:"changes"`
