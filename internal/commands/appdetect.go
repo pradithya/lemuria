@@ -26,7 +26,10 @@ import (
 
 // detectApplicationChanges analyzes PR files to detect new, modified, and deleted applications.
 // It compares Application CRs in the PR with existing applications in ArgoCD.
-func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.PREvent) (*argocd.ParsedApplications, error) {
+//
+// Instead of fetching each file individually, it batch-fetches all needed files
+// via archive downloads (max 2 HTTP calls: one per ref).
+func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.PREvent) (*argocd.ParsedApplications, map[string][]byte, map[string][]byte, error) {
 	slog.Debug("detecting application changes from PR files",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
@@ -37,24 +40,73 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 	// Get changed files
 	files, err := e.vcs.GetChangedFiles(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 	if err != nil {
-		return nil, fmt.Errorf("getting changed files: %w", err)
+		return nil, nil, nil, fmt.Errorf("getting changed files: %w", err)
 	}
 
 	slog.Debug("analyzing changed files for Application CRs",
 		"total_files", len(files),
 	)
 
-	parsed := &argocd.ParsedApplications{}
+	// --- Collect phase: determine which file paths are needed per ref ---
+	headPathSet := make(map[string]struct{})
+	basePathSet := make(map[string]struct{})
 
+	var yamlFiles []models.ChangedFile
 	for _, file := range files {
-		// Only process YAML files
 		if !vcs.IsYAMLFile(file.Filename) {
-			slog.Debug("skipping non-YAML file",
-				"file", file.Filename,
-			)
+			slog.Debug("skipping non-YAML file", "file", file.Filename)
 			continue
 		}
+		yamlFiles = append(yamlFiles, file)
 
+		switch file.Status {
+		case models.FileStatusAdded:
+			headPathSet[file.Filename] = struct{}{}
+		case models.FileStatusRemoved:
+			basePathSet[file.Filename] = struct{}{}
+		case models.FileStatusModified, models.FileStatusRenamed:
+			headPathSet[file.Filename] = struct{}{}
+			basePathSet[file.Filename] = struct{}{}
+			// For renames, the base branch has the file at the old path
+			if file.PreviousFilename != "" {
+				basePathSet[file.PreviousFilename] = struct{}{}
+			}
+		}
+	}
+
+	headPaths := setToSlice(headPathSet)
+	basePaths := setToSlice(basePathSet)
+
+	slog.Debug("batch fetching file contents",
+		"head_paths", len(headPaths),
+		"base_paths", len(basePaths),
+	)
+
+	// --- Fetch phase: at most 2 HTTP calls (one per ref) ---
+	var headContents, baseContents map[string][]byte
+
+	if len(headPaths) > 0 {
+		headContents, err = e.vcs.GetFileContents(ctx, event.Repo.Owner, event.Repo.Name, headPaths, event.PR.HeadRef)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("batch fetching head ref files: %w", err)
+		}
+	} else {
+		headContents = map[string][]byte{}
+	}
+
+	if len(basePaths) > 0 {
+		baseContents, err = e.vcs.GetFileContents(ctx, event.Repo.Owner, event.Repo.Name, basePaths, event.PR.BaseRef)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("batch fetching base ref files: %w", err)
+		}
+	} else {
+		baseContents = map[string][]byte{}
+	}
+
+	// --- Process phase: use pre-fetched content ---
+	parsed := &argocd.ParsedApplications{}
+
+	for _, file := range yamlFiles {
 		slog.Debug("processing YAML file",
 			"file", file.Filename,
 			"status", file.Status,
@@ -62,12 +114,12 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 
 		switch file.Status {
 		case models.FileStatusAdded:
-			// New file - parse for new applications
-			slog.Debug("parsing added file for new applications",
-				"file", file.Filename,
-				"ref", event.PR.HeadRef,
-			)
-			apps, err := e.parseAppsFromFile(ctx, event, file.Filename, event.PR.HeadRef)
+			content, ok := headContents[file.Filename]
+			if !ok {
+				slog.Warn("added file not found in head archive", "file", file.Filename)
+				continue
+			}
+			apps, err := argocd.ParseApplicationsFromYAML(content, file.Filename)
 			if err != nil {
 				slog.Warn("failed to parse new file", "file", file.Filename, "error", err)
 				continue
@@ -86,12 +138,12 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 			}
 
 		case models.FileStatusRemoved:
-			// Deleted file - parse from base branch for deleted applications
-			slog.Debug("parsing removed file for deleted applications",
-				"file", file.Filename,
-				"ref", event.PR.BaseRef,
-			)
-			apps, err := e.parseAppsFromFile(ctx, event, file.Filename, event.PR.BaseRef)
+			content, ok := baseContents[file.Filename]
+			if !ok {
+				slog.Warn("removed file not found in base archive", "file", file.Filename)
+				continue
+			}
+			apps, err := argocd.ParseApplicationsFromYAML(content, file.Filename)
 			if err != nil {
 				slog.Warn("failed to parse deleted file", "file", file.Filename, "error", err)
 				continue
@@ -110,11 +162,10 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 			}
 
 		case models.FileStatusModified, models.FileStatusRenamed:
-			// Modified or renamed file - check for added/removed applications within the file
-			slog.Debug("analyzing modified file for application changes",
-				"file", file.Filename,
-			)
-			newApps, deletedApps, err := e.detectModifiedApps(ctx, event, file.Filename)
+			headContent := headContents[file.Filename]
+			baseContent := baseContents[file.Filename]
+
+			newApps, deletedApps, err := detectModifiedAppsFromContent(baseContent, headContent, file.Filename)
 			if err != nil {
 				slog.Warn("failed to detect modified apps", "file", file.Filename, "error", err)
 				continue
@@ -140,17 +191,19 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 				app.ChangeType = models.ApplicationDeleted
 				parsed.Deleted = append(parsed.Deleted, app)
 			}
-			// Modified apps that exist in both are tracked separately
-			modifiedApps, err := e.parseAppsFromFile(ctx, event, file.Filename, event.PR.HeadRef)
-			if err == nil {
-				for _, app := range modifiedApps {
-					// Only add if not in new or deleted list
-					if !containsAppByName(parsed.New, app.Name) && !containsAppByName(parsed.Deleted, app.Name) {
-						slog.Debug("modified application detected",
-							"app", app.Name,
-							"source_file", file.Filename,
-						)
-						parsed.Modified = append(parsed.Modified, app)
+			// Modified apps that exist in both are tracked separately.
+			// Use the already-fetched head content (no redundant fetch).
+			if headContent != nil {
+				modifiedApps, err := argocd.ParseApplicationsFromYAML(headContent, file.Filename)
+				if err == nil {
+					for _, app := range modifiedApps {
+						if !containsAppByName(parsed.New, app.Name) && !containsAppByName(parsed.Deleted, app.Name) {
+							slog.Debug("modified application detected",
+								"app", app.Name,
+								"source_file", file.Filename,
+							)
+							parsed.Modified = append(parsed.Modified, app)
+						}
 					}
 				}
 			}
@@ -163,78 +216,47 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 		"deleted_count", len(parsed.Deleted),
 	)
 
-	return parsed, nil
+	return parsed, headContents, baseContents, nil
 }
 
-// parseAppsFromFile fetches and parses Application CRs from a file at the given ref.
-func (e *Executor) parseAppsFromFile(ctx context.Context, event *models.PREvent, filePath, ref string) ([]models.Application, error) {
-	slog.Debug("fetching file content",
-		"file", filePath,
-		"ref", ref,
-	)
-
-	content, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, ref)
-	if err != nil {
-		slog.Debug("failed to fetch file content",
-			"file", filePath,
-			"ref", ref,
-			"error", err,
-		)
-		return nil, err
+// setToSlice converts a string set to a slice.
+func setToSlice(s map[string]struct{}) []string {
+	result := make([]string, 0, len(s))
+	for k := range s {
+		result = append(result, k)
 	}
-
-	slog.Debug("parsing YAML for Application CRs",
-		"file", filePath,
-		"content_length", len(content),
-	)
-
-	apps, err := argocd.ParseApplicationsFromYAML(content, filePath)
-	if err != nil {
-		slog.Debug("failed to parse YAML",
-			"file", filePath,
-			"error", err,
-		)
-		return nil, err
-	}
-
-	slog.Debug("parsed applications from file",
-		"file", filePath,
-		"total_apps", len(apps),
-	)
-
-	// All Application CRs in changed files are relevant — the CR definition itself
-	// was modified, regardless of whether the app sources from this repo or an
-	// external chart/repo (e.g., Helm chart apps with inline values).
-	return apps, nil
+	return result
 }
 
-// detectModifiedApps compares base and head versions of a file to find added/removed apps.
-func (e *Executor) detectModifiedApps(ctx context.Context, event *models.PREvent, filePath string) (newApps, deletedApps []models.Application, err error) {
-	slog.Debug("comparing base and head versions of file",
-		"file", filePath,
-		"base_ref", event.PR.BaseRef,
-		"head_ref", event.PR.HeadRef,
-	)
+// detectModifiedAppsFromContent compares pre-fetched base and head content of a file
+// to find added/removed apps. This avoids per-file HTTP calls.
+func detectModifiedAppsFromContent(baseContent, headContent []byte, filePath string) (newApps, deletedApps []models.Application, err error) {
+	slog.Debug("comparing base and head versions of file", "file", filePath)
 
-	// Parse apps from base branch
-	baseApps, baseErr := e.parseAppsFromFile(ctx, event, filePath, event.PR.BaseRef)
-	if baseErr != nil {
-		slog.Debug("failed to parse base version (treating as empty)",
-			"file", filePath,
-			"error", baseErr,
-		)
-		// If base doesn't exist, all head apps are new
-		baseApps = nil
+	// Parse apps from base content
+	var baseApps []models.Application
+	if baseContent != nil {
+		baseApps, err = argocd.ParseApplicationsFromYAML(baseContent, filePath)
+		if err != nil {
+			slog.Debug("failed to parse base version (treating as empty)",
+				"file", filePath,
+				"error", err,
+			)
+			baseApps = nil
+		}
 	}
 
-	// Parse apps from head branch
-	headApps, headErr := e.parseAppsFromFile(ctx, event, filePath, event.PR.HeadRef)
-	if headErr != nil {
-		slog.Debug("failed to parse head version",
-			"file", filePath,
-			"error", headErr,
-		)
-		return nil, nil, headErr
+	// Parse apps from head content
+	var headApps []models.Application
+	if headContent != nil {
+		headApps, err = argocd.ParseApplicationsFromYAML(headContent, filePath)
+		if err != nil {
+			slog.Debug("failed to parse head version",
+				"file", filePath,
+				"error", err,
+			)
+			return nil, nil, err
+		}
 	}
 
 	slog.Debug("comparing application lists",
@@ -305,8 +327,8 @@ type AppSetModification struct {
 
 // detectApplicationSetChanges analyzes PR files to detect ApplicationSet CR changes
 // and previews the resulting application additions/removals using the ArgoCD Generate API.
-// It accepts the already-fetched changed files to avoid redundant VCS API calls.
-func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *models.PREvent, files []models.ChangedFile) (*ParsedApplicationSetChanges, error) {
+// It uses pre-fetched headContents/baseContents maps to avoid per-file VCS API calls.
+func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *models.PREvent, files []models.ChangedFile, headContents, baseContents map[string][]byte) (*ParsedApplicationSetChanges, error) {
 	slog.Debug("detecting applicationset changes from PR files",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
@@ -321,13 +343,13 @@ func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *model
 
 		switch file.Status {
 		case models.FileStatusAdded:
-			e.detectAppSetAddedFile(ctx, event, file.Filename, result)
+			e.detectAppSetAddedFile(ctx, file.Filename, headContents, result)
 
 		case models.FileStatusRemoved:
-			e.detectAppSetRemovedFile(ctx, event, file.Filename, result)
+			e.detectAppSetRemovedFile(ctx, file.Filename, baseContents, result)
 
 		case models.FileStatusModified, models.FileStatusRenamed:
-			e.detectAppSetModifiedFile(ctx, event, file, result)
+			e.detectAppSetModifiedFile(ctx, file, headContents, baseContents, result)
 		}
 	}
 
@@ -341,10 +363,10 @@ func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *model
 }
 
 // detectAppSetAddedFile parses an added file for ApplicationSet CRs and generates preview apps.
-func (e *Executor) detectAppSetAddedFile(ctx context.Context, event *models.PREvent, filePath string, result *ParsedApplicationSetChanges) {
-	content, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, event.PR.HeadRef)
-	if err != nil {
-		slog.Warn("failed to fetch added file for appset detection", "file", filePath, "error", err)
+func (e *Executor) detectAppSetAddedFile(ctx context.Context, filePath string, headContents map[string][]byte, result *ParsedApplicationSetChanges) {
+	content, ok := headContents[filePath]
+	if !ok {
+		slog.Warn("added file not found in head contents for appset detection", "file", filePath)
 		return
 	}
 
@@ -378,10 +400,10 @@ func (e *Executor) detectAppSetAddedFile(ctx context.Context, event *models.PREv
 }
 
 // detectAppSetRemovedFile parses a removed file for ApplicationSet CRs and finds existing apps that will be deleted.
-func (e *Executor) detectAppSetRemovedFile(ctx context.Context, event *models.PREvent, filePath string, result *ParsedApplicationSetChanges) {
-	content, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, event.PR.BaseRef)
-	if err != nil {
-		slog.Warn("failed to fetch removed file for appset detection", "file", filePath, "error", err)
+func (e *Executor) detectAppSetRemovedFile(ctx context.Context, filePath string, baseContents map[string][]byte, result *ParsedApplicationSetChanges) {
+	content, ok := baseContents[filePath]
+	if !ok {
+		slog.Warn("removed file not found in base contents for appset detection", "file", filePath)
 		return
 	}
 
@@ -415,7 +437,7 @@ func (e *Executor) detectAppSetRemovedFile(ctx context.Context, event *models.PR
 }
 
 // detectAppSetModifiedFile compares base and head versions of a file to find ApplicationSet changes.
-func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.PREvent, file models.ChangedFile, result *ParsedApplicationSetChanges) {
+func (e *Executor) detectAppSetModifiedFile(ctx context.Context, file models.ChangedFile, headContents, baseContents map[string][]byte, result *ParsedApplicationSetChanges) {
 	filePath := file.Filename
 
 	// For renames, the base branch has the file at the old path
@@ -424,21 +446,21 @@ func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.P
 		baseFilePath = file.PreviousFilename
 	}
 
-	baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, baseFilePath, event.PR.BaseRef)
-	if err != nil {
-		slog.Warn("failed to fetch base appset file", "file", baseFilePath, "error", err)
+	baseContent, baseOK := baseContents[baseFilePath]
+	if !baseOK {
+		slog.Warn("base appset file not found in pre-fetched contents", "file", baseFilePath)
 		// Only treat as added if this is NOT a rename — for renames, failing to fetch
 		// the old path is unexpected and should not silently classify apps as new.
 		if file.PreviousFilename == "" {
 			slog.Debug("treating as new appset file", "file", filePath)
-			e.detectAppSetAddedFile(ctx, event, filePath, result)
+			e.detectAppSetAddedFile(ctx, filePath, headContents, result)
 		}
 		return
 	}
 
-	headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, event.PR.HeadRef)
-	if err != nil {
-		slog.Warn("failed to fetch head appset file", "file", filePath, "error", err)
+	headContent, headOK := headContents[filePath]
+	if !headOK {
+		slog.Warn("head appset file not found in pre-fetched contents", "file", filePath)
 		return
 	}
 

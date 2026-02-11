@@ -17,6 +17,8 @@ package github
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"net/http"
 
 	"github.com/google/go-github/v60/github"
 
@@ -99,6 +101,44 @@ func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref stri
 	}
 
 	return []byte(decoded), nil
+}
+
+// GetFileContents retrieves the contents of multiple files at a specific ref
+// by downloading a tarball archive (single HTTP call) and extracting the
+// requested paths in-memory.
+func (c *Client) GetFileContents(ctx context.Context, owner, repo string, paths []string, ref string) (map[string][]byte, error) {
+	if len(paths) == 0 {
+		return map[string][]byte{}, nil
+	}
+
+	client, err := c.GetInstallationClient(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+
+	archiveURL, _, err := client.Repositories.GetArchiveLink(ctx, owner, repo, github.Tarball, &github.RepositoryContentGetOptions{
+		Ref: ref,
+	}, 3)
+	if err != nil {
+		return nil, fmt.Errorf("getting archive link: %w", err)
+	}
+
+	resp, err := http.Get(archiveURL.String())
+	if err != nil {
+		return nil, fmt.Errorf("downloading archive: %w", err)
+	}
+	defer func() {
+		err := resp.Body.Close()
+		if err != nil {
+			slog.Error("error closing response body", "error", err)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("downloading archive: unexpected status %d", resp.StatusCode)
+	}
+
+	return vcs.ExtractFilesFromTarGz(resp.Body, paths)
 }
 
 // IsYAMLFile checks if a filename has a YAML extension.
