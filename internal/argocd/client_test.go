@@ -195,6 +195,14 @@ func TestListApplications(t *testing.T) {
 		if r.URL.Path != "/api/v1/applications" {
 			t.Errorf("path = %q, want /api/v1/applications", r.URL.Path)
 		}
+
+		// Verify that ListApplications passes the temp-app exclusion selector
+		selector := r.URL.Query().Get("selector")
+		wantSelector := "!" + labelTempApp
+		if selector != wantSelector {
+			t.Errorf("selector = %q, want %q", selector, wantSelector)
+		}
+
 		resp := map[string]any{
 			"items": []map[string]any{
 				{
@@ -268,6 +276,124 @@ func TestListApplications(t *testing.T) {
 	}
 	if apps[1].Project != "my-project" {
 		t.Errorf("apps[1].Project = %q, want my-project", apps[1].Project)
+	}
+}
+
+func TestListApplicationsExcludesTempApps(t *testing.T) {
+	// Simulate an ArgoCD API that respects the selector and only returns
+	// non-temp apps. This test verifies:
+	// 1. ListApplications sends the correct selector to exclude temp apps
+	// 2. ListApplicationsWithSelector (used by CleanupStaleApps) can still find temp apps
+	var listCalls []string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		selector := r.URL.Query().Get("selector")
+		listCalls = append(listCalls, selector)
+
+		var items []map[string]any
+
+		// Real app - always present
+		realApp := map[string]any{
+			"metadata": map[string]any{
+				"name":      "my-app",
+				"namespace": "argocd",
+			},
+			"spec": map[string]any{
+				"project": "default",
+				"source": map[string]any{
+					"repoURL":        "https://github.com/org/repo",
+					"path":           "manifests",
+					"targetRevision": "main",
+				},
+				"destination": map[string]any{
+					"server": "https://kubernetes.default.svc",
+				},
+			},
+			"status": map[string]any{
+				"sync":   map[string]any{"status": "Synced"},
+				"health": map[string]any{"status": "Healthy"},
+			},
+		}
+
+		// Temp app - only returned when explicitly selecting temp apps
+		tempApp := map[string]any{
+			"metadata": map[string]any{
+				"name":      "my-app-lemuria-pr1-base",
+				"namespace": "argocd",
+				"labels": map[string]any{
+					labelTempApp: "true",
+				},
+			},
+			"spec": map[string]any{
+				"project": "default",
+				"source": map[string]any{
+					"repoURL":        "https://github.com/org/repo",
+					"path":           "manifests",
+					"targetRevision": "main",
+				},
+				"destination": map[string]any{
+					"server": "https://kubernetes.default.svc",
+				},
+			},
+			"status": map[string]any{
+				"sync":   map[string]any{"status": "OutOfSync"},
+				"health": map[string]any{"status": "Progressing"},
+			},
+		}
+
+		switch selector {
+		case labelTempApp + "=true":
+			// CleanupStaleApps path: only return temp apps
+			items = []map[string]any{tempApp}
+		case "!" + labelTempApp:
+			// ListApplications path: only return real apps
+			items = []map[string]any{realApp}
+		default:
+			// No selector: return all
+			items = []map[string]any{realApp, tempApp}
+		}
+
+		resp := map[string]any{"items": items}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	client := newTestClient(ts)
+
+	// ListApplications should exclude temp apps
+	apps, err := client.ListApplications(context.Background())
+	if err != nil {
+		t.Fatalf("ListApplications() error = %v", err)
+	}
+	if len(apps) != 1 {
+		t.Fatalf("ListApplications() got %d apps, want 1 (should exclude temp apps)", len(apps))
+	}
+	if apps[0].Name != "my-app" {
+		t.Errorf("ListApplications() apps[0].Name = %q, want my-app", apps[0].Name)
+	}
+
+	// ListApplicationsWithSelector for temp apps should return only temp apps
+	tempApps, err := client.ListApplicationsWithSelector(context.Background(), labelTempApp+"=true")
+	if err != nil {
+		t.Fatalf("ListApplicationsWithSelector() error = %v", err)
+	}
+	if len(tempApps) != 1 {
+		t.Fatalf("ListApplicationsWithSelector(temp) got %d apps, want 1", len(tempApps))
+	}
+	if tempApps[0].Name != "my-app-lemuria-pr1-base" {
+		t.Errorf("temp app name = %q, want my-app-lemuria-pr1-base", tempApps[0].Name)
+	}
+
+	// Verify the selectors sent to the API
+	if len(listCalls) != 2 {
+		t.Fatalf("expected 2 API calls, got %d", len(listCalls))
+	}
+	if listCalls[0] != "!"+labelTempApp {
+		t.Errorf("first call selector = %q, want %q", listCalls[0], "!"+labelTempApp)
+	}
+	if listCalls[1] != labelTempApp+"=true" {
+		t.Errorf("second call selector = %q, want %q", listCalls[1], labelTempApp+"=true")
 	}
 }
 

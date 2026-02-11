@@ -97,9 +97,10 @@ type watchEvent struct {
 	} `json:"result"`
 }
 
-// ListApplications returns all applications from Argo CD.
+// ListApplications returns all non-temporary applications from Argo CD.
+// Temporary applications (created for diff generation) are excluded via label selector.
 func (c *Client) ListApplications(ctx context.Context) ([]models.Application, error) {
-	return c.ListApplicationsWithSelector(ctx, "")
+	return c.ListApplicationsWithSelector(ctx, "!"+labelTempApp)
 }
 
 // ListApplicationsWithSelector returns applications matching a label selector.

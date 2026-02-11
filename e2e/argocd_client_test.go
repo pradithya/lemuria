@@ -15,8 +15,12 @@
 package e2e
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/org/lemuria/internal/argocd"
 )
@@ -153,6 +157,97 @@ func TestGetManifests(t *testing.T) {
 	for _, m := range manifests {
 		t.Logf("  - %s/%s: %s", m.Kind, m.Name, m.Namespace)
 	}
+}
+
+func TestListApplicationsExcludesTempApps(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping ArgoCD test in short mode")
+	}
+
+	// Create a temp app with the lemuria temp-app label (mimicking what TempAppManager does)
+	tempAppName := uniqueAppName("e2e-temp-app")
+	tempApp := &v1alpha1.Application{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tempAppName,
+			Namespace: "argocd",
+			Labels: map[string]string{
+				"lemuria.io/temp-app":      "true",
+				"lemuria.io/original-app":  "some-real-app",
+				"lemuria.io/pr-number":     "999",
+			},
+		},
+		Spec: v1alpha1.ApplicationSpec{
+			Project: "default",
+			Source: &v1alpha1.ApplicationSource{
+				RepoURL:        "https://github.com/argoproj/argocd-example-apps.git",
+				TargetRevision: "HEAD",
+				Path:           "guestbook",
+			},
+			Destination: v1alpha1.ApplicationDestination{
+				Server:    "https://kubernetes.default.svc",
+				Namespace: "e2e-test-apps",
+			},
+		},
+	}
+
+	if err := argoClient.CreateApplication(testCtx, tempApp); err != nil {
+		t.Fatalf("Failed to create temp application: %v", err)
+	}
+	defer func() {
+		_ = argoClient.DeleteApplication(context.Background(), tempAppName, false)
+		t.Logf("Cleaned up temp app: %s", tempAppName)
+	}()
+
+	t.Logf("Created temp app: %s", tempAppName)
+
+	// Also create a real app to ensure it IS included
+	realAppName := uniqueAppName("e2e-real-app")
+	createTestApplication(testCtx, t, argoClient, realAppName, "e2e-test-apps")
+	defer deleteTestApplication(context.Background(), t, argoClient, realAppName)
+
+	// ListApplications should NOT include the temp app
+	apps, err := argoClient.ListApplications(testCtx)
+	if err != nil {
+		t.Fatalf("ListApplications() error = %v", err)
+	}
+
+	for _, app := range apps {
+		if app.Name == tempAppName {
+			t.Errorf("ListApplications() returned temp app %q — it should be excluded", tempAppName)
+		}
+	}
+
+	foundReal := false
+	for _, app := range apps {
+		if app.Name == realAppName {
+			foundReal = true
+			break
+		}
+	}
+	if !foundReal {
+		t.Errorf("ListApplications() did not return real app %q", realAppName)
+	}
+
+	t.Logf("ListApplications() returned %d apps (correctly excluded temp app)", len(apps))
+
+	// ListApplicationsWithSelector for temp apps should find it
+	tempApps, err := argoClient.ListApplicationsWithSelector(testCtx, "lemuria.io/temp-app=true")
+	if err != nil {
+		t.Fatalf("ListApplicationsWithSelector(temp) error = %v", err)
+	}
+
+	foundTemp := false
+	for _, app := range tempApps {
+		if app.Name == tempAppName {
+			foundTemp = true
+			break
+		}
+	}
+	if !foundTemp {
+		t.Errorf("ListApplicationsWithSelector(temp) did not return temp app %q", tempAppName)
+	}
+
+	t.Logf("ListApplicationsWithSelector(temp) returned %d temp apps (correctly found temp app)", len(tempApps))
 }
 
 func TestGetApplicationDiffV2(t *testing.T) {
