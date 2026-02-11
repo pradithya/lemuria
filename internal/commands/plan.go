@@ -113,6 +113,33 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 		return e.postComment(ctx, event, "", "## Lemuria Plan\n\nNo applications affected by this PR.")
 	}
 
+	// Batch-fetch Application CR source files before per-app loop
+	sourcePathSet := make(map[string]struct{})
+	for _, app := range apps {
+		if app.SourceFile != "" {
+			sourcePathSet[app.SourceFile] = struct{}{}
+		}
+	}
+	sourcePaths := setToSlice(sourcePathSet)
+
+	var headSourceContents, baseSourceContents map[string][]byte
+	if len(sourcePaths) > 0 {
+		var fetchErr error
+		headSourceContents, fetchErr = e.vcs.GetFileContents(ctx, event.Repo.Owner, event.Repo.Name, sourcePaths, event.PR.HeadRef)
+		if fetchErr != nil {
+			slog.Warn("failed to batch-fetch source files at head ref", "error", fetchErr)
+			headSourceContents = map[string][]byte{}
+		}
+		baseSourceContents, fetchErr = e.vcs.GetFileContents(ctx, event.Repo.Owner, event.Repo.Name, sourcePaths, event.PR.BaseRef)
+		if fetchErr != nil {
+			slog.Warn("failed to batch-fetch source files at base ref", "error", fetchErr)
+			baseSourceContents = map[string][]byte{}
+		}
+	} else {
+		headSourceContents = map[string][]byte{}
+		baseSourceContents = map[string][]byte{}
+	}
+
 	// Process each application
 	var results []appPlanResult
 	for _, app := range apps {
@@ -120,7 +147,7 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 			"app", app.Name,
 			"change_type", app.ChangeType,
 		)
-		result := e.planApplication(ctx, app, event)
+		result := e.planApplication(ctx, app, event, headSourceContents, baseSourceContents)
 		results = append(results, result)
 	}
 
@@ -148,7 +175,7 @@ type appPlanResult struct {
 }
 
 // planApplication generates a diff for a single application.
-func (e *Executor) planApplication(ctx context.Context, app models.Application, event *models.PREvent) appPlanResult {
+func (e *Executor) planApplication(ctx context.Context, app models.Application, event *models.PREvent, headContents, baseContents map[string][]byte) appPlanResult {
 	slog.Debug("starting plan for application",
 		"app", app.Name,
 		"change_type", app.ChangeType,
@@ -173,12 +200,11 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 
 		// Try to generate diff for new app by reading spec from head branch
 		if app.SourceFile != "" {
-			headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.HeadRef)
-			if err != nil {
-				slog.Warn("failed to read application CR from head branch for new app, skipping diff",
+			headContent, ok := headContents[app.SourceFile]
+			if !ok {
+				slog.Warn("application CR not found in head contents for new app, skipping diff",
 					"app", app.Name,
 					"source_file", app.SourceFile,
-					"error", err,
 				)
 				return result
 			}
@@ -251,13 +277,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		// Optionally read base branch spec for override
 		var baseAppSpec *v1alpha1.Application
 		if app.SourceFile != "" {
-			baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.BaseRef)
-			if err != nil {
-				slog.Warn("failed to read application CR from base branch for deleted app, falling back to live spec",
-					"app", app.Name,
-					"error", err,
-				)
-			} else {
+			if baseContent, ok := baseContents[app.SourceFile]; ok {
 				parsed, parseErr := argocd.ParseRawApplicationFromYAML(baseContent, app.Name)
 				if parseErr != nil {
 					slog.Warn("failed to parse application CR from base branch for deleted app, falling back to live spec",
@@ -267,6 +287,11 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 				} else {
 					baseAppSpec = parsed
 				}
+			} else {
+				slog.Warn("application CR not found in base contents for deleted app, falling back to live spec",
+					"app", app.Name,
+					"source_file", app.SourceFile,
+				)
 			}
 		}
 
@@ -372,16 +397,8 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			"source_file", app.SourceFile,
 		)
 
-		// Read base branch version
-		baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.BaseRef)
-		if err != nil {
-			slog.Warn("failed to read application CR from base branch, falling back to live spec",
-				"app", app.Name,
-				"source_file", app.SourceFile,
-				"base_ref", event.PR.BaseRef,
-				"error", err,
-			)
-		} else {
+		// Read base branch version from pre-fetched content
+		if baseContent, ok := baseContents[app.SourceFile]; ok {
 			parsed, parseErr := argocd.ParseRawApplicationFromYAML(baseContent, app.Name)
 			if parseErr != nil {
 				slog.Warn("failed to parse application CR from base branch, falling back to live spec",
@@ -391,18 +408,16 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			} else {
 				baseAppSpec = parsed
 			}
-		}
-
-		// Read head branch version
-		headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.HeadRef)
-		if err != nil {
-			slog.Warn("failed to read application CR from head branch, falling back to live spec",
+		} else {
+			slog.Warn("application CR not found in base branch, falling back to live spec",
 				"app", app.Name,
 				"source_file", app.SourceFile,
-				"head_ref", event.PR.HeadRef,
-				"error", err,
+				"base_ref", event.PR.BaseRef,
 			)
-		} else {
+		}
+
+		// Read head branch version from pre-fetched content
+		if headContent, ok := headContents[app.SourceFile]; ok {
 			parsed, parseErr := argocd.ParseRawApplicationFromYAML(headContent, app.Name)
 			if parseErr != nil {
 				slog.Warn("failed to parse application CR from head branch, falling back to live spec",
@@ -412,6 +427,12 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			} else {
 				headAppSpec = parsed
 			}
+		} else {
+			slog.Warn("application CR not found in head branch, falling back to live spec",
+				"app", app.Name,
+				"source_file", app.SourceFile,
+				"head_ref", event.PR.HeadRef,
+			)
 		}
 	}
 

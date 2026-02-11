@@ -275,7 +275,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	}
 
 	// Detect new and deleted applications from Application CR files
-	parsed, err := e.detectApplicationChanges(ctx, event)
+	parsed, headContents, baseContents, err := e.detectApplicationChanges(ctx, event)
 	if err != nil {
 		slog.Warn("failed to detect application changes from files", "error", err)
 	} else {
@@ -335,7 +335,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		}
 
 		// Detect new/deleted applications from ApplicationSet CR changes
-		appSetChanges, appSetErr := e.detectApplicationSetChanges(ctx, event, files)
+		appSetChanges, appSetErr := e.detectApplicationSetChanges(ctx, event, files, headContents, baseContents)
 		if appSetErr != nil {
 			slog.Warn("failed to detect applicationset changes from files", "error", appSetErr)
 		} else {
