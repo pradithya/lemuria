@@ -17,6 +17,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -36,6 +37,9 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// Set default logger to debug level for all packages
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
 	// Load environment
 	loadEnv()
 
