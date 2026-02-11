@@ -35,12 +35,6 @@ export function Header() {
               >
                 Dashboard
               </a>
-              <a
-                href="/locks"
-                className="text-gray-600 hover:text-gray-900 px-3 py-2 text-sm font-medium"
-              >
-                Locks
-              </a>
               {user?.role === 'admin' && (
                 <a
                   href="/admin"
@@ -49,6 +43,14 @@ export function Header() {
                   Admin
                 </a>
               )}
+              <a
+                href="https://pradithya.github.io/lemuria/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-gray-600 hover:text-gray-900 px-3 py-2 text-sm font-medium"
+              >
+                Docs
+              </a>
             </nav>
           </div>
 

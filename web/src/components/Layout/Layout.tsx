@@ -17,17 +17,26 @@
 import { ReactNode } from 'react';
 import { Header } from './Header';
 
+declare const __APP_VERSION__: string;
+
 interface LayoutProps {
   children: ReactNode;
 }
 
 export function Layout({ children }: LayoutProps) {
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex flex-col">
       <Header />
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full">
         {children}
       </main>
+      <footer className="border-t border-gray-200 bg-white">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <p className="text-center text-sm text-gray-400">
+            Lemuria {__APP_VERSION__ !== 'dev' ? `v${__APP_VERSION__}` : __APP_VERSION__}
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }

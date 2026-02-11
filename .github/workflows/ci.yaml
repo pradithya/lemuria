@@ -141,6 +141,8 @@ jobs:
 
       - name: Build frontend
         run: make frontend-build
+        env:
+          VERSION: ${{ github.ref_name || github.sha }}
 
   test-e2e:
     name: E2E Tests

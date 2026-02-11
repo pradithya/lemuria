@@ -15,6 +15,8 @@
 # Frontend build stage
 FROM node:25-alpine AS frontend-builder
 
+ARG VERSION=dev
+
 WORKDIR /app/web
 
 # Copy frontend package files
@@ -27,7 +29,7 @@ RUN npm ci
 COPY web/ ./
 
 # Build frontend
-RUN npm run build
+RUN LEMURIA_VERSION=${VERSION} npm run build
 
 # Backend build stage
 FROM golang:1.25-alpine AS backend-builder

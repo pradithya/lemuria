@@ -29,7 +29,7 @@ build: build-frontend build-backend
 
 # Build frontend assets
 build-frontend:
-	cd web && $(NPM) install && $(NPM) run build
+	cd web && $(NPM) install && LEMURIA_VERSION=$(VERSION) $(NPM) run build
 
 # Install frontend dependencies (CI-style clean install)
 frontend-deps:
@@ -41,7 +41,7 @@ frontend-type-check:
 
 # Build frontend only (assumes deps already installed)
 frontend-build:
-	cd web && $(NPM) run build
+	cd web && LEMURIA_VERSION=$(VERSION) $(NPM) run build
 
 # Build the Go binary (requires frontend to be built first)
 build-backend:

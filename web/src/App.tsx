@@ -18,7 +18,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, ProtectedRoute } from './components/Auth';
 import { Layout } from './components/Layout';
-import { Dashboard, LocksPage, AdminPage } from './pages';
+import { Dashboard, AdminPage } from './pages';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,17 +45,7 @@ export function App() {
                 </ProtectedRoute>
               }
             />
-            <Route
-              path="/locks"
-              element={
-                <ProtectedRoute>
-                  <Layout>
-                    <LocksPage />
-                  </Layout>
-                </ProtectedRoute>
-              }
-            />
-            <Route
+<Route
               path="/admin"
               element={
                 <ProtectedRoute requireAdmin>
