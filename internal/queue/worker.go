@@ -27,11 +27,10 @@ import (
 type Worker struct {
 	server *asynq.Server
 	mux    *asynq.ServeMux
-	logger *slog.Logger
 }
 
 // NewWorker creates a new queue worker.
-func NewWorker(redisCfg config.RedisConfig, queueCfg config.QueueConfig, logger *slog.Logger) *Worker {
+func NewWorker(redisCfg config.RedisConfig, queueCfg config.QueueConfig) *Worker {
 	redisOpt := asynq.RedisClientOpt{
 		Addr:     redisCfg.Address,
 		Password: redisCfg.Password,
@@ -44,13 +43,12 @@ func NewWorker(redisCfg config.RedisConfig, queueCfg config.QueueConfig, logger 
 		Queues: map[string]int{
 			"webhooks": 10,
 		},
-		Logger: newSlogAdapter(logger),
+		Logger: newSlogAdapter(),
 	})
 
 	return &Worker{
 		server: srv,
 		mux:    asynq.NewServeMux(),
-		logger: logger,
 	}
 }
 
@@ -61,7 +59,7 @@ func (w *Worker) RegisterHandler(pattern string, handler asynq.Handler) {
 
 // Run starts the worker and blocks until SIGTERM or SIGINT.
 func (w *Worker) Run() error {
-	w.logger.Info("starting queue worker")
+	slog.Info("starting queue worker")
 	return w.server.Run(w.mux)
 }
 

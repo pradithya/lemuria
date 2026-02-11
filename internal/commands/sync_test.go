@@ -17,8 +17,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"os"
 	"strings"
 	"testing"
 
@@ -108,12 +106,10 @@ func (m *mockLockManagerForSync) Ping(context.Context) error { return nil }
 func (m *mockLockManagerForSync) Close() error               { return nil }
 
 func newSyncTestExecutor(vcsClient VCSClient, cfg *config.Config) *Executor {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	return &Executor{
 		vcs:    vcsClient,
 		lock:   &mockLockManagerForSync{},
 		config: cfg,
-		logger: logger,
 	}
 }
 

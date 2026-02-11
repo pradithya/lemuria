@@ -17,6 +17,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/models"
@@ -26,7 +27,7 @@ import (
 // detectApplicationChanges analyzes PR files to detect new, modified, and deleted applications.
 // It compares Application CRs in the PR with existing applications in ArgoCD.
 func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.PREvent) (*argocd.ParsedApplications, error) {
-	e.logger.Debug("detecting application changes from PR files",
+	slog.Debug("detecting application changes from PR files",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 		"head_ref", event.PR.HeadRef,
@@ -39,7 +40,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 		return nil, fmt.Errorf("getting changed files: %w", err)
 	}
 
-	e.logger.Debug("analyzing changed files for Application CRs",
+	slog.Debug("analyzing changed files for Application CRs",
 		"total_files", len(files),
 	)
 
@@ -48,13 +49,13 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 	for _, file := range files {
 		// Only process YAML files
 		if !vcs.IsYAMLFile(file.Filename) {
-			e.logger.Debug("skipping non-YAML file",
+			slog.Debug("skipping non-YAML file",
 				"file", file.Filename,
 			)
 			continue
 		}
 
-		e.logger.Debug("processing YAML file",
+		slog.Debug("processing YAML file",
 			"file", file.Filename,
 			"status", file.Status,
 		)
@@ -62,21 +63,21 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 		switch file.Status {
 		case models.FileStatusAdded:
 			// New file - parse for new applications
-			e.logger.Debug("parsing added file for new applications",
+			slog.Debug("parsing added file for new applications",
 				"file", file.Filename,
 				"ref", event.PR.HeadRef,
 			)
 			apps, err := e.parseAppsFromFile(ctx, event, file.Filename, event.PR.HeadRef)
 			if err != nil {
-				e.logger.Warn("failed to parse new file", "file", file.Filename, "error", err)
+				slog.Warn("failed to parse new file", "file", file.Filename, "error", err)
 				continue
 			}
-			e.logger.Debug("found applications in added file",
+			slog.Debug("found applications in added file",
 				"file", file.Filename,
 				"count", len(apps),
 			)
 			for _, app := range apps {
-				e.logger.Debug("new application detected",
+				slog.Debug("new application detected",
 					"app", app.Name,
 					"source_file", file.Filename,
 				)
@@ -86,21 +87,21 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 
 		case models.FileStatusRemoved:
 			// Deleted file - parse from base branch for deleted applications
-			e.logger.Debug("parsing removed file for deleted applications",
+			slog.Debug("parsing removed file for deleted applications",
 				"file", file.Filename,
 				"ref", event.PR.BaseRef,
 			)
 			apps, err := e.parseAppsFromFile(ctx, event, file.Filename, event.PR.BaseRef)
 			if err != nil {
-				e.logger.Warn("failed to parse deleted file", "file", file.Filename, "error", err)
+				slog.Warn("failed to parse deleted file", "file", file.Filename, "error", err)
 				continue
 			}
-			e.logger.Debug("found applications in removed file",
+			slog.Debug("found applications in removed file",
 				"file", file.Filename,
 				"count", len(apps),
 			)
 			for _, app := range apps {
-				e.logger.Debug("deleted application detected",
+				slog.Debug("deleted application detected",
 					"app", app.Name,
 					"source_file", file.Filename,
 				)
@@ -110,21 +111,21 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 
 		case models.FileStatusModified, models.FileStatusRenamed:
 			// Modified or renamed file - check for added/removed applications within the file
-			e.logger.Debug("analyzing modified file for application changes",
+			slog.Debug("analyzing modified file for application changes",
 				"file", file.Filename,
 			)
 			newApps, deletedApps, err := e.detectModifiedApps(ctx, event, file.Filename)
 			if err != nil {
-				e.logger.Warn("failed to detect modified apps", "file", file.Filename, "error", err)
+				slog.Warn("failed to detect modified apps", "file", file.Filename, "error", err)
 				continue
 			}
-			e.logger.Debug("modified file analysis result",
+			slog.Debug("modified file analysis result",
 				"file", file.Filename,
 				"new_apps", len(newApps),
 				"deleted_apps", len(deletedApps),
 			)
 			for _, app := range newApps {
-				e.logger.Debug("new application in modified file",
+				slog.Debug("new application in modified file",
 					"app", app.Name,
 					"source_file", file.Filename,
 				)
@@ -132,7 +133,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 				parsed.New = append(parsed.New, app)
 			}
 			for _, app := range deletedApps {
-				e.logger.Debug("deleted application in modified file",
+				slog.Debug("deleted application in modified file",
 					"app", app.Name,
 					"source_file", file.Filename,
 				)
@@ -145,7 +146,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 				for _, app := range modifiedApps {
 					// Only add if not in new or deleted list
 					if !containsAppByName(parsed.New, app.Name) && !containsAppByName(parsed.Deleted, app.Name) {
-						e.logger.Debug("modified application detected",
+						slog.Debug("modified application detected",
 							"app", app.Name,
 							"source_file", file.Filename,
 						)
@@ -156,7 +157,7 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 		}
 	}
 
-	e.logger.Debug("application change detection complete",
+	slog.Debug("application change detection complete",
 		"new_count", len(parsed.New),
 		"modified_count", len(parsed.Modified),
 		"deleted_count", len(parsed.Deleted),
@@ -167,14 +168,14 @@ func (e *Executor) detectApplicationChanges(ctx context.Context, event *models.P
 
 // parseAppsFromFile fetches and parses Application CRs from a file at the given ref.
 func (e *Executor) parseAppsFromFile(ctx context.Context, event *models.PREvent, filePath, ref string) ([]models.Application, error) {
-	e.logger.Debug("fetching file content",
+	slog.Debug("fetching file content",
 		"file", filePath,
 		"ref", ref,
 	)
 
 	content, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, ref)
 	if err != nil {
-		e.logger.Debug("failed to fetch file content",
+		slog.Debug("failed to fetch file content",
 			"file", filePath,
 			"ref", ref,
 			"error", err,
@@ -182,21 +183,21 @@ func (e *Executor) parseAppsFromFile(ctx context.Context, event *models.PREvent,
 		return nil, err
 	}
 
-	e.logger.Debug("parsing YAML for Application CRs",
+	slog.Debug("parsing YAML for Application CRs",
 		"file", filePath,
 		"content_length", len(content),
 	)
 
 	apps, err := argocd.ParseApplicationsFromYAML(content, filePath)
 	if err != nil {
-		e.logger.Debug("failed to parse YAML",
+		slog.Debug("failed to parse YAML",
 			"file", filePath,
 			"error", err,
 		)
 		return nil, err
 	}
 
-	e.logger.Debug("parsed applications from file",
+	slog.Debug("parsed applications from file",
 		"file", filePath,
 		"total_apps", len(apps),
 	)
@@ -209,7 +210,7 @@ func (e *Executor) parseAppsFromFile(ctx context.Context, event *models.PREvent,
 
 // detectModifiedApps compares base and head versions of a file to find added/removed apps.
 func (e *Executor) detectModifiedApps(ctx context.Context, event *models.PREvent, filePath string) (newApps, deletedApps []models.Application, err error) {
-	e.logger.Debug("comparing base and head versions of file",
+	slog.Debug("comparing base and head versions of file",
 		"file", filePath,
 		"base_ref", event.PR.BaseRef,
 		"head_ref", event.PR.HeadRef,
@@ -218,7 +219,7 @@ func (e *Executor) detectModifiedApps(ctx context.Context, event *models.PREvent
 	// Parse apps from base branch
 	baseApps, baseErr := e.parseAppsFromFile(ctx, event, filePath, event.PR.BaseRef)
 	if baseErr != nil {
-		e.logger.Debug("failed to parse base version (treating as empty)",
+		slog.Debug("failed to parse base version (treating as empty)",
 			"file", filePath,
 			"error", baseErr,
 		)
@@ -229,14 +230,14 @@ func (e *Executor) detectModifiedApps(ctx context.Context, event *models.PREvent
 	// Parse apps from head branch
 	headApps, headErr := e.parseAppsFromFile(ctx, event, filePath, event.PR.HeadRef)
 	if headErr != nil {
-		e.logger.Debug("failed to parse head version",
+		slog.Debug("failed to parse head version",
 			"file", filePath,
 			"error", headErr,
 		)
 		return nil, nil, headErr
 	}
 
-	e.logger.Debug("comparing application lists",
+	slog.Debug("comparing application lists",
 		"file", filePath,
 		"base_apps_count", len(baseApps),
 		"head_apps_count", len(headApps),
@@ -256,7 +257,7 @@ func (e *Executor) detectModifiedApps(ctx context.Context, event *models.PREvent
 	// Find new apps (in head but not in base)
 	for name, app := range headByName {
 		if _, exists := baseByName[name]; !exists {
-			e.logger.Debug("application added in this PR",
+			slog.Debug("application added in this PR",
 				"app", name,
 				"file", filePath,
 			)
@@ -267,7 +268,7 @@ func (e *Executor) detectModifiedApps(ctx context.Context, event *models.PREvent
 	// Find deleted apps (in base but not in head)
 	for name, app := range baseByName {
 		if _, exists := headByName[name]; !exists {
-			e.logger.Debug("application removed in this PR",
+			slog.Debug("application removed in this PR",
 				"app", name,
 				"file", filePath,
 			)
@@ -275,7 +276,7 @@ func (e *Executor) detectModifiedApps(ctx context.Context, event *models.PREvent
 		}
 	}
 
-	e.logger.Debug("modified file comparison complete",
+	slog.Debug("modified file comparison complete",
 		"file", filePath,
 		"new_apps", len(newApps),
 		"deleted_apps", len(deletedApps),
@@ -306,7 +307,7 @@ type AppSetModification struct {
 // and previews the resulting application additions/removals using the ArgoCD Generate API.
 // It accepts the already-fetched changed files to avoid redundant VCS API calls.
 func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *models.PREvent, files []models.ChangedFile) (*ParsedApplicationSetChanges, error) {
-	e.logger.Debug("detecting applicationset changes from PR files",
+	slog.Debug("detecting applicationset changes from PR files",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 	)
@@ -330,7 +331,7 @@ func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *model
 		}
 	}
 
-	e.logger.Debug("applicationset change detection complete",
+	slog.Debug("applicationset change detection complete",
 		"new_apps", len(result.NewApps),
 		"deleted_apps", len(result.DeletedApps),
 		"modified_appsets", len(result.Modified),
@@ -343,20 +344,20 @@ func (e *Executor) detectApplicationSetChanges(ctx context.Context, event *model
 func (e *Executor) detectAppSetAddedFile(ctx context.Context, event *models.PREvent, filePath string, result *ParsedApplicationSetChanges) {
 	content, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, event.PR.HeadRef)
 	if err != nil {
-		e.logger.Warn("failed to fetch added file for appset detection", "file", filePath, "error", err)
+		slog.Warn("failed to fetch added file for appset detection", "file", filePath, "error", err)
 		return
 	}
 
 	appSets, err := argocd.ParseApplicationSetsFromYAML(content, filePath)
 	if err != nil {
-		e.logger.Warn("failed to parse appsets from added file", "file", filePath, "error", err)
+		slog.Warn("failed to parse appsets from added file", "file", filePath, "error", err)
 		return
 	}
 
 	for i := range appSets {
 		apps, err := e.argocd.GenerateApplications(ctx, &appSets[i])
 		if err != nil {
-			e.logger.Warn("failed to generate apps for new appset",
+			slog.Warn("failed to generate apps for new appset",
 				"appset", appSets[i].Name, "error", err)
 			continue
 		}
@@ -368,7 +369,7 @@ func (e *Executor) detectAppSetAddedFile(ctx context.Context, event *models.PREv
 		}
 		result.NewApps = append(result.NewApps, apps...)
 
-		e.logger.Debug("new applicationset detected",
+		slog.Debug("new applicationset detected",
 			"appset", appSets[i].Name,
 			"generated_apps", len(apps),
 			"file", filePath,
@@ -380,20 +381,20 @@ func (e *Executor) detectAppSetAddedFile(ctx context.Context, event *models.PREv
 func (e *Executor) detectAppSetRemovedFile(ctx context.Context, event *models.PREvent, filePath string, result *ParsedApplicationSetChanges) {
 	content, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, event.PR.BaseRef)
 	if err != nil {
-		e.logger.Warn("failed to fetch removed file for appset detection", "file", filePath, "error", err)
+		slog.Warn("failed to fetch removed file for appset detection", "file", filePath, "error", err)
 		return
 	}
 
 	appSets, err := argocd.ParseApplicationSetsFromYAML(content, filePath)
 	if err != nil {
-		e.logger.Warn("failed to parse appsets from removed file", "file", filePath, "error", err)
+		slog.Warn("failed to parse appsets from removed file", "file", filePath, "error", err)
 		return
 	}
 
 	for _, appSet := range appSets {
 		apps, err := e.argocd.GetApplicationsByApplicationSet(ctx, appSet.Name)
 		if err != nil {
-			e.logger.Warn("failed to get apps for deleted appset",
+			slog.Warn("failed to get apps for deleted appset",
 				"appset", appSet.Name, "error", err)
 			continue
 		}
@@ -405,7 +406,7 @@ func (e *Executor) detectAppSetRemovedFile(ctx context.Context, event *models.PR
 		}
 		result.DeletedApps = append(result.DeletedApps, apps...)
 
-		e.logger.Debug("deleted applicationset detected",
+		slog.Debug("deleted applicationset detected",
 			"appset", appSet.Name,
 			"existing_apps", len(apps),
 			"file", filePath,
@@ -425,11 +426,11 @@ func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.P
 
 	baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, baseFilePath, event.PR.BaseRef)
 	if err != nil {
-		e.logger.Warn("failed to fetch base appset file", "file", baseFilePath, "error", err)
+		slog.Warn("failed to fetch base appset file", "file", baseFilePath, "error", err)
 		// Only treat as added if this is NOT a rename — for renames, failing to fetch
 		// the old path is unexpected and should not silently classify apps as new.
 		if file.PreviousFilename == "" {
-			e.logger.Debug("treating as new appset file", "file", filePath)
+			slog.Debug("treating as new appset file", "file", filePath)
 			e.detectAppSetAddedFile(ctx, event, filePath, result)
 		}
 		return
@@ -437,19 +438,19 @@ func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.P
 
 	headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, filePath, event.PR.HeadRef)
 	if err != nil {
-		e.logger.Warn("failed to fetch head appset file", "file", filePath, "error", err)
+		slog.Warn("failed to fetch head appset file", "file", filePath, "error", err)
 		return
 	}
 
 	baseAppSets, err := argocd.ParseApplicationSetsFromYAML(baseContent, baseFilePath)
 	if err != nil {
-		e.logger.Warn("failed to parse base appsets", "file", baseFilePath, "error", err)
+		slog.Warn("failed to parse base appsets", "file", baseFilePath, "error", err)
 		baseAppSets = nil
 	}
 
 	headAppSets, err := argocd.ParseApplicationSetsFromYAML(headContent, filePath)
 	if err != nil {
-		e.logger.Warn("failed to parse head appsets", "file", filePath, "error", err)
+		slog.Warn("failed to parse head appsets", "file", filePath, "error", err)
 		return
 	}
 
@@ -468,7 +469,7 @@ func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.P
 		if _, exists := baseByName[name]; !exists {
 			apps, err := e.argocd.GenerateApplications(ctx, headAS.AppSet)
 			if err != nil {
-				e.logger.Warn("failed to generate apps for new appset in modified file",
+				slog.Warn("failed to generate apps for new appset in modified file",
 					"appset", name, "error", err)
 				continue
 			}
@@ -486,7 +487,7 @@ func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.P
 		if _, exists := headByName[name]; !exists {
 			apps, err := e.argocd.GetApplicationsByApplicationSet(ctx, name)
 			if err != nil {
-				e.logger.Warn("failed to get apps for removed appset in modified file",
+				slog.Warn("failed to get apps for removed appset in modified file",
 					"appset", name, "error", err)
 				continue
 			}
@@ -508,14 +509,14 @@ func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.P
 
 		headApps, err := e.argocd.GenerateApplications(ctx, headAS.AppSet)
 		if err != nil {
-			e.logger.Warn("failed to generate head apps for modified appset",
+			slog.Warn("failed to generate head apps for modified appset",
 				"appset", name, "error", err)
 			continue
 		}
 
 		baseApps, err := e.argocd.GenerateApplications(ctx, baseAS.AppSet)
 		if err != nil {
-			e.logger.Warn("failed to generate base apps for modified appset",
+			slog.Warn("failed to generate base apps for modified appset",
 				"appset", name, "error", err)
 			continue
 		}
@@ -557,7 +558,7 @@ func (e *Executor) detectAppSetModifiedFile(ctx context.Context, event *models.P
 
 		if len(mod.NewApps) > 0 || len(mod.RemovedApps) > 0 {
 			result.Modified = append(result.Modified, mod)
-			e.logger.Debug("applicationset generator changed",
+			slog.Debug("applicationset generator changed",
 				"appset", name,
 				"new_apps", len(mod.NewApps),
 				"removed_apps", len(mod.RemovedApps),
@@ -579,11 +580,11 @@ func containsAppByName(apps []models.Application, name string) bool {
 // verifyNewAppsExist checks which "new" apps already exist in ArgoCD (created outside the PR).
 func (e *Executor) verifyNewAppsExist(ctx context.Context, parsed *argocd.ParsedApplications) error {
 	if len(parsed.New) == 0 {
-		e.logger.Debug("no new applications to verify")
+		slog.Debug("no new applications to verify")
 		return nil
 	}
 
-	e.logger.Debug("verifying new applications against ArgoCD",
+	slog.Debug("verifying new applications against ArgoCD",
 		"new_apps_count", len(parsed.New),
 	)
 
@@ -601,7 +602,7 @@ func (e *Executor) verifyNewAppsExist(ctx context.Context, parsed *argocd.Parsed
 	var trulyNew []models.Application
 	for _, app := range parsed.New {
 		if existingByName[app.Name] {
-			e.logger.Debug("application marked as new already exists in ArgoCD",
+			slog.Debug("application marked as new already exists in ArgoCD",
 				"app", app.Name,
 				"reclassifying_to", "existing",
 			)
@@ -609,7 +610,7 @@ func (e *Executor) verifyNewAppsExist(ctx context.Context, parsed *argocd.Parsed
 			app.ChangeType = models.ApplicationExisting
 			parsed.Modified = append(parsed.Modified, app)
 		} else {
-			e.logger.Debug("application confirmed as truly new",
+			slog.Debug("application confirmed as truly new",
 				"app", app.Name,
 			)
 			trulyNew = append(trulyNew, app)
@@ -617,7 +618,7 @@ func (e *Executor) verifyNewAppsExist(ctx context.Context, parsed *argocd.Parsed
 	}
 	parsed.New = trulyNew
 
-	e.logger.Debug("new applications verification complete",
+	slog.Debug("new applications verification complete",
 		"truly_new_count", len(trulyNew),
 		"reclassified_to_modified", len(parsed.New)-len(trulyNew),
 	)
@@ -628,11 +629,11 @@ func (e *Executor) verifyNewAppsExist(ctx context.Context, parsed *argocd.Parsed
 // verifyDeletedAppsExist checks which "deleted" apps actually exist in ArgoCD.
 func (e *Executor) verifyDeletedAppsExist(ctx context.Context, parsed *argocd.ParsedApplications) error {
 	if len(parsed.Deleted) == 0 {
-		e.logger.Debug("no deleted applications to verify")
+		slog.Debug("no deleted applications to verify")
 		return nil
 	}
 
-	e.logger.Debug("verifying deleted applications exist in ArgoCD",
+	slog.Debug("verifying deleted applications exist in ArgoCD",
 		"deleted_apps_count", len(parsed.Deleted),
 	)
 
@@ -650,18 +651,18 @@ func (e *Executor) verifyDeletedAppsExist(ctx context.Context, parsed *argocd.Pa
 	var actuallyDeleted []models.Application
 	for _, app := range parsed.Deleted {
 		if existingByName[app.Name] {
-			e.logger.Debug("deleted application exists in ArgoCD",
+			slog.Debug("deleted application exists in ArgoCD",
 				"app", app.Name,
 			)
 			actuallyDeleted = append(actuallyDeleted, app)
 		} else {
-			e.logger.Debug("deleted application does not exist in ArgoCD (ignoring)",
+			slog.Debug("deleted application does not exist in ArgoCD (ignoring)",
 				"app", app.Name,
 			)
 		}
 	}
 
-	e.logger.Debug("deleted applications verification complete",
+	slog.Debug("deleted applications verification complete",
 		"confirmed_deleted", len(actuallyDeleted),
 		"ignored", len(parsed.Deleted)-len(actuallyDeleted),
 	)

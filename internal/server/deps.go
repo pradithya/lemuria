@@ -34,12 +34,11 @@ type Dependencies struct {
 	GitlabClient   *gitlab.Client
 	GithubExecutor *commands.Executor
 	GitlabExecutor *commands.Executor
-	Logger         *slog.Logger
 }
 
 // InitDependencies creates all shared dependencies (ArgoCD client, lock manager,
 // VCS clients, executors) from the given config.
-func InitDependencies(cfg *config.Config, logger *slog.Logger) (*Dependencies, error) {
+func InitDependencies(cfg *config.Config) (*Dependencies, error) {
 	argoClient, err := argocd.NewClient(cfg.ArgoCD)
 	if err != nil {
 		return nil, fmt.Errorf("creating Argo CD client: %w", err)
@@ -53,7 +52,6 @@ func InitDependencies(cfg *config.Config, logger *slog.Logger) (*Dependencies, e
 	deps := &Dependencies{
 		ArgoClient:  argoClient,
 		LockManager: lockMgr,
-		Logger:      logger,
 	}
 
 	if cfg.HasGitHub() {
@@ -62,8 +60,8 @@ func InitDependencies(cfg *config.Config, logger *slog.Logger) (*Dependencies, e
 			return nil, fmt.Errorf("creating GitHub client: %w", err)
 		}
 		deps.GithubClient = ghClient
-		deps.GithubExecutor = commands.NewExecutor(ghClient, argoClient, lockMgr, cfg, logger)
-		logger.Info("GitHub provider initialized")
+		deps.GithubExecutor = commands.NewExecutor(ghClient, argoClient, lockMgr, cfg)
+		slog.Info("GitHub provider initialized")
 	}
 
 	if cfg.HasGitLab() {
@@ -72,8 +70,8 @@ func InitDependencies(cfg *config.Config, logger *slog.Logger) (*Dependencies, e
 			return nil, fmt.Errorf("creating GitLab client: %w", err)
 		}
 		deps.GitlabClient = glClient
-		deps.GitlabExecutor = commands.NewExecutor(glClient, argoClient, lockMgr, cfg, logger)
-		logger.Info("GitLab provider initialized")
+		deps.GitlabExecutor = commands.NewExecutor(glClient, argoClient, lockMgr, cfg)
+		slog.Info("GitLab provider initialized")
 	}
 
 	return deps, nil
@@ -83,7 +81,7 @@ func InitDependencies(cfg *config.Config, logger *slog.Logger) (*Dependencies, e
 func (d *Dependencies) Close() error {
 	if d.LockManager != nil {
 		if err := d.LockManager.Close(); err != nil {
-			d.Logger.Error("error closing lock manager", "error", err)
+			slog.Error("error closing lock manager", "error", err)
 		}
 	}
 	return nil

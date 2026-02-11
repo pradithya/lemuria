@@ -36,7 +36,6 @@ type WebhookHandler struct {
 	gitlabExecutor *commands.Executor
 	githubClient   *github.Client
 	gitlabClient   *gitlab.Client
-	logger         *slog.Logger
 }
 
 // NewWebhookHandler creates a new webhook task handler.
@@ -46,7 +45,6 @@ func NewWebhookHandler(
 	gitlabExecutor *commands.Executor,
 	githubClient *github.Client,
 	gitlabClient *gitlab.Client,
-	logger *slog.Logger,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		config:         cfg,
@@ -54,7 +52,6 @@ func NewWebhookHandler(
 		gitlabExecutor: gitlabExecutor,
 		githubClient:   githubClient,
 		gitlabClient:   gitlabClient,
-		logger:         logger,
 	}
 }
 
@@ -70,7 +67,7 @@ func (h *WebhookHandler) ProcessTask(ctx context.Context, task *asynq.Task) erro
 		return fmt.Errorf("nil event in task payload: %w", asynq.SkipRetry)
 	}
 
-	h.logger.Info("processing webhook task",
+	slog.Info("processing webhook task",
 		"delivery_id", payload.DeliveryID,
 		"provider", event.Provider,
 		"type", event.Type,
@@ -150,7 +147,7 @@ func (h *WebhookHandler) handleComment(ctx context.Context, executor *commands.E
 		}
 	}
 
-	h.logger.Info("executing command",
+	slog.Info("executing command",
 		"command", cmd.Name,
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,

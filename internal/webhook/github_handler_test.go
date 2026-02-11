@@ -17,8 +17,6 @@ package webhook
 import (
 	"bytes"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -202,7 +200,6 @@ func TestGitHubHandlerHandle(t *testing.T) {
 
 			h := &GitHubHandler{
 				config:    cfg,
-				logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 				validator: NewValidator(secret),
 			}
 
@@ -245,7 +242,7 @@ func TestGitHubHandlerNilQueueClientFallsBackToGoroutine(t *testing.T) {
 	}
 
 	// Construct with nil queue client — goroutine fallback path
-	h := NewGitHubHandler(cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	h := NewGitHubHandler(cfg, nil, nil, nil)
 
 	if h.queueClient != nil {
 		t.Error("expected nil queueClient")
@@ -295,7 +292,7 @@ func TestGitHubHandlerWithQueueClient(t *testing.T) {
 
 	// Create a queue client (it won't actually connect to Redis in this test
 	// since enqueue will fail and fall back to goroutine)
-	qClient := queue.NewClient(cfg.Redis, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	qClient := queue.NewClient(cfg.Redis)
 	defer func() {
 		err := qClient.Close()
 		if err != nil {
@@ -303,7 +300,7 @@ func TestGitHubHandlerWithQueueClient(t *testing.T) {
 		}
 	}()
 
-	h := NewGitHubHandler(cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), qClient)
+	h := NewGitHubHandler(cfg, nil, nil, qClient)
 
 	if h.queueClient == nil {
 		t.Error("expected non-nil queueClient")

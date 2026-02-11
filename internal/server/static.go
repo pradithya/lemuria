@@ -16,6 +16,7 @@ package server
 
 import (
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -27,7 +28,7 @@ func (s *Server) setupStaticFiles() {
 	// Get the embedded static files
 	staticContent, err := fs.Sub(lemuria.StaticFS, "static")
 	if err != nil {
-		s.logger.Error("failed to access embedded static files", "error", err)
+		slog.Error("failed to access embedded static files", "error", err)
 		return
 	}
 
@@ -63,5 +64,5 @@ func (s *Server) setupStaticFiles() {
 		fileServer.ServeHTTP(w, r)
 	})
 
-	s.logger.Info("static file server configured")
+	slog.Info("static file server configured")
 }

@@ -84,8 +84,9 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: parseLogLevel(cfg.Server.LogLevel),
 	}))
+	slog.SetDefault(logger)
 
-	logger.Info("starting lemuria",
+	slog.Info("starting lemuria",
 		"version", version,
 		"commit", commit,
 		"mode", "server",
@@ -94,14 +95,14 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 	)
 
 	// Create and run server
-	srv, err := server.New(cfg, logger)
+	srv, err := server.New(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to create server: %w", err)
 	}
 
 	defer func() {
 		if err := srv.Close(); err != nil {
-			logger.Error("error closing server", "error", err)
+			slog.Error("error closing server", "error", err)
 		}
 	}()
 
@@ -112,9 +113,9 @@ func runServer(ctx context.Context, cmd *cli.Command) error {
 
 		metricsAddr := fmt.Sprintf(":%d", cfg.Server.MetricsPort)
 		go func() {
-			logger.Info("starting metrics server", "addr", metricsAddr)
+			slog.Info("starting metrics server", "addr", metricsAddr)
 			if err := http.ListenAndServe(metricsAddr, metricsMux); err != nil {
-				logger.Error("metrics server error", "error", err)
+				slog.Error("metrics server error", "error", err)
 			}
 		}()
 	}
@@ -137,8 +138,9 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: parseLogLevel(cfg.Server.LogLevel),
 	}))
+	slog.SetDefault(logger)
 
-	logger.Info("starting lemuria",
+	slog.Info("starting lemuria",
 		"version", version,
 		"commit", commit,
 		"mode", "worker",
@@ -146,13 +148,13 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 		"concurrency", cfg.Queue.Concurrency,
 	)
 
-	deps, err := server.InitDependencies(cfg, logger)
+	deps, err := server.InitDependencies(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize dependencies: %w", err)
 	}
 	defer func() {
 		if err := deps.Close(); err != nil {
-			logger.Error("error closing dependencies", "error", err)
+			slog.Error("error closing dependencies", "error", err)
 		}
 	}()
 
@@ -162,19 +164,18 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 		deps.GitlabExecutor,
 		deps.GithubClient,
 		deps.GitlabClient,
-		logger,
 	)
 
-	worker := queue.NewWorker(cfg.Redis, cfg.Queue, logger)
+	worker := queue.NewWorker(cfg.Redis, cfg.Queue)
 	worker.RegisterHandler(queue.TypeWebhookProcess, handler)
 
 	// Start Prometheus metrics server with queue collector
 	if cfg.Server.MetricsPort > 0 {
-		collector := queue.NewQueueCollector(cfg.Redis, logger)
+		collector := queue.NewQueueCollector(cfg.Redis)
 		defer func() {
 			err = collector.Close()
 			if err != nil {
-				logger.Error("error closing queue collector", "error", err)
+				slog.Error("error closing queue collector", "error", err)
 			}
 		}()
 
@@ -186,9 +187,9 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 
 		metricsAddr := fmt.Sprintf(":%d", cfg.Server.MetricsPort)
 		go func() {
-			logger.Info("starting metrics server", "addr", metricsAddr)
+			slog.Info("starting metrics server", "addr", metricsAddr)
 			if err := http.ListenAndServe(metricsAddr, metricsMux); err != nil {
-				logger.Error("metrics server error", "error", err)
+				slog.Error("metrics server error", "error", err)
 			}
 		}()
 	}

@@ -25,8 +25,8 @@ type slogAdapter struct {
 }
 
 // newSlogAdapter creates a new slog adapter for asynq.
-func newSlogAdapter(logger *slog.Logger) *slogAdapter {
-	return &slogAdapter{logger: logger.With("component", "asynq")}
+func newSlogAdapter() *slogAdapter {
+	return &slogAdapter{logger: slog.Default().With("component", "asynq")}
 }
 
 func (l *slogAdapter) Debug(args ...interface{}) {

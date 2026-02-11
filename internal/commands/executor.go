@@ -33,25 +33,23 @@ type Executor struct {
 	argocd   *argocd.Client
 	lock     lock.Manager
 	config   *config.Config
-	logger   *slog.Logger
 	renderer *diff.Renderer
 }
 
 // NewExecutor creates a new command executor.
-func NewExecutor(vcsClient VCSClient, argo *argocd.Client, lockMgr lock.Manager, cfg *config.Config, logger *slog.Logger) *Executor {
+func NewExecutor(vcsClient VCSClient, argo *argocd.Client, lockMgr lock.Manager, cfg *config.Config) *Executor {
 	return &Executor{
 		vcs:      vcsClient,
 		argocd:   argo,
 		lock:     lockMgr,
 		config:   cfg,
-		logger:   logger,
 		renderer: diff.NewRenderer(),
 	}
 }
 
 // Execute runs a command in the context of a PR event.
 func (e *Executor) Execute(ctx context.Context, cmd *Command, event *models.PREvent) error {
-	e.logger.Debug("executing command",
+	slog.Debug("executing command",
 		"command", cmd.Name,
 		"application", cmd.Application,
 		"all", cmd.All,
@@ -79,7 +77,7 @@ func (e *Executor) Execute(ctx context.Context, cmd *Command, event *models.PREv
 
 // RunAutoplan runs plan for all affected applications.
 func (e *Executor) RunAutoplan(ctx context.Context, event *models.PREvent) error {
-	e.logger.Debug("starting autoplan",
+	slog.Debug("starting autoplan",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 		"head_ref", event.PR.HeadRef,
@@ -93,7 +91,7 @@ func (e *Executor) RunAutoplan(ctx context.Context, event *models.PREvent) error
 
 // UnlockAll releases all locks held by a PR.
 func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
-	e.logger.Debug("unlocking all applications for PR",
+	slog.Debug("unlocking all applications for PR",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 	)
@@ -103,20 +101,20 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 		return fmt.Errorf("listing locks: %w", err)
 	}
 
-	e.logger.Debug("found locks to release",
+	slog.Debug("found locks to release",
 		"count", len(locks),
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 	)
 
 	for _, l := range locks {
-		e.logger.Debug("releasing lock",
+		slog.Debug("releasing lock",
 			"app", l.Application,
 			"repo", event.Repo.FullName,
 			"pr", event.PR.Number,
 		)
 		if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
-			e.logger.Error("failed to unlock application",
+			slog.Error("failed to unlock application",
 				"app", l.Application,
 				"error", err,
 			)
@@ -138,14 +136,14 @@ func (e *Executor) getRepoConfig(ctx context.Context, event *models.PREvent) *co
 
 	configData, err := e.vcs.GetRepoConfig(ctx, event.Repo.Owner, event.Repo.Name, ref)
 	if err != nil {
-		e.logger.Debug("failed to load .lemuria.yaml", "error", err, "ref", ref)
+		slog.Debug("failed to load .lemuria.yaml", "error", err, "ref", ref)
 		event.RepoConfigLoaded = true
 		return nil
 	}
 
 	repoConfig, err := config.LoadRepoConfig(configData)
 	if err != nil {
-		e.logger.Debug("failed to parse .lemuria.yaml", "error", err)
+		slog.Debug("failed to parse .lemuria.yaml", "error", err)
 		event.RepoConfigLoaded = true
 		return nil
 	}
@@ -162,7 +160,7 @@ func (e *Executor) getRepoConfig(ctx context.Context, event *models.PREvent) *co
 // - New applications being created in this PR
 // - Existing applications being deleted in this PR
 func (e *Executor) findAffectedApplications(ctx context.Context, event *models.PREvent) ([]models.Application, error) {
-	e.logger.Debug("finding affected applications",
+	slog.Debug("finding affected applications",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 		"head_ref", event.PR.HeadRef,
@@ -176,7 +174,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	}
 
 	filePaths := vcs.GetFilePaths(files)
-	e.logger.Debug("retrieved changed files",
+	slog.Debug("retrieved changed files",
 		"count", len(filePaths),
 		"files", filePaths,
 	)
@@ -184,13 +182,13 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	// Load repo config (cached)
 	repoConfig := e.getRepoConfig(ctx, event)
 	if repoConfig != nil {
-		e.logger.Debug("loaded .lemuria.yaml",
+		slog.Debug("loaded .lemuria.yaml",
 			"applications_count", len(repoConfig.Applications),
 			"autoplan", repoConfig.Autoplan,
 			"require_approval", repoConfig.RequireApproval,
 		)
 		for _, mapping := range repoConfig.Applications {
-			e.logger.Debug("repo config application mapping",
+			slog.Debug("repo config application mapping",
 				"app_name", mapping.Name,
 				"paths", mapping.Paths,
 				"applicationset", mapping.ApplicationSet,
@@ -203,7 +201,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	if err != nil {
 		return nil, fmt.Errorf("listing applications: %w", err)
 	}
-	e.logger.Debug("retrieved ArgoCD applications",
+	slog.Debug("retrieved ArgoCD applications",
 		"count", len(existingApps),
 	)
 
@@ -211,7 +209,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	existingByName := make(map[string]bool)
 	for _, app := range existingApps {
 		existingByName[app.Name] = true
-		e.logger.Debug("existing ArgoCD application",
+		slog.Debug("existing ArgoCD application",
 			"name", app.Name,
 			"repo_urls", app.GetRepoURLs(),
 			"path", app.Path,
@@ -222,13 +220,13 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	// Filter to existing applications affected by this PR
 	var affected []models.Application
 	repoURL := event.Repo.HTMLURL
-	e.logger.Debug("checking applications against repo URL",
+	slog.Debug("checking applications against repo URL",
 		"repo_url", repoURL,
 	)
 
 	for _, app := range existingApps {
 		isAffected := e.isAppAffected(app, repoURL, filePaths, repoConfig)
-		e.logger.Debug("checked if application is affected",
+		slog.Debug("checked if application is affected",
 			"app", app.Name,
 			"affected", isAffected,
 		)
@@ -238,7 +236,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		}
 	}
 
-	e.logger.Debug("found existing affected applications",
+	slog.Debug("found existing affected applications",
 		"count", len(affected),
 	)
 
@@ -255,13 +253,13 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 			if len(matched) == 0 {
 				continue
 			}
-			e.logger.Debug("applicationset mapping matched",
+			slog.Debug("applicationset mapping matched",
 				"applicationset", mapping.ApplicationSet,
 				"matched_files", len(matched),
 			)
 			expandedApps, err := e.expandApplicationSet(ctx, mapping.ApplicationSet)
 			if err != nil {
-				e.logger.Warn("failed to expand applicationset",
+				slog.Warn("failed to expand applicationset",
 					"applicationset", mapping.ApplicationSet,
 					"error", err,
 				)
@@ -279,9 +277,9 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	// Detect new and deleted applications from Application CR files
 	parsed, err := e.detectApplicationChanges(ctx, event)
 	if err != nil {
-		e.logger.Warn("failed to detect application changes from files", "error", err)
+		slog.Warn("failed to detect application changes from files", "error", err)
 	} else {
-		e.logger.Debug("detected application changes from files",
+		slog.Debug("detected application changes from files",
 			"new_count", len(parsed.New),
 			"modified_count", len(parsed.Modified),
 			"deleted_count", len(parsed.Deleted),
@@ -289,17 +287,17 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 
 		// Verify new apps don't already exist in ArgoCD
 		if err := e.verifyNewAppsExist(ctx, parsed); err != nil {
-			e.logger.Warn("failed to verify new apps", "error", err)
+			slog.Warn("failed to verify new apps", "error", err)
 		}
 
 		// Verify deleted apps actually exist in ArgoCD
 		if err := e.verifyDeletedAppsExist(ctx, parsed); err != nil {
-			e.logger.Warn("failed to verify deleted apps", "error", err)
+			slog.Warn("failed to verify deleted apps", "error", err)
 		}
 
 		// Add new applications (not yet in ArgoCD)
 		for _, app := range parsed.New {
-			e.logger.Debug("adding new application",
+			slog.Debug("adding new application",
 				"app", app.Name,
 				"source_file", app.SourceFile,
 			)
@@ -323,7 +321,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 				// (e.g., app uses external Helm chart but its CR was modified)
 				for _, existingApp := range existingApps {
 					if existingApp.Name == modApp.Name {
-						e.logger.Debug("adding modified application with external source",
+						slog.Debug("adding modified application with external source",
 							"app", modApp.Name,
 							"source_file", modApp.SourceFile,
 						)
@@ -339,9 +337,9 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		// Detect new/deleted applications from ApplicationSet CR changes
 		appSetChanges, appSetErr := e.detectApplicationSetChanges(ctx, event, files)
 		if appSetErr != nil {
-			e.logger.Warn("failed to detect applicationset changes from files", "error", appSetErr)
+			slog.Warn("failed to detect applicationset changes from files", "error", appSetErr)
 		} else {
-			e.logger.Debug("detected applicationset changes from files",
+			slog.Debug("detected applicationset changes from files",
 				"new_apps", len(appSetChanges.NewApps),
 				"deleted_apps", len(appSetChanges.DeletedApps),
 				"modified_appsets", len(appSetChanges.Modified),
@@ -365,7 +363,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 
 		// Add deleted applications
 		for _, app := range parsed.Deleted {
-			e.logger.Debug("processing deleted application",
+			slog.Debug("processing deleted application",
 				"app", app.Name,
 				"source_file", app.SourceFile,
 			)
@@ -385,11 +383,11 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		}
 	}
 
-	e.logger.Debug("final affected applications",
+	slog.Debug("final affected applications",
 		"count", len(affected),
 	)
 	for _, app := range affected {
-		e.logger.Debug("affected application",
+		slog.Debug("affected application",
 			"name", app.Name,
 			"change_type", app.ChangeType,
 			"source_file", app.SourceFile,
@@ -407,7 +405,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 	if repoConfig != nil {
 		for _, mapping := range repoConfig.Applications {
 			nameMatches := matchAppName(mapping.Name, app.Name)
-			e.logger.Debug("checking repo config mapping",
+			slog.Debug("checking repo config mapping",
 				"app", app.Name,
 				"mapping_name", mapping.Name,
 				"mapping_paths", mapping.Paths,
@@ -418,14 +416,14 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 					filesToChangedFiles(files),
 					mapping.Paths,
 				)
-				e.logger.Debug("path pattern matching result",
+				slog.Debug("path pattern matching result",
 					"app", app.Name,
 					"patterns", mapping.Paths,
 					"matched_files", matched,
 					"matched_count", len(matched),
 				)
 				if len(matched) > 0 {
-					e.logger.Debug("application affected via explicit .lemuria.yaml mapping",
+					slog.Debug("application affected via explicit .lemuria.yaml mapping",
 						"app", app.Name,
 					)
 					return true
@@ -440,7 +438,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 	for _, appRepo := range appRepos {
 		normalizedAppRepo := argocd.NormalizeRepoURL(appRepo)
 		normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
-		e.logger.Debug("comparing repo URLs",
+		slog.Debug("comparing repo URLs",
 			"app", app.Name,
 			"app_repo", appRepo,
 			"normalized_app_repo", normalizedAppRepo,
@@ -454,7 +452,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 	}
 
 	if !repoMatch {
-		e.logger.Debug("application does not reference target repo",
+		slog.Debug("application does not reference target repo",
 			"app", app.Name,
 			"app_repos", appRepos,
 			"target_repo", repoURL,
@@ -462,13 +460,13 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 		return false
 	}
 
-	e.logger.Debug("application references target repo",
+	slog.Debug("application references target repo",
 		"app", app.Name,
 	)
 
 	// Default: check if any changed file is in the app's path
 	if app.Path != "" {
-		e.logger.Debug("checking default path matching",
+		slog.Debug("checking default path matching",
 			"app", app.Name,
 			"app_path", app.Path,
 			"changed_files_count", len(files),
@@ -476,7 +474,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 		for _, f := range files {
 			contains := pathContains(app.Path, f)
 			if contains {
-				e.logger.Debug("file matches application path",
+				slog.Debug("file matches application path",
 					"app", app.Name,
 					"app_path", app.Path,
 					"file", f,
@@ -484,7 +482,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 				return true
 			}
 		}
-		e.logger.Debug("no files match application path",
+		slog.Debug("no files match application path",
 			"app", app.Name,
 			"app_path", app.Path,
 		)
@@ -527,7 +525,7 @@ func filesToChangedFiles(paths []string) []models.ChangedFile {
 
 // InvalidatePlanComments marks all existing plan comments on a PR as stale.
 func (e *Executor) InvalidatePlanComments(ctx context.Context, event *models.PREvent) error {
-	e.logger.Debug("invalidating old plan comments",
+	slog.Debug("invalidating old plan comments",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 	)

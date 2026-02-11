@@ -17,6 +17,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/org/lemuria/internal/argocd"
@@ -30,7 +31,7 @@ func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *mod
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
 		if err := e.vcs.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
-			e.logger.Warn("failed to add reaction", "error", err)
+			slog.Warn("failed to add reaction", "error", err)
 		}
 	}
 
@@ -152,7 +153,7 @@ func (e *Executor) rollbackApplication(ctx context.Context, cmd *Command, event 
 	// Release lock if rollback succeeds (unless dry-run)
 	if !cmd.DryRun && syncResult.Phase == models.SyncPhaseSucceeded {
 		if err := e.lock.Unlock(ctx, app.Name, event.Repo.FullName, event.PR.Number); err != nil {
-			e.logger.Warn("failed to release lock after rollback", "app", app.Name, "error", err)
+			slog.Warn("failed to release lock after rollback", "app", app.Name, "error", err)
 		}
 	}
 

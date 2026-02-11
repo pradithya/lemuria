@@ -46,7 +46,6 @@ type Server struct {
 	config     *config.Config
 	router     *chi.Mux
 	httpServer *http.Server
-	logger     *slog.Logger
 
 	// VCS providers and their handlers
 	githubClient         *github.Client
@@ -72,8 +71,8 @@ type Server struct {
 }
 
 // New creates a new Server instance.
-func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
-	deps, err := InitDependencies(cfg, logger)
+func New(cfg *config.Config) (*Server, error) {
+	deps, err := InitDependencies(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +80,6 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	s := &Server{
 		config:         cfg,
 		router:         chi.NewRouter(),
-		logger:         logger,
 		argoClient:     deps.ArgoClient,
 		lockManager:    deps.LockManager,
 		githubClient:   deps.GithubClient,
@@ -93,17 +91,17 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	// Initialize queue client if enabled
 	var qClient *queue.Client
 	if cfg.Queue.Enabled {
-		qClient = queue.NewClient(cfg.Redis, logger)
+		qClient = queue.NewClient(cfg.Redis)
 		s.queueClient = qClient
-		logger.Info("task queue enabled")
+		slog.Info("task queue enabled")
 	}
 
 	// Initialize webhook handlers
 	if cfg.HasGitHub() {
-		s.githubWebhookHandler = webhook.NewGitHubHandler(cfg, deps.GithubClient, deps.GithubExecutor, logger, qClient)
+		s.githubWebhookHandler = webhook.NewGitHubHandler(cfg, deps.GithubClient, deps.GithubExecutor, qClient)
 	}
 	if cfg.HasGitLab() {
-		s.gitlabWebhookHandler = webhook.NewGitLabHandler(cfg, deps.GitlabClient, deps.GitlabExecutor, logger, qClient)
+		s.gitlabWebhookHandler = webhook.NewGitLabHandler(cfg, deps.GitlabClient, deps.GitlabExecutor, qClient)
 	}
 
 	// Initialize auth components if enabled
@@ -117,7 +115,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	s.loginRateLimiter = NewRateLimiter(5, 1*time.Minute)
 
 	// Warn about insecure configuration values at startup
-	config.WarnInsecureConfig(cfg, logger)
+	config.WarnInsecureConfig(cfg)
 
 	s.setupMiddleware()
 	s.setupRoutes()
@@ -175,19 +173,18 @@ func (s *Server) setupAuth(cfg *config.Config) error {
 		s.roleResolver,
 		cfg.Auth.CookieDomain,
 		cfg.Auth.CookieSecure,
-		s.logger,
 	)
 
 	// Initialize GitHub OAuth provider if configured
 	if cfg.HasGitHubOAuth() {
 		s.githubOAuthProvider = auth.NewGitHubProvider(cfg.Auth.GitHub, cfg.Server.BaseURL)
-		s.logger.Info("GitHub OAuth provider initialized")
+		slog.Info("GitHub OAuth provider initialized")
 	}
 
 	// Initialize GitLab OAuth provider if configured
 	if cfg.HasGitLabOAuth() {
 		s.gitlabOAuthProvider = auth.NewGitLabProvider(cfg.Auth.GitLab, cfg.Server.BaseURL)
-		s.logger.Info("GitLab OAuth provider initialized")
+		slog.Info("GitLab OAuth provider initialized")
 	}
 
 	// Initialize OIDC provider if configured
@@ -197,16 +194,16 @@ func (s *Server) setupAuth(cfg *config.Config) error {
 			return fmt.Errorf("initializing OIDC provider: %w", err)
 		}
 		s.oidcProvider = oidcProvider
-		s.logger.Info("OIDC provider initialized", "name", cfg.Auth.OIDC.Name)
+		slog.Info("OIDC provider initialized", "name", cfg.Auth.OIDC.Name)
 	}
 
 	// Initialize basic auth provider if configured
 	if cfg.HasBasicAuth() {
 		s.basicAuthProvider = auth.NewBasicProvider(cfg.Auth.Basic)
-		s.logger.Info("basic auth provider initialized", "users", len(cfg.Auth.Basic.Users))
+		slog.Info("basic auth provider initialized", "users", len(cfg.Auth.Basic.Users))
 	}
 
-	s.logger.Info("authentication enabled")
+	slog.Info("authentication enabled")
 	return nil
 }
 
@@ -232,7 +229,7 @@ func (s *Server) requestLogger(next http.Handler) http.Handler {
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 
 		defer func() {
-			s.logger.Info("request completed",
+			slog.Info("request completed",
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", ww.Status(),
@@ -259,7 +256,7 @@ func (s *Server) Run() error {
 
 	// Start the server in a goroutine
 	go func() {
-		s.logger.Info("starting server",
+		slog.Info("starting server",
 			"host", s.config.Server.Host,
 			"port", s.config.Server.Port,
 		)
@@ -273,19 +270,19 @@ func (s *Server) Run() error {
 	case err := <-serverErr:
 		return fmt.Errorf("server error: %w", err)
 	case sig := <-shutdown:
-		s.logger.Info("shutdown signal received", "signal", sig)
+		slog.Info("shutdown signal received", "signal", sig)
 	}
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	s.logger.Info("shutting down server")
+	slog.Info("shutting down server")
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("server shutdown: %w", err)
 	}
 
-	s.logger.Info("server stopped")
+	slog.Info("server stopped")
 	return nil
 }
 
@@ -296,17 +293,17 @@ func (s *Server) Close() error {
 	}
 	if s.queueClient != nil {
 		if err := s.queueClient.Close(); err != nil {
-			s.logger.Error("error closing queue client", "error", err)
+			slog.Error("error closing queue client", "error", err)
 		}
 	}
 	if s.lockManager != nil {
 		if err := s.lockManager.Close(); err != nil {
-			s.logger.Error("error closing lock manager", "error", err)
+			slog.Error("error closing lock manager", "error", err)
 		}
 	}
 	if s.redisClient != nil {
 		if err := s.redisClient.Close(); err != nil {
-			s.logger.Error("error closing auth redis client", "error", err)
+			slog.Error("error closing auth redis client", "error", err)
 		}
 	}
 	return nil
@@ -320,10 +317,10 @@ func (s *Server) cleanupStaleTempApps() {
 	tempMgr := argocd.NewTempAppManager(s.argoClient)
 	deleted, err := tempMgr.CleanupStaleApps(ctx, 1*time.Hour)
 	if err != nil {
-		s.logger.Warn("failed to cleanup stale temp apps", "error", err)
+		slog.Warn("failed to cleanup stale temp apps", "error", err)
 		return
 	}
 	if deleted > 0 {
-		s.logger.Info("cleaned up stale temp apps", "count", deleted)
+		slog.Info("cleaned up stale temp apps", "count", deleted)
 	}
 }

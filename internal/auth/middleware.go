@@ -35,7 +35,6 @@ type Middleware struct {
 	roleResolver *ConfigRoleResolver
 	cookieDomain string
 	cookieSecure bool
-	logger       *slog.Logger
 }
 
 // NewMiddleware creates a new auth middleware.
@@ -44,14 +43,12 @@ func NewMiddleware(
 	roleResolver *ConfigRoleResolver,
 	cookieDomain string,
 	cookieSecure bool,
-	logger *slog.Logger,
 ) *Middleware {
 	return &Middleware{
 		sessionStore: sessionStore,
 		roleResolver: roleResolver,
 		cookieDomain: cookieDomain,
 		cookieSecure: cookieSecure,
-		logger:       logger,
 	}
 }
 
@@ -132,7 +129,7 @@ func (m *Middleware) getSessionFromRequest(r *http.Request) *models.Session {
 	if err == nil && cookie.Value != "" {
 		session, err := m.sessionStore.Get(r.Context(), cookie.Value)
 		if err != nil {
-			m.logger.Debug("failed to get session from cookie", "error", err)
+			slog.Debug("failed to get session from cookie", "error", err)
 			return nil
 		}
 		return session
@@ -144,7 +141,7 @@ func (m *Middleware) getSessionFromRequest(r *http.Request) *models.Session {
 		token := strings.TrimPrefix(authHeader, "Bearer ")
 		session, err := m.sessionStore.Get(r.Context(), token)
 		if err != nil {
-			m.logger.Debug("failed to get session from bearer token", "error", err)
+			slog.Debug("failed to get session from bearer token", "error", err)
 			return nil
 		}
 		return session
@@ -218,7 +215,7 @@ func (m *Middleware) respondUnauthorized(w http.ResponseWriter, r *http.Request)
 			"message":  "Authentication required",
 			"loginUrl": "/auth/providers",
 		}); err != nil {
-			m.logger.Warn("failed to encode unauthorized response", "error", err)
+			slog.Warn("failed to encode unauthorized response", "error", err)
 		}
 		return
 	}
@@ -235,7 +232,7 @@ func (m *Middleware) respondForbidden(w http.ResponseWriter, r *http.Request, me
 		"error":   "forbidden",
 		"message": message,
 	}); err != nil {
-		m.logger.Warn("failed to encode forbidden response", "error", err)
+		slog.Warn("failed to encode forbidden response", "error", err)
 	}
 }
 

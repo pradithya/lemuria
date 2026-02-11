@@ -17,6 +17,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -29,7 +30,7 @@ import (
 
 // executePlan runs the plan command.
 func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.PREvent) error {
-	e.logger.Debug("executing plan command",
+	slog.Debug("executing plan command",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 		"specific_app", cmd.Application,
@@ -39,13 +40,13 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
 		if err := e.vcs.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
-			e.logger.Warn("failed to add reaction", "error", err)
+			slog.Warn("failed to add reaction", "error", err)
 		}
 	}
 
 	// Invalidate old plan comments before generating new ones
 	if err := e.vcs.InvalidatePlanComments(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number); err != nil {
-		e.logger.Warn("failed to invalidate old plan comments", "error", err)
+		slog.Warn("failed to invalidate old plan comments", "error", err)
 	}
 
 	// Find affected applications
@@ -54,18 +55,18 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 
 	if cmd.Application != "" {
 		// Specific application requested — try as Application first, then ApplicationSet
-		e.logger.Debug("fetching specific application",
+		slog.Debug("fetching specific application",
 			"app", cmd.Application,
 		)
 		app, appErr := e.argocd.GetApplication(ctx, cmd.Application)
 		if appErr != nil {
-			e.logger.Debug("application not found, trying as applicationset",
+			slog.Debug("application not found, trying as applicationset",
 				"app", cmd.Application,
 				"error", appErr,
 			)
 			expandedApps, appSetErr := e.expandApplicationSet(ctx, cmd.Application)
 			if appSetErr != nil {
-				e.logger.Debug("applicationset also not found",
+				slog.Debug("applicationset also not found",
 					"app", cmd.Application,
 					"error", appSetErr,
 				)
@@ -80,12 +81,12 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 	} else if cmd.All {
 		// All applications for this repo
 		repoURL := event.Repo.HTMLURL
-		e.logger.Debug("finding all applications for repo",
+		slog.Debug("finding all applications for repo",
 			"repo_url", repoURL,
 		)
 		apps, err = e.argocd.FindApplicationsByRepo(ctx, repoURL)
 		if err != nil {
-			e.logger.Debug("failed to find applications by repo",
+			slog.Debug("failed to find applications by repo",
 				"repo_url", repoURL,
 				"error", err,
 			)
@@ -93,29 +94,29 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 		}
 	} else {
 		// Auto-detect affected applications
-		e.logger.Debug("auto-detecting affected applications")
+		slog.Debug("auto-detecting affected applications")
 		apps, err = e.findAffectedApplications(ctx, event)
 		if err != nil {
-			e.logger.Debug("failed to find affected applications",
+			slog.Debug("failed to find affected applications",
 				"error", err,
 			)
 			return e.postError(ctx, event, err)
 		}
 	}
 
-	e.logger.Debug("found applications to plan",
+	slog.Debug("found applications to plan",
 		"count", len(apps),
 	)
 
 	if len(apps) == 0 {
-		e.logger.Debug("no applications affected by PR")
+		slog.Debug("no applications affected by PR")
 		return e.postComment(ctx, event, "", "## Lemuria Plan\n\nNo applications affected by this PR.")
 	}
 
 	// Process each application
 	var results []appPlanResult
 	for _, app := range apps {
-		e.logger.Debug("planning application",
+		slog.Debug("planning application",
 			"app", app.Name,
 			"change_type", app.ChangeType,
 		)
@@ -123,7 +124,7 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 		results = append(results, result)
 	}
 
-	e.logger.Debug("completed planning all applications",
+	slog.Debug("completed planning all applications",
 		"results_count", len(results),
 	)
 
@@ -148,7 +149,7 @@ type appPlanResult struct {
 
 // planApplication generates a diff for a single application.
 func (e *Executor) planApplication(ctx context.Context, app models.Application, event *models.PREvent) appPlanResult {
-	e.logger.Debug("starting plan for application",
+	slog.Debug("starting plan for application",
 		"app", app.Name,
 		"change_type", app.ChangeType,
 		"source_file", app.SourceFile,
@@ -165,7 +166,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 
 	// Handle new applications (not yet in ArgoCD)
 	if app.IsNew() {
-		e.logger.Debug("application is new (not yet in ArgoCD)",
+		slog.Debug("application is new (not yet in ArgoCD)",
 			"app", app.Name,
 		)
 		result.LockStatus = "New application"
@@ -174,7 +175,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 
 	// Handle deleted applications
 	if app.IsDeleted() {
-		e.logger.Debug("application will be deleted",
+		slog.Debug("application will be deleted",
 			"app", app.Name,
 		)
 		result.LockStatus = "Will be deleted"
@@ -184,14 +185,14 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 
 	// Check if auto-sync is enabled
 	if app.HasAutoSync() {
-		e.logger.Debug("application has auto-sync enabled",
+		slog.Debug("application has auto-sync enabled",
 			"app", app.Name,
 		)
 		result.Warning = "Auto-sync is enabled. Disable auto-sync before using Lemuria to prevent conflicts."
 	}
 
 	// Try to acquire lock
-	e.logger.Debug("attempting to acquire lock",
+	slog.Debug("attempting to acquire lock",
 		"app", app.Name,
 		"pr", event.PR.Number,
 		"repo", event.Repo.FullName,
@@ -206,7 +207,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		User:        event.Sender.Login,
 	})
 	if err != nil {
-		e.logger.Debug("failed to acquire lock",
+		slog.Debug("failed to acquire lock",
 			"app", app.Name,
 			"error", err,
 		)
@@ -215,7 +216,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	}
 
 	if !lockResult.Acquired {
-		e.logger.Debug("lock held by another PR",
+		slog.Debug("lock held by another PR",
 			"app", app.Name,
 			"held_by_pr", lockResult.HeldBy.PRNumber,
 			"held_by_user", lockResult.HeldBy.User,
@@ -224,7 +225,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		return result
 	}
 
-	e.logger.Debug("lock acquired",
+	slog.Debug("lock acquired",
 		"app", app.Name,
 		"pr", event.PR.Number,
 	)
@@ -246,7 +247,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	// so the diff reflects inline changes (e.g., Helm values in the Application CR)
 	var baseAppSpec, headAppSpec *v1alpha1.Application
 	if app.SourceFile != "" {
-		e.logger.Debug("reading application spec from git branches",
+		slog.Debug("reading application spec from git branches",
 			"app", app.Name,
 			"source_file", app.SourceFile,
 		)
@@ -254,7 +255,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		// Read base branch version
 		baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.BaseRef)
 		if err != nil {
-			e.logger.Warn("failed to read application CR from base branch, falling back to live spec",
+			slog.Warn("failed to read application CR from base branch, falling back to live spec",
 				"app", app.Name,
 				"source_file", app.SourceFile,
 				"base_ref", event.PR.BaseRef,
@@ -263,7 +264,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		} else {
 			parsed, parseErr := argocd.ParseRawApplicationFromYAML(baseContent, app.Name)
 			if parseErr != nil {
-				e.logger.Warn("failed to parse application CR from base branch, falling back to live spec",
+				slog.Warn("failed to parse application CR from base branch, falling back to live spec",
 					"app", app.Name,
 					"error", parseErr,
 				)
@@ -275,7 +276,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		// Read head branch version
 		headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.HeadRef)
 		if err != nil {
-			e.logger.Warn("failed to read application CR from head branch, falling back to live spec",
+			slog.Warn("failed to read application CR from head branch, falling back to live spec",
 				"app", app.Name,
 				"source_file", app.SourceFile,
 				"head_ref", event.PR.HeadRef,
@@ -284,7 +285,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		} else {
 			parsed, parseErr := argocd.ParseRawApplicationFromYAML(headContent, app.Name)
 			if parseErr != nil {
-				e.logger.Warn("failed to parse application CR from head branch, falling back to live spec",
+				slog.Warn("failed to parse application CR from head branch, falling back to live spec",
 					"app", app.Name,
 					"error", parseErr,
 				)
@@ -294,7 +295,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		}
 	}
 
-	e.logger.Debug("getting application diff",
+	slog.Debug("getting application diff",
 		"app", app.Name,
 		"mode", diffMode,
 		"base_branch", event.PR.BaseRef,
@@ -326,11 +327,11 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	// This is stored regardless of diff outcome so that sync can proceed
 	// even if the diff fails (e.g., temp app timeout for external Helm charts).
 	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
-		e.logger.Warn("failed to store plan", "app", app.Name, "error", err)
+		slog.Warn("failed to store plan", "app", app.Name, "error", err)
 	}
 
 	if err != nil {
-		e.logger.Debug("failed to generate diff",
+		slog.Debug("failed to generate diff",
 			"app", app.Name,
 			"error", err,
 		)
@@ -341,7 +342,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	result.Diffs = diffs
 	result.Summary = argocd.SummarizeDiffs(diffs)
 
-	e.logger.Debug("diff generated successfully",
+	slog.Debug("diff generated successfully",
 		"app", app.Name,
 		"diffs_count", len(diffs),
 		"created", result.Summary.Created,

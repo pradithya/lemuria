@@ -33,7 +33,6 @@ type GitHubHandler struct {
 	config       *config.Config
 	githubClient *github.Client
 	cmdExecutor  *commands.Executor
-	logger       *slog.Logger
 	validator    *Validator
 	queueClient  *queue.Client
 }
@@ -41,12 +40,11 @@ type GitHubHandler struct {
 // NewGitHubHandler creates a new GitHub webhook handler.
 // If queueClient is non-nil, events are enqueued for async processing instead of
 // being handled in a fire-and-forget goroutine.
-func NewGitHubHandler(cfg *config.Config, gh *github.Client, executor *commands.Executor, logger *slog.Logger, queueClient *queue.Client) *GitHubHandler {
+func NewGitHubHandler(cfg *config.Config, gh *github.Client, executor *commands.Executor, queueClient *queue.Client) *GitHubHandler {
 	return &GitHubHandler{
 		config:       cfg,
 		githubClient: gh,
 		cmdExecutor:  executor,
-		logger:       logger,
 		validator:    NewValidator(cfg.GitHub.WebhookSecret),
 		queueClient:  queueClient,
 	}
@@ -57,7 +55,7 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Read request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		h.logger.Error("failed to read request body", "error", err)
+		slog.Error("failed to read request body", "error", err)
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
@@ -65,7 +63,7 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Validate webhook signature
 	signature := r.Header.Get("X-Hub-Signature-256")
 	if !h.validator.Validate(body, signature) {
-		h.logger.Warn("invalid webhook signature")
+		slog.Warn("invalid webhook signature")
 		http.Error(w, "invalid signature", http.StatusUnauthorized)
 		return
 	}
@@ -74,7 +72,7 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	eventType := r.Header.Get("X-GitHub-Event")
 	deliveryID := r.Header.Get("X-GitHub-Delivery")
 
-	h.logger.Info("received webhook",
+	slog.Info("received webhook",
 		"event_type", eventType,
 		"delivery_id", deliveryID,
 	)
@@ -82,7 +80,7 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Parse and handle the event
 	event, err := ParseGitHubEvent(eventType, body)
 	if err != nil {
-		h.logger.Error("failed to parse event", "error", err)
+		slog.Error("failed to parse event", "error", err)
 		http.Error(w, "failed to parse event", http.StatusBadRequest)
 		return
 	}
@@ -91,17 +89,17 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		// Event type not handled
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ignored"}); err != nil {
-			h.logger.Warn("failed to encode response", "error", err)
+			slog.Warn("failed to encode response", "error", err)
 		}
 		return
 	}
 
 	// Check if repo is allowed
 	if !h.config.IsRepoAllowed(event.Repo.FullName) {
-		h.logger.Info("repository not in allowlist", "repo", event.Repo.FullName)
+		slog.Info("repository not in allowlist", "repo", event.Repo.FullName)
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "repo not allowed"}); err != nil {
-			h.logger.Warn("failed to encode response", "error", err)
+			slog.Warn("failed to encode response", "error", err)
 		}
 		return
 	}
@@ -109,7 +107,7 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Process the event asynchronously
 	if h.queueClient != nil {
 		if err := h.queueClient.EnqueueWebhook(deliveryID, event); err != nil {
-			h.logger.Error("failed to enqueue webhook", "error", err, "delivery_id", deliveryID)
+			slog.Error("failed to enqueue webhook", "error", err, "delivery_id", deliveryID)
 			go h.processEvent(context.Background(), event) // fallback
 		}
 	} else {
@@ -118,13 +116,13 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "accepted"}); err != nil {
-		h.logger.Warn("failed to encode response", "error", err)
+		slog.Warn("failed to encode response", "error", err)
 	}
 }
 
 // processEvent handles the webhook event based on its type.
 func (h *GitHubHandler) processEvent(ctx context.Context, event *models.PREvent) {
-	h.logger.Info("processing event",
+	slog.Info("processing event",
 		"type", event.Type,
 		"action", event.Action,
 		"repo", event.Repo.FullName,
@@ -152,14 +150,14 @@ func (h *GitHubHandler) processEvent(ctx context.Context, event *models.PREvent)
 
 // handlePRClosed releases all locks held by the closed PR.
 func (h *GitHubHandler) handlePRClosed(ctx context.Context, event *models.PREvent) {
-	h.logger.Info("PR closed, releasing locks",
+	slog.Info("PR closed, releasing locks",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 		"merged", event.PR.Merged,
 	)
 
 	if err := h.cmdExecutor.UnlockAll(ctx, event); err != nil {
-		h.logger.Error("failed to release locks",
+		slog.Error("failed to release locks",
 			"error", err,
 			"repo", event.Repo.FullName,
 			"pr", event.PR.Number,
@@ -169,13 +167,13 @@ func (h *GitHubHandler) handlePRClosed(ctx context.Context, event *models.PREven
 
 // handleAutoplan runs plan for affected applications.
 func (h *GitHubHandler) handleAutoplan(ctx context.Context, event *models.PREvent) {
-	h.logger.Info("running autoplan",
+	slog.Info("running autoplan",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 	)
 
 	if err := h.cmdExecutor.RunAutoplan(ctx, event); err != nil {
-		h.logger.Error("autoplan failed",
+		slog.Error("autoplan failed",
 			"error", err,
 			"repo", event.Repo.FullName,
 			"pr", event.PR.Number,
@@ -192,7 +190,7 @@ func (h *GitHubHandler) handleComment(ctx context.Context, event *models.PREvent
 
 	cmd, err := commands.Parse(event.Comment.Body)
 	if err != nil {
-		h.logger.Debug("not a lemuria command", "error", err)
+		slog.Debug("not a lemuria command", "error", err)
 		return
 	}
 
@@ -200,7 +198,7 @@ func (h *GitHubHandler) handleComment(ctx context.Context, event *models.PREvent
 	// etc. are missing. Fetch the full PR details before executing commands.
 	if event.PR.HeadRef == "" || event.PR.BaseRef == "" {
 		if err := h.enrichPRInfo(ctx, event); err != nil {
-			h.logger.Error("failed to fetch PR details",
+			slog.Error("failed to fetch PR details",
 				"error", err,
 				"repo", event.Repo.FullName,
 				"pr", event.PR.Number,
@@ -209,7 +207,7 @@ func (h *GitHubHandler) handleComment(ctx context.Context, event *models.PREvent
 		}
 	}
 
-	h.logger.Info("executing command",
+	slog.Info("executing command",
 		"command", cmd.Name,
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
@@ -217,7 +215,7 @@ func (h *GitHubHandler) handleComment(ctx context.Context, event *models.PREvent
 	)
 
 	if err := h.cmdExecutor.Execute(ctx, cmd, event); err != nil {
-		h.logger.Error("command execution failed",
+		slog.Error("command execution failed",
 			"error", err,
 			"command", cmd.Name,
 			"repo", event.Repo.FullName,
@@ -245,7 +243,7 @@ func (h *GitHubHandler) enrichPRInfo(ctx context.Context, event *models.PREvent)
 	event.PR.Draft = pr.GetDraft()
 	event.PR.Merged = pr.GetMerged()
 
-	h.logger.Debug("enriched PR info from API",
+	slog.Debug("enriched PR info from API",
 		"pr", event.PR.Number,
 		"head_ref", event.PR.HeadRef,
 		"base_ref", event.PR.BaseRef,

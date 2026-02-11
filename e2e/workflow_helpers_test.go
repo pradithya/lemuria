@@ -15,8 +15,6 @@
 package e2e
 
 import (
-	"log/slog"
-	"os"
 	"time"
 
 	"github.com/org/lemuria/internal/commands"
@@ -39,8 +37,7 @@ func newTestExecutor(gh *MockVCSClient, cfg *config.Config) *commands.Executor {
 		}
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	return commands.NewExecutor(gh, argoClient, lockManager, cfg, logger)
+	return commands.NewExecutor(gh, argoClient, lockManager, cfg)
 }
 
 // newPREvent creates a PREvent for testing (defaults to GitHub provider).

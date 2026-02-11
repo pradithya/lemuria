@@ -36,19 +36,17 @@ type GitLabHandler struct {
 	config       *config.Config
 	gitlabClient *gitlab.Client
 	cmdExecutor  *commands.Executor
-	logger       *slog.Logger
 	queueClient  *queue.Client
 }
 
 // NewGitLabHandler creates a new GitLab webhook handler.
 // If queueClient is non-nil, events are enqueued for async processing instead of
 // being handled in a fire-and-forget goroutine.
-func NewGitLabHandler(cfg *config.Config, gl *gitlab.Client, executor *commands.Executor, logger *slog.Logger, queueClient *queue.Client) *GitLabHandler {
+func NewGitLabHandler(cfg *config.Config, gl *gitlab.Client, executor *commands.Executor, queueClient *queue.Client) *GitLabHandler {
 	return &GitLabHandler{
 		config:       cfg,
 		gitlabClient: gl,
 		cmdExecutor:  executor,
-		logger:       logger,
 		queueClient:  queueClient,
 	}
 }
@@ -58,7 +56,7 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Read request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		h.logger.Error("failed to read request body", "error", err)
+		slog.Error("failed to read request body", "error", err)
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
@@ -66,7 +64,7 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Validate webhook secret token
 	token := r.Header.Get("X-Gitlab-Token")
 	if !h.validateToken(token) {
-		h.logger.Warn("invalid webhook token")
+		slog.Warn("invalid webhook token")
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
@@ -74,14 +72,14 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	// Determine event type from header
 	eventType := r.Header.Get("X-Gitlab-Event")
 
-	h.logger.Info("received gitlab webhook",
+	slog.Info("received gitlab webhook",
 		"event_type", eventType,
 	)
 
 	// Parse and handle the event
 	event, err := ParseGitLabEvent(eventType, body)
 	if err != nil {
-		h.logger.Error("failed to parse event", "error", err)
+		slog.Error("failed to parse event", "error", err)
 		http.Error(w, "failed to parse event", http.StatusBadRequest)
 		return
 	}
@@ -90,17 +88,17 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		// Event type not handled
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ignored"}); err != nil {
-			h.logger.Warn("failed to encode response", "error", err)
+			slog.Warn("failed to encode response", "error", err)
 		}
 		return
 	}
 
 	// Check if repo is allowed
 	if !h.config.IsRepoAllowed(event.Repo.FullName) {
-		h.logger.Info("repository not in allowlist", "repo", event.Repo.FullName)
+		slog.Info("repository not in allowlist", "repo", event.Repo.FullName)
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "repo not allowed"}); err != nil {
-			h.logger.Warn("failed to encode response", "error", err)
+			slog.Warn("failed to encode response", "error", err)
 		}
 		return
 	}
@@ -112,7 +110,7 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 			deliveryID = fmt.Sprintf("gl-%s-%d-%d", event.Repo.FullName, event.PR.Number, event.ReceivedAt.UnixNano())
 		}
 		if err := h.queueClient.EnqueueWebhook(deliveryID, event); err != nil {
-			h.logger.Error("failed to enqueue webhook", "error", err, "delivery_id", deliveryID)
+			slog.Error("failed to enqueue webhook", "error", err, "delivery_id", deliveryID)
 			go h.processEvent(context.Background(), event) // fallback
 		}
 	} else {
@@ -121,7 +119,7 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "accepted"}); err != nil {
-		h.logger.Warn("failed to encode response", "error", err)
+		slog.Warn("failed to encode response", "error", err)
 	}
 }
 
@@ -137,7 +135,7 @@ func (h *GitLabHandler) validateToken(token string) bool {
 
 // processEvent handles the webhook event based on its type.
 func (h *GitLabHandler) processEvent(ctx context.Context, event *models.PREvent) {
-	h.logger.Info("processing gitlab event",
+	slog.Info("processing gitlab event",
 		"type", event.Type,
 		"action", event.Action,
 		"repo", event.Repo.FullName,
@@ -165,14 +163,14 @@ func (h *GitLabHandler) processEvent(ctx context.Context, event *models.PREvent)
 
 // handlePRClosed releases all locks held by the closed MR.
 func (h *GitLabHandler) handlePRClosed(ctx context.Context, event *models.PREvent) {
-	h.logger.Info("MR closed, releasing locks",
+	slog.Info("MR closed, releasing locks",
 		"repo", event.Repo.FullName,
 		"mr", event.PR.Number,
 		"merged", event.PR.Merged,
 	)
 
 	if err := h.cmdExecutor.UnlockAll(ctx, event); err != nil {
-		h.logger.Error("failed to release locks",
+		slog.Error("failed to release locks",
 			"error", err,
 			"repo", event.Repo.FullName,
 			"mr", event.PR.Number,
@@ -182,13 +180,13 @@ func (h *GitLabHandler) handlePRClosed(ctx context.Context, event *models.PREven
 
 // handleAutoplan runs plan for affected applications.
 func (h *GitLabHandler) handleAutoplan(ctx context.Context, event *models.PREvent) {
-	h.logger.Info("running autoplan",
+	slog.Info("running autoplan",
 		"repo", event.Repo.FullName,
 		"mr", event.PR.Number,
 	)
 
 	if err := h.cmdExecutor.RunAutoplan(ctx, event); err != nil {
-		h.logger.Error("autoplan failed",
+		slog.Error("autoplan failed",
 			"error", err,
 			"repo", event.Repo.FullName,
 			"mr", event.PR.Number,
@@ -205,14 +203,14 @@ func (h *GitLabHandler) handleComment(ctx context.Context, event *models.PREvent
 
 	cmd, err := commands.Parse(event.Comment.Body)
 	if err != nil {
-		h.logger.Debug("not a lemuria command", "error", err)
+		slog.Debug("not a lemuria command", "error", err)
 		return
 	}
 
 	// Note webhooks may not include full MR details — fetch them if needed.
 	if event.PR.HeadRef == "" || event.PR.BaseRef == "" {
 		if err := h.enrichMRInfo(ctx, event); err != nil {
-			h.logger.Error("failed to fetch MR details",
+			slog.Error("failed to fetch MR details",
 				"error", err,
 				"repo", event.Repo.FullName,
 				"mr", event.PR.Number,
@@ -221,7 +219,7 @@ func (h *GitLabHandler) handleComment(ctx context.Context, event *models.PREvent
 		}
 	}
 
-	h.logger.Info("executing command",
+	slog.Info("executing command",
 		"command", cmd.Name,
 		"repo", event.Repo.FullName,
 		"mr", event.PR.Number,
@@ -229,7 +227,7 @@ func (h *GitLabHandler) handleComment(ctx context.Context, event *models.PREvent
 	)
 
 	if err := h.cmdExecutor.Execute(ctx, cmd, event); err != nil {
-		h.logger.Error("command execution failed",
+		slog.Error("command execution failed",
 			"error", err,
 			"command", cmd.Name,
 			"repo", event.Repo.FullName,
@@ -253,7 +251,7 @@ func (h *GitLabHandler) enrichMRInfo(ctx context.Context, event *models.PREvent)
 	event.PR.Draft = mr.Draft
 	event.PR.Merged = mr.Merged
 
-	h.logger.Debug("enriched MR info from API",
+	slog.Debug("enriched MR info from API",
 		"mr", event.PR.Number,
 		"head_ref", event.PR.HeadRef,
 		"base_ref", event.PR.BaseRef,

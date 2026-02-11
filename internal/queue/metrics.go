@@ -29,7 +29,6 @@ const metricsSubsystem = "queue"
 // QueueCollector implements prometheus.Collector to expose asynq queue metrics.
 type QueueCollector struct {
 	inspector *asynq.Inspector
-	logger    *slog.Logger
 
 	// Gauges
 	size      *prometheus.Desc
@@ -47,7 +46,7 @@ type QueueCollector struct {
 }
 
 // NewQueueCollector creates a Prometheus collector backed by an asynq Inspector.
-func NewQueueCollector(redisCfg config.RedisConfig, logger *slog.Logger) *QueueCollector {
+func NewQueueCollector(redisCfg config.RedisConfig) *QueueCollector {
 	inspector := asynq.NewInspector(asynq.RedisClientOpt{
 		Addr:     redisCfg.Address,
 		Password: redisCfg.Password,
@@ -58,7 +57,6 @@ func NewQueueCollector(redisCfg config.RedisConfig, logger *slog.Logger) *QueueC
 
 	return &QueueCollector{
 		inspector: inspector,
-		logger:    logger,
 		size: prometheus.NewDesc(
 			prometheus.BuildFQName(metricsNamespace, metricsSubsystem, "size"),
 			"Total number of tasks in the queue",
@@ -130,14 +128,14 @@ func (c *QueueCollector) Describe(ch chan<- *prometheus.Desc) {
 func (c *QueueCollector) Collect(ch chan<- prometheus.Metric) {
 	queues, err := c.inspector.Queues()
 	if err != nil {
-		c.logger.Warn("failed to list queues for metrics", "error", err)
+		slog.Warn("failed to list queues for metrics", "error", err)
 		return
 	}
 
 	for _, q := range queues {
 		info, err := c.inspector.GetQueueInfo(q)
 		if err != nil {
-			c.logger.Warn("failed to get queue info for metrics", "queue", q, "error", err)
+			slog.Warn("failed to get queue info for metrics", "queue", q, "error", err)
 			continue
 		}
 

@@ -21,22 +21,26 @@ import (
 	"testing"
 )
 
-// newCaptureLogger creates a *slog.Logger that writes to the returned buffer
-// so tests can inspect emitted log messages.
-func newCaptureLogger() (*slog.Logger, *bytes.Buffer) {
+// setupCaptureLogger sets the global default logger to one that writes to the
+// returned buffer, so tests can inspect emitted log messages. Call the returned
+// cleanup function to restore the previous default.
+func setupCaptureLogger() (*bytes.Buffer, func()) {
 	var buf bytes.Buffer
 	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
-	return slog.New(handler), &buf
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	return &buf, func() { slog.SetDefault(prev) }
 }
 
 func TestWarnInsecureConfig_DevSessionSecret(t *testing.T) {
-	logger, buf := newCaptureLogger()
+	buf, cleanup := setupCaptureLogger()
+	defer cleanup()
 
 	cfg := DefaultConfig()
 	cfg.Auth.Enabled = true
 	cfg.Auth.SessionSecret = "dev-secret-key"
 
-	WarnInsecureConfig(cfg, logger)
+	WarnInsecureConfig(cfg)
 
 	if !strings.Contains(buf.String(), "INSECURE CONFIG") {
 		t.Error("expected warning about insecure session_secret containing 'dev-', got none")
@@ -44,13 +48,14 @@ func TestWarnInsecureConfig_DevSessionSecret(t *testing.T) {
 }
 
 func TestWarnInsecureConfig_ChangeSessionSecret(t *testing.T) {
-	logger, buf := newCaptureLogger()
+	buf, cleanup := setupCaptureLogger()
+	defer cleanup()
 
 	cfg := DefaultConfig()
 	cfg.Auth.Enabled = true
 	cfg.Auth.SessionSecret = "change-me-in-production"
 
-	WarnInsecureConfig(cfg, logger)
+	WarnInsecureConfig(cfg)
 
 	if !strings.Contains(buf.String(), "INSECURE CONFIG") {
 		t.Error("expected warning about insecure session_secret containing 'change', got none")
@@ -58,13 +63,14 @@ func TestWarnInsecureConfig_ChangeSessionSecret(t *testing.T) {
 }
 
 func TestWarnInsecureConfig_StrongSecret(t *testing.T) {
-	logger, buf := newCaptureLogger()
+	buf, cleanup := setupCaptureLogger()
+	defer cleanup()
 
 	cfg := DefaultConfig()
 	cfg.Auth.Enabled = true
 	cfg.Auth.SessionSecret = "f47ac10b58cc4372a5670e02b2c3d479"
 
-	WarnInsecureConfig(cfg, logger)
+	WarnInsecureConfig(cfg)
 
 	if strings.Contains(buf.String(), "INSECURE CONFIG") {
 		t.Error("did not expect warning for a strong session_secret")
@@ -72,13 +78,14 @@ func TestWarnInsecureConfig_StrongSecret(t *testing.T) {
 }
 
 func TestWarnInsecureConfig_AuthDisabled(t *testing.T) {
-	logger, buf := newCaptureLogger()
+	buf, cleanup := setupCaptureLogger()
+	defer cleanup()
 
 	cfg := DefaultConfig()
 	cfg.Auth.Enabled = false
 	cfg.Auth.SessionSecret = "dev-secret-key"
 
-	WarnInsecureConfig(cfg, logger)
+	WarnInsecureConfig(cfg)
 
 	if strings.Contains(buf.String(), "INSECURE CONFIG") {
 		t.Error("should not warn about session_secret when auth is disabled")
@@ -86,7 +93,8 @@ func TestWarnInsecureConfig_AuthDisabled(t *testing.T) {
 }
 
 func TestWarnInsecureConfig_PasswordEqualsUsername(t *testing.T) {
-	logger, buf := newCaptureLogger()
+	buf, cleanup := setupCaptureLogger()
+	defer cleanup()
 
 	cfg := DefaultConfig()
 	cfg.Auth.Basic = &BasicAuthConfig{
@@ -95,7 +103,7 @@ func TestWarnInsecureConfig_PasswordEqualsUsername(t *testing.T) {
 		},
 	}
 
-	WarnInsecureConfig(cfg, logger)
+	WarnInsecureConfig(cfg)
 
 	if !strings.Contains(buf.String(), "INSECURE CONFIG") {
 		t.Error("expected warning when password equals username")
@@ -106,7 +114,8 @@ func TestWarnInsecureConfig_PasswordEqualsUsername(t *testing.T) {
 }
 
 func TestWarnInsecureConfig_StrongPassword(t *testing.T) {
-	logger, buf := newCaptureLogger()
+	buf, cleanup := setupCaptureLogger()
+	defer cleanup()
 
 	cfg := DefaultConfig()
 	cfg.Auth.Basic = &BasicAuthConfig{
@@ -115,7 +124,7 @@ func TestWarnInsecureConfig_StrongPassword(t *testing.T) {
 		},
 	}
 
-	WarnInsecureConfig(cfg, logger)
+	WarnInsecureConfig(cfg)
 
 	if strings.Contains(buf.String(), "INSECURE CONFIG") {
 		t.Error("did not expect warning when password differs from username")
@@ -123,12 +132,13 @@ func TestWarnInsecureConfig_StrongPassword(t *testing.T) {
 }
 
 func TestWarnInsecureConfig_NilBasic(t *testing.T) {
-	logger, buf := newCaptureLogger()
+	buf, cleanup := setupCaptureLogger()
+	defer cleanup()
 
 	cfg := DefaultConfig()
 	cfg.Auth.Basic = nil
 
-	WarnInsecureConfig(cfg, logger)
+	WarnInsecureConfig(cfg)
 
 	if strings.Contains(buf.String(), "INSECURE CONFIG") {
 		t.Error("did not expect warning when basic auth is nil")

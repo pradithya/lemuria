@@ -17,6 +17,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/org/lemuria/internal/models"
@@ -27,7 +28,7 @@ func (e *Executor) executeUnlock(ctx context.Context, cmd *Command, event *model
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
 		if err := e.vcs.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
-			e.logger.Warn("failed to add reaction", "error", err)
+			slog.Warn("failed to add reaction", "error", err)
 		}
 	}
 

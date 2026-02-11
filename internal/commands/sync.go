@@ -30,7 +30,7 @@ import (
 
 // executeSync runs the sync command.
 func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.PREvent) error {
-	e.logger.Debug("executing sync command",
+	slog.Debug("executing sync command",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 		"specific_app", cmd.Application,
@@ -41,32 +41,32 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	// Add reaction to show we're working on it
 	if event.Comment != nil {
 		if err := e.vcs.AddReaction(ctx, event.Repo.Owner, event.Repo.Name, event.Comment.ID, "eyes"); err != nil {
-			e.logger.Warn("failed to add reaction", "error", err)
+			slog.Warn("failed to add reaction", "error", err)
 		}
 	}
 
 	// Get locks held by this PR
 	locks, err := e.lock.ListByPR(ctx, event.Repo.FullName, event.PR.Number)
 	if err != nil {
-		e.logger.Debug("failed to list locks",
+		slog.Debug("failed to list locks",
 			"error", err,
 		)
 		return e.postError(ctx, event, fmt.Errorf("listing locks: %w", err))
 	}
 
-	e.logger.Debug("found locks for PR",
+	slog.Debug("found locks for PR",
 		"count", len(locks),
 		"pr", event.PR.Number,
 	)
 
 	if len(locks) == 0 {
-		e.logger.Debug("no locks found for PR")
+		slog.Debug("no locks found for PR")
 		return e.postComment(ctx, event, "", "## Lemuria Sync\n\n⚠️ No applications are locked by this PR. Run `lemuria plan` first.")
 	}
 
 	// Filter to specific application if requested
 	if cmd.Application != "" {
-		e.logger.Debug("filtering locks to specific application",
+		slog.Debug("filtering locks to specific application",
 			"app", cmd.Application,
 		)
 		var filtered []models.Lock
@@ -77,7 +77,7 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		}
 		// If no direct match, try matching by ApplicationSetName
 		if len(filtered) == 0 {
-			e.logger.Debug("no direct lock match, trying applicationset name",
+			slog.Debug("no direct lock match, trying applicationset name",
 				"app", cmd.Application,
 			)
 			apps, err := e.argocd.GetApplicationsByApplicationSet(ctx, cmd.Application)
@@ -95,7 +95,7 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 			}
 		}
 		if len(filtered) == 0 {
-			e.logger.Debug("application not locked by this PR",
+			slog.Debug("application not locked by this PR",
 				"app", cmd.Application,
 			)
 			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n⚠️ Application `%s` is not locked by this PR.", cmd.Application))
@@ -104,9 +104,9 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	}
 
 	// Check requirements before sync
-	e.logger.Debug("checking sync requirements")
+	slog.Debug("checking sync requirements")
 	if err := e.checkSyncRequirements(ctx, event, locks); err != nil {
-		e.logger.Debug("sync requirements not met",
+		slog.Debug("sync requirements not met",
 			"error", err,
 		)
 		return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n❌ %s", err.Error()))
@@ -114,13 +114,13 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 
 	// Verify plans are not stale and check for auto-sync
 	for _, l := range locks {
-		e.logger.Debug("verifying plan freshness",
+		slog.Debug("verifying plan freshness",
 			"app", l.Application,
 			"plan_revision", l.PlanRevision,
 			"current_head_sha", event.PR.HeadSHA,
 		)
 		if l.PlanRevision != event.PR.HeadSHA {
-			e.logger.Debug("plan is stale",
+			slog.Debug("plan is stale",
 				"app", l.Application,
 				"plan_revision", l.PlanRevision,
 				"current_head_sha", event.PR.HeadSHA,
@@ -131,14 +131,14 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		// Check if auto-sync is enabled
 		app, err := e.argocd.GetApplication(ctx, l.Application)
 		if err != nil {
-			e.logger.Debug("failed to get application",
+			slog.Debug("failed to get application",
 				"app", l.Application,
 				"error", err,
 			)
 			return e.postError(ctx, event, fmt.Errorf("getting application %s: %w", l.Application, err))
 		}
 		if app.HasAutoSync() {
-			e.logger.Debug("application has auto-sync enabled",
+			slog.Debug("application has auto-sync enabled",
 				"app", l.Application,
 			)
 			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n❌ Application `%s` has auto-sync enabled.\n\nDisable auto-sync before using Lemuria to prevent conflicts.", l.Application))
@@ -152,18 +152,18 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	}
 
 	// Create progressive comment tracker
-	tracker := newSyncCommentTracker(e.vcs, e.logger, event, appNames)
+	tracker := newSyncCommentTracker(e.vcs, event, appNames)
 
 	// Post initial progress comment
 	tracker.postInitial(ctx)
 
 	// Sync each application
-	e.logger.Debug("starting sync for applications",
+	slog.Debug("starting sync for applications",
 		"count", len(locks),
 	)
 	results := make([]syncResult, len(locks))
 	for i, l := range locks {
-		e.logger.Debug("syncing application",
+		slog.Debug("syncing application",
 			"app", l.Application,
 		)
 		results[i] = e.syncApplication(ctx, l, cmd, event)
@@ -179,7 +179,7 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		}
 	}
 
-	e.logger.Debug("sync completed",
+	slog.Debug("sync completed",
 		"all_succeeded", allSucceeded,
 		"results_count", len(results),
 	)
@@ -191,18 +191,18 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	if repoConfig != nil && repoConfig.AutoMerge != nil {
 		autoMerge = *repoConfig.AutoMerge
 	}
-	e.logger.Debug("auto-merge resolved",
+	slog.Debug("auto-merge resolved",
 		"auto_merge", autoMerge,
 		"all_succeeded", allSucceeded,
 	)
 
 	if allSucceeded && !cmd.DryRun && autoMerge {
-		e.logger.Debug("attempting auto-merge",
+		slog.Debug("attempting auto-merge",
 			"repo", event.Repo.FullName,
 			"pr", event.PR.Number,
 		)
 		if err := e.autoMergePR(ctx, event); err != nil {
-			e.logger.Warn("auto-merge failed", "error", err)
+			slog.Warn("auto-merge failed", "error", err)
 		}
 	}
 
@@ -222,7 +222,7 @@ type syncResult struct {
 
 // syncApplication triggers a sync for a single application.
 func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Command, event *models.PREvent) syncResult {
-	e.logger.Debug("starting sync for application",
+	slog.Debug("starting sync for application",
 		"app", l.Application,
 		"revision", event.PR.HeadSHA,
 		"source_file", l.SourceFile,
@@ -250,7 +250,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 	// before syncing. This handles cases where the PR modifies Helm values,
 	// chart versions, or other spec fields in the Application CR file.
 	if l.SourceFile != "" {
-		e.logger.Debug("updating application spec from PR head branch",
+		slog.Debug("updating application spec from PR head branch",
 			"app", l.Application,
 			"source_file", l.SourceFile,
 		)
@@ -272,7 +272,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 			return result
 		}
 
-		e.logger.Debug("application spec updated from PR",
+		slog.Debug("application spec updated from PR",
 			"app", l.Application,
 		)
 	}
@@ -290,7 +290,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 		opts.Revision = event.PR.HeadSHA
 	}
 
-	e.logger.Debug("triggering sync",
+	slog.Debug("triggering sync",
 		"app", l.Application,
 		"revision", opts.Revision,
 		"from_pr_repo", fromPRRepo,
@@ -298,7 +298,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 
 	syncResult, err := e.argocd.SyncApplication(ctx, l.Application, opts)
 	if err != nil {
-		e.logger.Debug("sync failed",
+		slog.Debug("sync failed",
 			"app", l.Application,
 			"error", err,
 		)
@@ -308,7 +308,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 
 	result.Result = syncResult
 
-	e.logger.Debug("sync completed",
+	slog.Debug("sync completed",
 		"app", l.Application,
 		"phase", syncResult.Phase,
 		"message", syncResult.Message,
@@ -317,18 +317,18 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 	// Fetch per-resource health and merge into sync result
 	healthInfo, err := e.argocd.GetResourceHealth(ctx, l.Application)
 	if err != nil {
-		e.logger.Warn("failed to fetch resource health", "app", l.Application, "error", err)
+		slog.Warn("failed to fetch resource health", "app", l.Application, "error", err)
 	} else {
 		mergeResourceHealth(syncResult, healthInfo)
 	}
 
 	// Release lock on successful sync (unless dry-run)
 	if !cmd.DryRun && syncResult.Phase == models.SyncPhaseSucceeded {
-		e.logger.Debug("releasing lock after successful sync",
+		slog.Debug("releasing lock after successful sync",
 			"app", l.Application,
 		)
 		if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
-			e.logger.Warn("failed to release lock after sync", "app", l.Application, "error", err)
+			slog.Warn("failed to release lock after sync", "app", l.Application, "error", err)
 		}
 	}
 
@@ -348,7 +348,7 @@ func appSourcesFromRepo(app models.Application, repoURL string) bool {
 
 // checkSyncRequirements verifies all requirements are met before sync.
 func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREvent, locks []models.Lock) error {
-	e.logger.Debug("checking sync requirements",
+	slog.Debug("checking sync requirements",
 		"require_approval", e.config.Defaults.RequireApproval,
 		"locks_count", len(locks),
 	)
@@ -358,20 +358,20 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 
 	// Check if PR approval is required for any locked application
 	requireApproval := e.isApprovalRequired(repoConfig, locks)
-	e.logger.Debug("approval requirement resolved",
+	slog.Debug("approval requirement resolved",
 		"require_approval", requireApproval,
 	)
 
 	if requireApproval {
-		e.logger.Debug("checking PR approval status")
+		slog.Debug("checking PR approval status")
 		approved, err := e.vcs.IsPRApproved(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 		if err != nil {
-			e.logger.Debug("failed to check PR approval",
+			slog.Debug("failed to check PR approval",
 				"error", err,
 			)
 			return fmt.Errorf("checking PR approval: %w", err)
 		}
-		e.logger.Debug("PR approval status",
+		slog.Debug("PR approval status",
 			"approved", approved,
 		)
 		if !approved {
@@ -380,17 +380,17 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 	}
 
 	// Check if PR is mergeable
-	e.logger.Debug("checking PR mergeable status")
+	slog.Debug("checking PR mergeable status")
 	pr, err := e.vcs.GetPR(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 	if err != nil {
-		e.logger.Debug("failed to get PR status",
+		slog.Debug("failed to get PR status",
 			"error", err,
 		)
 		return fmt.Errorf("getting PR status: %w", err)
 	}
 
 	mergeable := pr.Mergeable
-	e.logger.Debug("PR mergeable status",
+	slog.Debug("PR mergeable status",
 		"mergeable", mergeable,
 		"state", pr.State,
 	)
@@ -399,7 +399,7 @@ func (e *Executor) checkSyncRequirements(ctx context.Context, event *models.PREv
 		return fmt.Errorf("PR has merge conflicts, please resolve before syncing")
 	}
 
-	e.logger.Debug("all sync requirements met")
+	slog.Debug("all sync requirements met")
 	return nil
 }
 
@@ -428,7 +428,7 @@ func (e *Executor) appRequiresApproval(repoConfig *config.RepoConfig, appName st
 		// Check sync_requirements for per-app override (exact match first, then wildcard)
 		for _, req := range repoConfig.SyncRequirements {
 			if req.Name == appName {
-				e.logger.Debug("sync requirement exact match",
+				slog.Debug("sync requirement exact match",
 					"app", appName,
 					"require_approval", req.RequireApproval,
 				)
@@ -437,7 +437,7 @@ func (e *Executor) appRequiresApproval(repoConfig *config.RepoConfig, appName st
 		}
 		for _, req := range repoConfig.SyncRequirements {
 			if req.Name != appName && matchAppName(req.Name, appName) {
-				e.logger.Debug("sync requirement wildcard match",
+				slog.Debug("sync requirement wildcard match",
 					"app", appName,
 					"pattern", req.Name,
 					"require_approval", req.RequireApproval,
@@ -492,7 +492,7 @@ func (e *Executor) autoMergePR(ctx context.Context, event *models.PREvent) error
 		return fmt.Errorf("merging PR: %w", err)
 	}
 
-	e.logger.Info("auto-merged PR",
+	slog.Info("auto-merged PR",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
 		"method", method,
@@ -503,12 +503,12 @@ func (e *Executor) autoMergePR(ctx context.Context, event *models.PREvent) error
 		branch := event.PR.HeadRef
 		if !IsProtectedBranch(branch) {
 			if err := e.vcs.DeleteBranch(ctx, event.Repo.Owner, event.Repo.Name, branch); err != nil {
-				e.logger.Warn("failed to delete source branch",
+				slog.Warn("failed to delete source branch",
 					"branch", branch,
 					"error", err,
 				)
 			} else {
-				e.logger.Info("deleted source branch", "branch", branch)
+				slog.Info("deleted source branch", "branch", branch)
 			}
 		}
 	}
@@ -546,7 +546,6 @@ func mergeResourceHealth(result *models.SyncResult, healthInfo []models.Resource
 type syncCommentTracker struct {
 	mu         sync.Mutex
 	vcs        VCSClient
-	logger     *slog.Logger
 	event      *models.PREvent
 	appNames   []string
 	results    []syncResult
@@ -558,10 +557,9 @@ type syncCommentTracker struct {
 // minUpdateInterval is the minimum time between intermediate comment updates.
 const minUpdateInterval = 1 * time.Minute
 
-func newSyncCommentTracker(vcs VCSClient, logger *slog.Logger, event *models.PREvent, appNames []string) *syncCommentTracker {
+func newSyncCommentTracker(vcs VCSClient, event *models.PREvent, appNames []string) *syncCommentTracker {
 	return &syncCommentTracker{
 		vcs:       vcs,
-		logger:    logger,
 		event:     event,
 		appNames:  appNames,
 		results:   make([]syncResult, len(appNames)),
@@ -574,7 +572,7 @@ func (t *syncCommentTracker) postInitial(ctx context.Context) {
 	body := t.renderProgress()
 	result, err := t.vcs.PostComment(ctx, t.event.Repo.Owner, t.event.Repo.Name, t.event.PR.Number, body, false)
 	if err != nil {
-		t.logger.Warn("failed to post initial sync comment", "error", err)
+		slog.Warn("failed to post initial sync comment", "error", err)
 		return
 	}
 	t.mu.Lock()
@@ -598,7 +596,7 @@ func (t *syncCommentTracker) updateResult(ctx context.Context, i int, result syn
 
 	body := t.renderProgress()
 	if err := t.vcs.UpdateComment(ctx, t.event.Repo.Owner, t.event.Repo.Name, t.event.PR.Number, commentID, body); err != nil {
-		t.logger.Warn("failed to update sync comment", "error", err)
+		slog.Warn("failed to update sync comment", "error", err)
 		return
 	}
 	t.mu.Lock()
@@ -614,7 +612,7 @@ func (t *syncCommentTracker) postFinal(ctx context.Context, body string) error {
 
 	if commentID != 0 {
 		if err := t.vcs.UpdateComment(ctx, t.event.Repo.Owner, t.event.Repo.Name, t.event.PR.Number, commentID, body); err != nil {
-			t.logger.Warn("failed to update final sync comment, falling back to new comment", "error", err)
+			slog.Warn("failed to update final sync comment, falling back to new comment", "error", err)
 			_, err = t.vcs.PostComment(ctx, t.event.Repo.Owner, t.event.Repo.Name, t.event.PR.Number, body, false)
 			return err
 		}

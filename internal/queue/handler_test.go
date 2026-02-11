@@ -18,8 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -28,10 +26,6 @@ import (
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
-
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
 
 func makeTask(t *testing.T, deliveryID string, event *models.PREvent) *asynq.Task {
 	t.Helper()
@@ -49,7 +43,6 @@ func TestProcessTask_MalformedPayload(t *testing.T) {
 	h := NewWebhookHandler(
 		&config.Config{},
 		nil, nil, nil, nil,
-		testLogger(),
 	)
 
 	task := asynq.NewTask(TypeWebhookProcess, []byte(`{invalid json`))
@@ -66,7 +59,6 @@ func TestProcessTask_NilEvent(t *testing.T) {
 	h := NewWebhookHandler(
 		&config.Config{},
 		nil, nil, nil, nil,
-		testLogger(),
 	)
 
 	payload, _ := json.Marshal(WebhookTaskPayload{
@@ -88,7 +80,6 @@ func TestProcessTask_UnknownProvider(t *testing.T) {
 	h := NewWebhookHandler(
 		&config.Config{},
 		nil, nil, nil, nil,
-		testLogger(),
 	)
 
 	event := &models.PREvent{
@@ -123,7 +114,6 @@ func TestProcessTask_NoExecutorConfigured(t *testing.T) {
 			h := NewWebhookHandler(
 				&config.Config{},
 				nil, nil, nil, nil,
-				testLogger(),
 			)
 
 			event := &models.PREvent{

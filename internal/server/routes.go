@@ -122,7 +122,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	// Check Redis connectivity
 	if err := s.lockManager.Ping(r.Context()); err != nil {
-		s.logger.Error("readiness check failed", "error", err)
+		slog.Error("readiness check failed", "error", err)
 		respondJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"status": "not ready",
 			"error":  "redis connection failed",
@@ -147,7 +147,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListLocks(w http.ResponseWriter, r *http.Request) {
 	locks, err := s.lockManager.ListAll(r.Context())
 	if err != nil {
-		s.logger.Error("failed to list locks", "error", err)
+		slog.Error("failed to list locks", "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to list locks",
 		})
@@ -171,7 +171,7 @@ func (s *Server) handleDeleteLock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.lockManager.ForceUnlock(r.Context(), app); err != nil {
-		s.logger.Error("failed to delete lock", "app", app, "error", err)
+		slog.Error("failed to delete lock", "app", app, "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to delete lock",
 		})
@@ -253,7 +253,7 @@ func (s *Server) handleGitHubLogin(w http.ResponseWriter, r *http.Request) {
 
 	state, err := s.sessionStore.CreateState(r.Context(), redirectURL)
 	if err != nil {
-		s.logger.Error("failed to create OAuth state", "error", err)
+		slog.Error("failed to create OAuth state", "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to initiate login",
 		})
@@ -270,7 +270,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	stateParam := r.URL.Query().Get("state")
 
 	if code == "" {
-		s.logger.Error("GitHub callback missing code")
+		slog.Error("GitHub callback missing code")
 		respondJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "missing authorization code",
 		})
@@ -280,7 +280,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	// Validate state
 	state, err := s.sessionStore.ValidateState(r.Context(), stateParam)
 	if err != nil {
-		s.logger.Error("invalid OAuth state", "error", err)
+		slog.Error("invalid OAuth state", "error", err)
 		respondJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid or expired state",
 		})
@@ -290,7 +290,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	// Exchange code for user
 	user, err := s.githubOAuthProvider.Exchange(r.Context(), code)
 	if err != nil {
-		s.logger.Error("GitHub OAuth exchange failed", "error", err)
+		slog.Error("GitHub OAuth exchange failed", "error", err)
 		respondJSON(w, http.StatusUnauthorized, map[string]string{
 			"error": "authentication failed: " + err.Error(),
 		})
@@ -300,14 +300,14 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	// Create session
 	_, err = s.authMiddleware.CreateSession(r.Context(), w, user)
 	if err != nil {
-		s.logger.Error("failed to create session", "error", err)
+		slog.Error("failed to create session", "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to create session",
 		})
 		return
 	}
 
-	s.logger.Info("user logged in via GitHub", "user", user.Login, "email", user.Email)
+	slog.Info("user logged in via GitHub", "user", user.Login, "email", user.Email)
 
 	// Redirect to original URL
 	redirectURL := state.RedirectURL
@@ -326,7 +326,7 @@ func (s *Server) handleGitLabLogin(w http.ResponseWriter, r *http.Request) {
 
 	state, err := s.sessionStore.CreateState(r.Context(), redirectURL)
 	if err != nil {
-		s.logger.Error("failed to create OAuth state", "error", err)
+		slog.Error("failed to create OAuth state", "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to initiate login",
 		})
@@ -343,7 +343,7 @@ func (s *Server) handleGitLabCallback(w http.ResponseWriter, r *http.Request) {
 	stateParam := r.URL.Query().Get("state")
 
 	if code == "" {
-		s.logger.Error("GitLab callback missing code")
+		slog.Error("GitLab callback missing code")
 		respondJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "missing authorization code",
 		})
@@ -353,7 +353,7 @@ func (s *Server) handleGitLabCallback(w http.ResponseWriter, r *http.Request) {
 	// Validate state
 	state, err := s.sessionStore.ValidateState(r.Context(), stateParam)
 	if err != nil {
-		s.logger.Error("invalid OAuth state", "error", err)
+		slog.Error("invalid OAuth state", "error", err)
 		respondJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid or expired state",
 		})
@@ -363,7 +363,7 @@ func (s *Server) handleGitLabCallback(w http.ResponseWriter, r *http.Request) {
 	// Exchange code for user
 	user, err := s.gitlabOAuthProvider.Exchange(r.Context(), code)
 	if err != nil {
-		s.logger.Error("GitLab OAuth exchange failed", "error", err)
+		slog.Error("GitLab OAuth exchange failed", "error", err)
 		respondJSON(w, http.StatusUnauthorized, map[string]string{
 			"error": "authentication failed: " + err.Error(),
 		})
@@ -373,14 +373,14 @@ func (s *Server) handleGitLabCallback(w http.ResponseWriter, r *http.Request) {
 	// Create session
 	_, err = s.authMiddleware.CreateSession(r.Context(), w, user)
 	if err != nil {
-		s.logger.Error("failed to create session", "error", err)
+		slog.Error("failed to create session", "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to create session",
 		})
 		return
 	}
 
-	s.logger.Info("user logged in via GitLab", "user", user.Login, "email", user.Email)
+	slog.Info("user logged in via GitLab", "user", user.Login, "email", user.Email)
 
 	// Redirect to original URL
 	redirectURL := state.RedirectURL
@@ -399,7 +399,7 @@ func (s *Server) handleOIDCLogin(w http.ResponseWriter, r *http.Request) {
 
 	state, err := s.sessionStore.CreateState(r.Context(), redirectURL)
 	if err != nil {
-		s.logger.Error("failed to create OAuth state", "error", err)
+		slog.Error("failed to create OAuth state", "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to initiate login",
 		})
@@ -420,7 +420,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		if errorDesc == "" {
 			errorDesc = r.URL.Query().Get("error")
 		}
-		s.logger.Error("OIDC callback error", "error", errorDesc)
+		slog.Error("OIDC callback error", "error", errorDesc)
 		respondJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "authentication failed: " + errorDesc,
 		})
@@ -430,7 +430,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// Validate state
 	state, err := s.sessionStore.ValidateState(r.Context(), stateParam)
 	if err != nil {
-		s.logger.Error("invalid OAuth state", "error", err)
+		slog.Error("invalid OAuth state", "error", err)
 		respondJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "invalid or expired state",
 		})
@@ -440,7 +440,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// Exchange code for user
 	user, err := s.oidcProvider.Exchange(r.Context(), code)
 	if err != nil {
-		s.logger.Error("OIDC exchange failed", "error", err)
+		slog.Error("OIDC exchange failed", "error", err)
 		respondJSON(w, http.StatusUnauthorized, map[string]string{
 			"error": "authentication failed: " + err.Error(),
 		})
@@ -450,14 +450,14 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// Create session
 	_, err = s.authMiddleware.CreateSession(r.Context(), w, user)
 	if err != nil {
-		s.logger.Error("failed to create session", "error", err)
+		slog.Error("failed to create session", "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to create session",
 		})
 		return
 	}
 
-	s.logger.Info("user logged in via OIDC", "user", user.Login, "email", user.Email)
+	slog.Info("user logged in via OIDC", "user", user.Login, "email", user.Email)
 
 	// Redirect to original URL
 	redirectURL := state.RedirectURL
@@ -476,7 +476,7 @@ func (s *Server) handleBasicLogin(w http.ResponseWriter, r *http.Request) {
 		clientIP = host
 	}
 	if s.loginRateLimiter != nil && !s.loginRateLimiter.Allow(clientIP) {
-		s.logger.Warn("login rate limit exceeded", "remote_addr", clientIP)
+		slog.Warn("login rate limit exceeded", "remote_addr", clientIP)
 		w.Header().Set("Retry-After", "60")
 		respondJSON(w, http.StatusTooManyRequests, map[string]string{
 			"error": "too many login attempts, please try again later",
@@ -506,7 +506,7 @@ func (s *Server) handleBasicLogin(w http.ResponseWriter, r *http.Request) {
 	// Authenticate user
 	user, err := s.basicAuthProvider.Authenticate(r.Context(), req.Username, req.Password)
 	if err != nil {
-		s.logger.Warn("basic auth failed", "username", req.Username, "error", err)
+		slog.Warn("basic auth failed", "username", req.Username, "error", err)
 		respondJSON(w, http.StatusUnauthorized, map[string]string{
 			"error": "invalid username or password",
 		})
@@ -516,14 +516,14 @@ func (s *Server) handleBasicLogin(w http.ResponseWriter, r *http.Request) {
 	// Create session
 	_, err = s.authMiddleware.CreateSession(r.Context(), w, user)
 	if err != nil {
-		s.logger.Error("failed to create session", "error", err)
+		slog.Error("failed to create session", "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to create session",
 		})
 		return
 	}
 
-	s.logger.Info("user logged in via basic auth", "user", user.Login)
+	slog.Info("user logged in via basic auth", "user", user.Login)
 
 	respondJSON(w, http.StatusOK, map[string]any{
 		"status": "authenticated",
@@ -535,11 +535,11 @@ func (s *Server) handleBasicLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	user := auth.UserFromRequest(r)
 	if user != nil {
-		s.logger.Info("user logged out", "user", user.Login)
+		slog.Info("user logged out", "user", user.Login)
 	}
 
 	if err := s.authMiddleware.DestroySession(r.Context(), w, r); err != nil {
-		s.logger.Error("failed to destroy session", "error", err)
+		slog.Error("failed to destroy session", "error", err)
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{
@@ -566,7 +566,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	sessions, err := s.sessionStore.ListAll(r.Context())
 	if err != nil {
-		s.logger.Error("failed to list sessions", "error", err)
+		slog.Error("failed to list sessions", "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to list users",
 		})
@@ -630,14 +630,14 @@ func (s *Server) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.roleResolver.SetUserRole(r.Context(), userID, role); err != nil {
-		s.logger.Error("failed to set user role", "user_id", userID, "error", err)
+		slog.Error("failed to set user role", "user_id", userID, "error", err)
 		respondJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": "failed to update role",
 		})
 		return
 	}
 
-	s.logger.Info("user role updated",
+	slog.Info("user role updated",
 		"target_user", userID,
 		"new_role", role,
 		"by_user", currentUser.Login,

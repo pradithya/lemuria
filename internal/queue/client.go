@@ -28,11 +28,10 @@ import (
 // Client wraps an asynq client for enqueuing webhook tasks.
 type Client struct {
 	client *asynq.Client
-	logger *slog.Logger
 }
 
 // NewClient creates a new queue client from the existing Redis config.
-func NewClient(cfg config.RedisConfig, logger *slog.Logger) *Client {
+func NewClient(cfg config.RedisConfig) *Client {
 	redisOpt := asynq.RedisClientOpt{
 		Addr:     cfg.Address,
 		Password: cfg.Password,
@@ -40,7 +39,6 @@ func NewClient(cfg config.RedisConfig, logger *slog.Logger) *Client {
 	}
 	return &Client{
 		client: asynq.NewClient(redisOpt),
-		logger: logger,
 	}
 }
 
@@ -55,13 +53,13 @@ func (c *Client) EnqueueWebhook(deliveryID string, event *models.PREvent) error 
 	info, err := c.client.Enqueue(task)
 	if err != nil {
 		if errors.Is(err, asynq.ErrDuplicateTask) {
-			c.logger.Debug("duplicate task ignored", "delivery_id", deliveryID)
+			slog.Debug("duplicate task ignored", "delivery_id", deliveryID)
 			return nil
 		}
 		return fmt.Errorf("enqueuing webhook task: %w", err)
 	}
 
-	c.logger.Info("enqueued webhook task",
+	slog.Info("enqueued webhook task",
 		"task_id", info.ID,
 		"queue", info.Queue,
 		"delivery_id", deliveryID,
