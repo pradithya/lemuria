@@ -171,9 +171,9 @@ func TestListApplicationsExcludesTempApps(t *testing.T) {
 			Name:      tempAppName,
 			Namespace: "argocd",
 			Labels: map[string]string{
-				"lemuria.io/temp-app":      "true",
-				"lemuria.io/original-app":  "some-real-app",
-				"lemuria.io/pr-number":     "999",
+				"lemuria.io/temp-app":     "true",
+				"lemuria.io/original-app": "some-real-app",
+				"lemuria.io/pr-number":    "999",
 			},
 		},
 		Spec: v1alpha1.ApplicationSpec{
