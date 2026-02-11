@@ -197,9 +197,6 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 		timeout = opts.Timeout
 	}
 
-	// Brief initial delay to allow ArgoCD to register the operation.
-	time.Sleep(1 * time.Second)
-
 	// Poll until the operation reaches a terminal phase.
 	return c.waitForSyncComplete(ctx, name, timeout)
 }
@@ -317,6 +314,11 @@ func (c *Client) GetApplicationRaw(ctx context.Context, name string) (*v1alpha1.
 // specified in SyncOptions. Aligned with ArgoCD's default operation timeout.
 const defaultSyncWaitTimeout = 10 * time.Minute
 
+// healthStabilizationPeriod is the duration to wait after seeing Healthy status
+// to confirm it's stable. This catches cases where health briefly shows Healthy
+// before transitioning to Degraded (e.g., when a pod fails to pull an image).
+const healthStabilizationPeriod = 10 * time.Second
+
 // waitForSyncComplete watches the application using the streaming Watch API until
 // the operation reaches a terminal phase and the application becomes healthy.
 // Returns an error if the application enters a degraded state or fails to become
@@ -333,6 +335,7 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 	}
 
 	var syncResult *models.SyncResult
+	var healthyAt time.Time // When we first saw Healthy status
 
 	for event := range events {
 		status := extractAppSyncStatus(&event)
@@ -344,6 +347,7 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			"phase", phase,
 			"health", healthStatus,
 			"syncCompleted", syncResult != nil,
+			"healthyAt", healthyAt,
 		)
 
 		// Wait for sync to reach a terminal phase.
@@ -375,17 +379,38 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 		// Sync succeeded — wait for health to become Healthy or reach a terminal state.
 		switch healthStatus {
 		case models.HealthStatusHealthy:
-			// Success: application is healthy
-			slog.Debug("application is healthy, sync complete",
+			// Track when we first saw Healthy
+			if healthyAt.IsZero() {
+				healthyAt = time.Now()
+				slog.Debug("application became healthy, starting stabilization period",
+					"application", name,
+					"stabilizationPeriod", healthStabilizationPeriod,
+				)
+			}
+
+			// Check if we've been healthy long enough
+			if time.Since(healthyAt) >= healthStabilizationPeriod {
+				slog.Debug("health stabilized, sync complete",
+					"application", name,
+					"stableDuration", time.Since(healthyAt),
+				)
+				syncResult.HealthStatus = healthStatus
+				return syncResult, nil
+			}
+
+			// Still in stabilization period, continue watching
+			slog.Debug("health stabilization in progress",
 				"application", name,
+				"elapsed", time.Since(healthyAt),
+				"remaining", healthStabilizationPeriod-time.Since(healthyAt),
 			)
-			syncResult.HealthStatus = healthStatus
-			return syncResult, nil
+			continue
 
 		case models.HealthStatusDegraded:
 			// Failure: application entered degraded state
 			slog.Debug("application health degraded",
 				"application", name,
+				"wasHealthy", !healthyAt.IsZero(),
 			)
 			syncResult.Phase = models.SyncPhaseFailed
 			syncResult.HealthStatus = healthStatus
@@ -412,7 +437,13 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			return syncResult, nil
 
 		case models.HealthStatusProgressing, "":
-			// Still progressing, continue waiting
+			// Reset healthy timer if we go back to progressing
+			if !healthyAt.IsZero() {
+				slog.Debug("health changed from Healthy to Progressing, resetting stabilization",
+					"application", name,
+				)
+				healthyAt = time.Time{}
+			}
 			slog.Debug("application still progressing, waiting for next event",
 				"application", name,
 			)
@@ -437,6 +468,17 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			"application", name,
 		)
 		return nil, fmt.Errorf("timeout waiting for sync to complete for %s", name)
+	}
+
+	// If we saw healthy but didn't stabilize, still consider it a success
+	// (the stream ended, likely due to timeout, but last known state was healthy)
+	if !healthyAt.IsZero() {
+		slog.Debug("stream ended during stabilization, accepting healthy state",
+			"application", name,
+			"healthyDuration", time.Since(healthyAt),
+		)
+		syncResult.HealthStatus = models.HealthStatusHealthy
+		return syncResult, nil
 	}
 
 	// Sync completed but health didn't become healthy before timeout.
