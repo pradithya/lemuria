@@ -122,4 +122,4 @@ All applications synced successfully!
 
 ## License
 
-Lemuria is open source software licensed under the [MIT License](https://github.com/pradithya/lemuria/blob/main/LICENSE).
+Lemuria is open source software licensed under the [Apache License](https://github.com/pradithya/lemuria/blob/main/LICENSE).
