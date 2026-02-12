@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strconv"
 
@@ -42,6 +43,8 @@ type GetManifestsParams struct {
 
 // GetManifests fetches the target manifests for an application.
 func (c *Client) GetManifests(ctx context.Context, name string, params *GetManifestsParams) ([]models.Manifest, string, error) {
+	slog.Debug("fetching manifests", "application", name, "params", params)
+
 	query := url.Values{}
 
 	if params != nil {
@@ -62,13 +65,17 @@ func (c *Client) GetManifests(ctx context.Context, name string, params *GetManif
 
 	var resp manifestResponse
 	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/manifests", query, &resp); err != nil {
+		slog.Debug("manifests API call failed", "application", name, "error", err)
 		return nil, "", fmt.Errorf("getting manifests for %s: %w", name, err)
 	}
+
+	slog.Debug("manifests API response", "application", name, "rawManifestCount", len(resp.Manifests), "revision", resp.Revision)
 
 	manifests := make([]models.Manifest, 0, len(resp.Manifests))
 	for _, raw := range resp.Manifests {
 		manifest, err := parseManifest(raw)
 		if err != nil {
+			slog.Debug("skipping unparseable manifest", "application", name, "error", err)
 			continue // Skip unparseable manifests
 		}
 		manifests = append(manifests, manifest)
@@ -78,12 +85,17 @@ func (c *Client) GetManifests(ctx context.Context, name string, params *GetManif
 	// Only fetch revision from app status when explicitly requested to avoid extra API calls.
 	revision := resp.Revision
 	if revision == "" && params != nil && params.FetchRevision {
+		slog.Debug("fetching revision from app status", "application", name)
 		var appResp v1alpha1.Application
 		if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &appResp); err == nil {
 			revision = appResp.Status.Sync.Revision
+			slog.Debug("revision fetched from app status", "application", name, "revision", revision)
+		} else {
+			slog.Debug("failed to fetch revision from app status", "application", name, "error", err)
 		}
 	}
 
+	slog.Debug("manifests fetched", "application", name, "parsedCount", len(manifests), "revision", revision)
 	return manifests, revision, nil
 }
 

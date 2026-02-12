@@ -17,6 +17,7 @@ package argocd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -95,34 +96,30 @@ func (m *TempAppManager) WaitForManifests(ctx context.Context, appName string, t
 	deadline := time.Now().Add(timeout)
 	pollInterval := 2 * time.Second
 
+	slog.Debug("waiting for manifests", "application", appName, "timeout", timeout)
+
 	for time.Now().Before(deadline) {
 		// Check if context is cancelled
 		if ctx.Err() != nil {
+			slog.Debug("context cancelled while waiting for manifests", "application", appName, "error", ctx.Err())
 			return nil, ctx.Err()
 		}
 
-		// Try to get manifests
+		// Try to get manifests.
+		// If ArgoCD hasn't finished rendering, the API returns a non-200 error.
+		// A successful response (even with 0 manifests) means rendering is complete.
 		manifests, _, err := m.client.GetManifests(ctx, appName, nil)
-		if err == nil && len(manifests) > 0 {
-			return manifests, nil
+		if err != nil {
+			slog.Debug("failed to get manifests, will retry", "application", appName, "error", err)
+			time.Sleep(pollInterval)
+			continue
 		}
 
-		// Check app status for errors
-		app, appErr := m.client.GetApplication(ctx, appName)
-		if appErr == nil && app != nil {
-			// If app has a sync error, it might still have manifests
-			if app.HealthStatus == models.HealthStatusDegraded {
-				// Try one more time to get manifests even with degraded health
-				manifests, _, err = m.client.GetManifests(ctx, appName, nil)
-				if err == nil && len(manifests) > 0 {
-					return manifests, nil
-				}
-			}
-		}
-
-		time.Sleep(pollInterval)
+		slog.Debug("manifests retrieved successfully", "application", appName, "count", len(manifests))
+		return manifests, nil
 	}
 
+	slog.Debug("timeout waiting for manifests", "application", appName, "timeout", timeout)
 	return nil, fmt.Errorf("timeout waiting for manifests for %s", appName)
 }
 
