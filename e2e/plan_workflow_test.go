@@ -343,6 +343,201 @@ func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
 	}
 }
 
+// TestE2EPlanNewStandaloneApp verifies that when a PR adds a new standalone
+// Application CR, the plan generates actual diffs showing all resources as creates.
+func TestE2EPlanNewStandaloneApp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+	t.Parallel()
+
+	appName := uniqueAppName("e2e-new-standalone")
+	repo := "test-owner/test-repo"
+	prNumber := 2500
+	headSHA := "abc123newstandalone"
+	crFilePath := "apps/" + appName + ".yaml"
+
+	// The app does NOT exist in ArgoCD (it's new).
+	// Head branch YAML defines the Application CR.
+	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: %s
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: e2e-test-apps`, appName)
+
+	mockGH := NewMockVCSClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+	mockGH.ChangedFiles = []models.ChangedFile{
+		{Filename: crFilePath, Status: models.FileStatusAdded},
+	}
+	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(headYAML)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "branch",
+			TempAppTimeout: 30 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			Autoplan:        true,
+			RequireApproval: false,
+		},
+	}
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
+
+	// Use autoplan event: PR opened
+	payload := githubPRPayload("opened", repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "pull_request", payload))
+
+	// Wait for plan comment (longer timeout for temp app manifest rendering)
+	comments := waitForComment(t, mockGH, 1, 90*time.Second)
+	lastComment := comments[len(comments)-1]
+	t.Logf("Plan comment:\n%s", lastComment.Body)
+
+	// Assert: the new app is detected
+	if !strings.Contains(lastComment.Body, appName) {
+		t.Fatalf("Expected plan comment to mention new app %q", appName)
+	}
+
+	// Assert: shows "New application" message
+	if !strings.Contains(lastComment.Body, "New application") {
+		t.Error("Expected plan comment to contain 'New application'")
+	}
+
+	// Assert: diffs are generated with resource creates
+	if !strings.Contains(lastComment.Body, "to create") {
+		t.Error("Expected plan comment to show 'to create' for new app resources")
+	}
+
+	// Assert: diff details are shown (collapsible section)
+	if !strings.Contains(lastComment.Body, "resources changed") {
+		t.Error("Expected plan comment to contain diff details with resource changes")
+	}
+
+	// Assert: the "cannot generate a diff" message is NOT shown
+	if strings.Contains(lastComment.Body, "cannot generate a diff") {
+		t.Error("Expected plan comment NOT to contain 'cannot generate a diff' when diffs are available")
+	}
+
+	// Assert: no error in the plan
+	if strings.Contains(lastComment.Body, "❌ **Error:**") {
+		t.Errorf("Plan comment should not contain errors")
+	}
+}
+
+// TestE2EPlanDeletedStandaloneApp verifies that when a PR removes a standalone
+// Application CR, the plan generates actual diffs showing all resources as deletes.
+func TestE2EPlanDeletedStandaloneApp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+	t.Parallel()
+
+	appName := uniqueAppName("e2e-del-standalone")
+	repo := "test-owner/test-repo"
+	prNumber := 2600
+	headSHA := "abc123delstandalone"
+	crFilePath := "apps/" + appName + ".yaml"
+
+	// Create the app in ArgoCD so it exists
+	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
+
+	// Base branch has the Application CR (being removed in the PR)
+	baseYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: %s
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: e2e-test-apps`, appName)
+
+	mockGH := NewMockVCSClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+	mockGH.ChangedFiles = []models.ChangedFile{
+		{Filename: crFilePath, Status: models.FileStatusRemoved},
+	}
+	mockGH.FileContents[crFilePath+"@main"] = []byte(baseYAML)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+
+	// Use DiffMode="branch" so the diff creates a temp app from base branch
+	// manifests and diffs against empty target. This works even without syncing
+	// the app first (unlike DiffMode="live" which requires live cluster state).
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "branch",
+			TempAppTimeout: 30 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			Autoplan:        true,
+			RequireApproval: false,
+		},
+	}
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
+
+	// Use autoplan event: PR opened
+	payload := githubPRPayload("opened", repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "pull_request", payload))
+
+	// Wait for plan comment (longer timeout for temp app manifest rendering)
+	comments := waitForComment(t, mockGH, 1, 90*time.Second)
+	lastComment := comments[len(comments)-1]
+	t.Logf("Plan comment:\n%s", lastComment.Body)
+
+	// Assert: the deleted app is detected
+	if !strings.Contains(lastComment.Body, appName) {
+		t.Fatalf("Expected plan comment to mention deleted app %q", appName)
+	}
+
+	// Assert: shows deletion message
+	if !strings.Contains(lastComment.Body, "will be deleted") {
+		t.Error("Expected plan comment to contain 'will be deleted'")
+	}
+
+	// Assert: shows warning about orphaned/pruned resources
+	if !strings.Contains(lastComment.Body, "orphaned or pruned") {
+		t.Error("Expected plan comment to contain warning about resource fate")
+	}
+
+	// Assert: diffs are generated with resource deletes
+	if !strings.Contains(lastComment.Body, "to delete") {
+		t.Error("Expected plan comment to show 'to delete' for deleted app resources")
+	}
+
+	// Assert: diff details are shown
+	if !strings.Contains(lastComment.Body, "resources changed") {
+		t.Error("Expected plan comment to contain diff details with resource changes")
+	}
+
+	// Assert: no error in the plan
+	if strings.Contains(lastComment.Body, "❌ **Error:**") {
+		t.Errorf("Plan comment should not contain errors")
+	}
+}
+
 func TestE2EPlanCommandGitLab(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping E2E command test in short mode")

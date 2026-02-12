@@ -351,8 +351,13 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 		if result.SourceFile != "" {
 			sb.WriteString(fmt.Sprintf("**Source file:** `%s`\n\n", result.SourceFile))
 		}
-		sb.WriteString("ℹ️ Lemuria cannot generate a diff for new applications until they exist in Argo CD.\n\n")
-		return sb.String()
+		// If no diffs available, show informational message and return early
+		totalChanges := result.Created + result.Updated + result.Deleted
+		if len(result.Diffs) == 0 && totalChanges == 0 {
+			sb.WriteString("ℹ️ Lemuria cannot generate a diff for new applications until they exist in Argo CD.\n\n")
+			return sb.String()
+		}
+		// Fall through to render summary and diffs
 	}
 
 	// Handle deleted applications
@@ -366,7 +371,12 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 			sb.WriteString(fmt.Sprintf("**Source file:** `%s`\n\n", result.SourceFile))
 		}
 		sb.WriteString("⚠️ All resources managed by this application will be orphaned or pruned depending on the deletion policy.\n\n")
-		return sb.String()
+		// If no diffs available, return early
+		totalChanges := result.Created + result.Updated + result.Deleted
+		if len(result.Diffs) == 0 && totalChanges == 0 {
+			return sb.String()
+		}
+		// Fall through to render summary and diffs
 	}
 
 	if result.LockStatus != "" && !strings.Contains(result.LockStatus, "this PR") && result.LockStatus != "New application" && result.LockStatus != "Will be deleted" {

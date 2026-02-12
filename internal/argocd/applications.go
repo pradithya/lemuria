@@ -97,9 +97,10 @@ type watchEvent struct {
 	} `json:"result"`
 }
 
-// ListApplications returns all applications from Argo CD.
+// ListApplications returns all non-temporary applications from Argo CD.
+// Temporary applications (created for diff generation) are excluded via label selector.
 func (c *Client) ListApplications(ctx context.Context) ([]models.Application, error) {
-	return c.ListApplicationsWithSelector(ctx, "")
+	return c.ListApplicationsWithSelector(ctx, "!"+labelTempApp)
 }
 
 // ListApplicationsWithSelector returns applications matching a label selector.
@@ -124,12 +125,15 @@ func (c *Client) ListApplicationsWithSelector(ctx context.Context, selector stri
 
 // GetApplication returns a specific application by name.
 func (c *Client) GetApplication(ctx context.Context, name string) (*models.Application, error) {
+	slog.Debug("fetching application", "application", name)
 	var resp v1alpha1.Application
 	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(name), nil, &resp); err != nil {
+		slog.Debug("failed to fetch application", "application", name, "error", err)
 		return nil, fmt.Errorf("getting application %s: %w", name, err)
 	}
 
 	app := convertV1alpha1Application(resp, "")
+	slog.Debug("application fetched", "application", name, "healthStatus", app.HealthStatus, "syncStatus", app.SyncStatus)
 	return &app, nil
 }
 

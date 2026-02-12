@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useUnlockApp } from '../../hooks/useLocks';
+import { useAuth } from '../../hooks/useAuth';
 import type { Lock, PlanDiffEntry } from '../../types';
 
 interface LockCardProps {
@@ -23,23 +24,44 @@ interface LockCardProps {
 }
 
 export function LockCard({ lock }: LockCardProps) {
+  const { user } = useAuth();
   const unlockMutation = useUnlockApp();
   const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const confirmTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const isAdmin = user?.role === 'admin';
 
   const lockedAt = new Date(lock.locked_at);
   const timeAgo = getTimeAgo(lockedAt);
 
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current) {
+        clearTimeout(confirmTimerRef.current);
+      }
+    };
+  }, []);
+
   const handleUnlock = async () => {
+    setError(null);
+
     if (!confirming) {
       setConfirming(true);
+      confirmTimerRef.current = setTimeout(() => setConfirming(false), 5000);
       return;
+    }
+
+    if (confirmTimerRef.current) {
+      clearTimeout(confirmTimerRef.current);
     }
 
     try {
       await unlockMutation.mutateAsync(lock.application);
       setConfirming(false);
-    } catch (error) {
-      console.error('Failed to unlock:', error);
+    } catch (err) {
+      setConfirming(false);
+      setError(err instanceof Error ? err.message : 'Failed to unlock');
     }
   };
 
@@ -52,22 +74,30 @@ export function LockCard({ lock }: LockCardProps) {
             Locked by <span className="font-medium">{lock.user}</span>
           </p>
         </div>
-        <button
-          onClick={handleUnlock}
-          disabled={unlockMutation.isPending}
-          className={`px-3 py-1 text-sm rounded ${
-            confirming
-              ? 'bg-red-600 text-white hover:bg-red-700'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          } disabled:opacity-50`}
-        >
-          {unlockMutation.isPending
-            ? 'Unlocking...'
-            : confirming
-            ? 'Confirm Unlock'
-            : 'Unlock'}
-        </button>
+        {isAdmin && (
+          <button
+            onClick={handleUnlock}
+            disabled={unlockMutation.isPending}
+            className={`px-3 py-1 text-sm rounded ${
+              confirming
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            } disabled:opacity-50`}
+          >
+            {unlockMutation.isPending
+              ? 'Unlocking...'
+              : confirming
+              ? 'Confirm Unlock'
+              : 'Unlock'}
+          </button>
+        )}
       </div>
+
+      {error && (
+        <div className="mt-2 text-sm text-red-600 bg-red-50 px-3 py-1.5 rounded">
+          {error}
+        </div>
+      )}
 
       <div className="mt-3 flex items-center space-x-4 text-sm text-gray-500">
         <a

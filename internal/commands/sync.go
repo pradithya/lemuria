@@ -158,6 +158,27 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	// Post initial progress comment
 	tracker.postInitial(ctx)
 
+	// Batch-fetch Application CR source files before per-app sync loop
+	sourcePathSet := make(map[string]struct{})
+	for _, l := range locks {
+		if l.SourceFile != "" {
+			sourcePathSet[l.SourceFile] = struct{}{}
+		}
+	}
+	sourcePaths := setToSlice(sourcePathSet)
+
+	var headSourceContents map[string][]byte
+	if len(sourcePaths) > 0 {
+		var fetchErr error
+		headSourceContents, fetchErr = e.vcs.GetFileContents(ctx, event.Repo.Owner, event.Repo.Name, sourcePaths, event.PR.HeadRef)
+		if fetchErr != nil {
+			slog.Warn("failed to batch-fetch source files at head ref for sync", "error", fetchErr)
+			headSourceContents = map[string][]byte{}
+		}
+	} else {
+		headSourceContents = map[string][]byte{}
+	}
+
 	// Sync each application
 	slog.Debug("starting sync for applications",
 		"count", len(locks),
@@ -167,7 +188,7 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		slog.Debug("syncing application",
 			"app", l.Application,
 		)
-		results[i] = e.syncApplication(ctx, l, cmd, event)
+		results[i] = e.syncApplication(ctx, l, cmd, event, headSourceContents)
 		tracker.updateResult(ctx, i, results[i])
 	}
 
@@ -222,7 +243,7 @@ type syncResult struct {
 }
 
 // syncApplication triggers a sync for a single application.
-func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Command, event *models.PREvent) syncResult {
+func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Command, event *models.PREvent, headContents map[string][]byte) syncResult {
 	slog.Debug("starting sync for application",
 		"app", l.Application,
 		"revision", event.PR.HeadSHA,
@@ -256,9 +277,9 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 			"source_file", l.SourceFile,
 		)
 
-		headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, l.SourceFile, event.PR.HeadRef)
-		if err != nil {
-			result.Error = fmt.Errorf("reading application CR from head branch: %w", err)
+		headContent, ok := headContents[l.SourceFile]
+		if !ok {
+			result.Error = fmt.Errorf("application CR %s not found in pre-fetched head contents", l.SourceFile)
 			return result
 		}
 

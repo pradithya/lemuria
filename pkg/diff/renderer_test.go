@@ -446,6 +446,95 @@ func TestRenderNewAndDeletedApps(t *testing.T) {
 		}
 	})
 
+	t.Run("renders new application with diffs", func(t *testing.T) {
+		results := []PlanResult{
+			{
+				Application: "new-app",
+				ChangeType:  models.ApplicationNew,
+				SourceFile:  "apps/new-app.yaml",
+				Created:     2,
+				Diffs: []models.ManifestDiff{
+					{
+						Resource: models.ResourceKey{Kind: "Deployment", Name: "web", Namespace: "default"},
+						Action:   models.DiffActionCreate,
+						Diff:     "--- live\n+++ target\n@@ -0,0 +1,3 @@\n+apiVersion: apps/v1\n+kind: Deployment\n+replicas: 3\n",
+					},
+					{
+						Resource: models.ResourceKey{Kind: "Service", Name: "web-svc", Namespace: "default"},
+						Action:   models.DiffActionCreate,
+						Diff:     "--- live\n+++ target\n@@ -0,0 +1,2 @@\n+apiVersion: v1\n+kind: Service\n",
+					},
+				},
+			},
+		}
+
+		output := renderer.RenderPlan(results, 42)
+
+		expectations := []string{
+			"### Application: `new-app`",
+			"New application",
+			"apps/new-app.yaml",
+			"2 to create",
+			"Deployment/web",
+			"Service/web-svc",
+			"```diff",
+		}
+
+		for _, exp := range expectations {
+			if !strings.Contains(output, exp) {
+				t.Errorf("expected output to contain %q\nOutput: %s", exp, output)
+			}
+		}
+
+		// Should NOT contain the "cannot generate a diff" message
+		if strings.Contains(output, "cannot generate a diff") {
+			t.Errorf("should not contain 'cannot generate a diff' when diffs are available\nOutput: %s", output)
+		}
+	})
+
+	t.Run("renders deleted application with diffs", func(t *testing.T) {
+		results := []PlanResult{
+			{
+				Application: "deleted-app",
+				ChangeType:  models.ApplicationDeleted,
+				SourceFile:  "apps/deleted-app.yaml",
+				Warning:     "This application will be removed after the PR is merged.",
+				Deleted:     2,
+				Diffs: []models.ManifestDiff{
+					{
+						Resource: models.ResourceKey{Kind: "Deployment", Name: "web", Namespace: "default"},
+						Action:   models.DiffActionDelete,
+						Diff:     "--- live\n+++ target\n@@ -1,3 +0,0 @@\n-apiVersion: apps/v1\n-kind: Deployment\n-replicas: 2\n",
+					},
+					{
+						Resource: models.ResourceKey{Kind: "ConfigMap", Name: "config", Namespace: "default"},
+						Action:   models.DiffActionDelete,
+						Diff:     "--- live\n+++ target\n@@ -1,2 +0,0 @@\n-apiVersion: v1\n-kind: ConfigMap\n",
+					},
+				},
+			},
+		}
+
+		output := renderer.RenderPlan(results, 42)
+
+		expectations := []string{
+			"### Application: `deleted-app`",
+			"will be deleted",
+			"apps/deleted-app.yaml",
+			"orphaned or pruned",
+			"2 to delete",
+			"Deployment/web",
+			"ConfigMap/config",
+			"```diff",
+		}
+
+		for _, exp := range expectations {
+			if !strings.Contains(output, exp) {
+				t.Errorf("expected output to contain %q\nOutput: %s", exp, output)
+			}
+		}
+	})
+
 	t.Run("renders mixed new, existing, and deleted", func(t *testing.T) {
 		results := []PlanResult{
 			{

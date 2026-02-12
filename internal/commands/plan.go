@@ -113,6 +113,33 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 		return e.postComment(ctx, event, "", "## Lemuria Plan\n\nNo applications affected by this PR.")
 	}
 
+	// Batch-fetch Application CR source files before per-app loop
+	sourcePathSet := make(map[string]struct{})
+	for _, app := range apps {
+		if app.SourceFile != "" {
+			sourcePathSet[app.SourceFile] = struct{}{}
+		}
+	}
+	sourcePaths := setToSlice(sourcePathSet)
+
+	var headSourceContents, baseSourceContents map[string][]byte
+	if len(sourcePaths) > 0 {
+		var fetchErr error
+		headSourceContents, fetchErr = e.vcs.GetFileContents(ctx, event.Repo.Owner, event.Repo.Name, sourcePaths, event.PR.HeadRef)
+		if fetchErr != nil {
+			slog.Warn("failed to batch-fetch source files at head ref", "error", fetchErr)
+			headSourceContents = map[string][]byte{}
+		}
+		baseSourceContents, fetchErr = e.vcs.GetFileContents(ctx, event.Repo.Owner, event.Repo.Name, sourcePaths, event.PR.BaseRef)
+		if fetchErr != nil {
+			slog.Warn("failed to batch-fetch source files at base ref", "error", fetchErr)
+			baseSourceContents = map[string][]byte{}
+		}
+	} else {
+		headSourceContents = map[string][]byte{}
+		baseSourceContents = map[string][]byte{}
+	}
+
 	// Process each application
 	var results []appPlanResult
 	for _, app := range apps {
@@ -120,7 +147,7 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 			"app", app.Name,
 			"change_type", app.ChangeType,
 		)
-		result := e.planApplication(ctx, app, event)
+		result := e.planApplication(ctx, app, event, headSourceContents, baseSourceContents)
 		results = append(results, result)
 	}
 
@@ -148,7 +175,7 @@ type appPlanResult struct {
 }
 
 // planApplication generates a diff for a single application.
-func (e *Executor) planApplication(ctx context.Context, app models.Application, event *models.PREvent) appPlanResult {
+func (e *Executor) planApplication(ctx context.Context, app models.Application, event *models.PREvent, headContents, baseContents map[string][]byte) appPlanResult {
 	slog.Debug("starting plan for application",
 		"app", app.Name,
 		"change_type", app.ChangeType,
@@ -170,6 +197,61 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			"app", app.Name,
 		)
 		result.LockStatus = "New application"
+
+		// Try to generate diff for new app by reading spec from head branch
+		if app.SourceFile != "" {
+			headContent, ok := headContents[app.SourceFile]
+			if !ok {
+				slog.Warn("application CR not found in head contents for new app, skipping diff",
+					"app", app.Name,
+					"source_file", app.SourceFile,
+				)
+				return result
+			}
+
+			headAppSpec, parseErr := argocd.ParseRawApplicationFromYAML(headContent, app.Name)
+			if parseErr != nil {
+				slog.Warn("failed to parse application CR from head branch for new app, skipping diff",
+					"app", app.Name,
+					"error", parseErr,
+				)
+				return result
+			}
+
+			timeout := e.config.ArgoCD.TempAppTimeout
+			if timeout == 0 {
+				timeout = 2 * time.Minute
+			}
+
+			diffs, diffErr := e.argocd.DiffNewApp(ctx, headAppSpec, argocd.DiffOptions{
+				TargetBranch: event.PR.HeadRef,
+				PRNumber:     event.PR.Number,
+				PRRepo:       event.Repo.HTMLURL,
+				Timeout:      timeout,
+			})
+			if diffErr != nil {
+				slog.Warn("failed to generate diff for new application, skipping diff",
+					"app", app.Name,
+					"error", diffErr,
+				)
+				return result
+			}
+
+			result.Diffs = diffs
+			result.Summary = argocd.SummarizeDiffs(diffs)
+
+			// Store plan
+			var planSummary string
+			var planDiffs []models.PlanDiffEntry
+			if len(diffs) > 0 {
+				planSummary = formatPlanSummary(result.Summary)
+				planDiffs = toPlanDiffEntries(diffs)
+			}
+			if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
+				slog.Warn("failed to store plan for new app", "app", app.Name, "error", err)
+			}
+		}
+
 		return result
 	}
 
@@ -180,6 +262,69 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		)
 		result.LockStatus = "Will be deleted"
 		result.Warning = "This application will be removed after the PR is merged."
+
+		// Try to generate diff for deleted app
+		diffMode := argocd.DiffMode(e.config.ArgoCD.DiffMode)
+		if diffMode == "" {
+			diffMode = argocd.DiffModeBranch
+		}
+
+		timeout := e.config.ArgoCD.TempAppTimeout
+		if timeout == 0 {
+			timeout = 2 * time.Minute
+		}
+
+		// Optionally read base branch spec for override
+		var baseAppSpec *v1alpha1.Application
+		if app.SourceFile != "" {
+			if baseContent, ok := baseContents[app.SourceFile]; ok {
+				parsed, parseErr := argocd.ParseRawApplicationFromYAML(baseContent, app.Name)
+				if parseErr != nil {
+					slog.Warn("failed to parse application CR from base branch for deleted app, falling back to live spec",
+						"app", app.Name,
+						"error", parseErr,
+					)
+				} else {
+					baseAppSpec = parsed
+				}
+			} else {
+				slog.Warn("application CR not found in base contents for deleted app, falling back to live spec",
+					"app", app.Name,
+					"source_file", app.SourceFile,
+				)
+			}
+		}
+
+		diffs, diffErr := e.argocd.DiffDeletedApp(ctx, app.Name, argocd.DiffOptions{
+			Mode:        diffMode,
+			BaseBranch:  event.PR.BaseRef,
+			PRNumber:    event.PR.Number,
+			PRRepo:      event.Repo.HTMLURL,
+			Timeout:     timeout,
+			BaseAppSpec: baseAppSpec,
+		})
+		if diffErr != nil {
+			slog.Warn("failed to generate diff for deleted application, continuing without diff",
+				"app", app.Name,
+				"error", diffErr,
+			)
+			return result
+		}
+
+		result.Diffs = diffs
+		result.Summary = argocd.SummarizeDiffs(diffs)
+
+		// Store plan
+		var planSummary string
+		var planDiffs []models.PlanDiffEntry
+		if len(diffs) > 0 {
+			planSummary = formatPlanSummary(result.Summary)
+			planDiffs = toPlanDiffEntries(diffs)
+		}
+		if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
+			slog.Warn("failed to store plan for deleted app", "app", app.Name, "error", err)
+		}
+
 		return result
 	}
 
@@ -252,16 +397,8 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			"source_file", app.SourceFile,
 		)
 
-		// Read base branch version
-		baseContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.BaseRef)
-		if err != nil {
-			slog.Warn("failed to read application CR from base branch, falling back to live spec",
-				"app", app.Name,
-				"source_file", app.SourceFile,
-				"base_ref", event.PR.BaseRef,
-				"error", err,
-			)
-		} else {
+		// Read base branch version from pre-fetched content
+		if baseContent, ok := baseContents[app.SourceFile]; ok {
 			parsed, parseErr := argocd.ParseRawApplicationFromYAML(baseContent, app.Name)
 			if parseErr != nil {
 				slog.Warn("failed to parse application CR from base branch, falling back to live spec",
@@ -271,18 +408,16 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			} else {
 				baseAppSpec = parsed
 			}
-		}
-
-		// Read head branch version
-		headContent, err := e.vcs.GetFileContent(ctx, event.Repo.Owner, event.Repo.Name, app.SourceFile, event.PR.HeadRef)
-		if err != nil {
-			slog.Warn("failed to read application CR from head branch, falling back to live spec",
+		} else {
+			slog.Warn("application CR not found in base branch, falling back to live spec",
 				"app", app.Name,
 				"source_file", app.SourceFile,
-				"head_ref", event.PR.HeadRef,
-				"error", err,
+				"base_ref", event.PR.BaseRef,
 			)
-		} else {
+		}
+
+		// Read head branch version from pre-fetched content
+		if headContent, ok := headContents[app.SourceFile]; ok {
 			parsed, parseErr := argocd.ParseRawApplicationFromYAML(headContent, app.Name)
 			if parseErr != nil {
 				slog.Warn("failed to parse application CR from head branch, falling back to live spec",
@@ -292,6 +427,12 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			} else {
 				headAppSpec = parsed
 			}
+		} else {
+			slog.Warn("application CR not found in head branch, falling back to live spec",
+				"app", app.Name,
+				"source_file", app.SourceFile,
+				"head_ref", event.PR.HeadRef,
+			)
 		}
 	}
 

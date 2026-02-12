@@ -15,12 +15,14 @@
 package gitlab
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
 	gogitlab "gitlab.com/gitlab-org/api/client-go"
 
 	"github.com/org/lemuria/internal/models"
+	"github.com/org/lemuria/internal/vcs"
 )
 
 // GetChangedFiles returns the list of files changed in a merge request.
@@ -92,6 +94,28 @@ func filePath(d *gogitlab.MergeRequestDiff) string {
 // specific ref (branch, tag, or commit SHA).
 func (c *Client) GetRepoConfig(ctx context.Context, owner, repo, ref string) ([]byte, error) {
 	return c.GetFileContent(ctx, owner, repo, ".lemuria.yaml", ref)
+}
+
+// GetFileContents retrieves the contents of multiple files at a specific ref
+// by downloading a tar.gz archive (single HTTP call) and extracting the
+// requested paths in-memory.
+func (c *Client) GetFileContents(ctx context.Context, owner, repo string, paths []string, ref string) (map[string][]byte, error) {
+	if len(paths) == 0 {
+		return map[string][]byte{}, nil
+	}
+
+	project := projectPath(owner, repo)
+	format := "tar.gz"
+
+	data, _, err := c.client.Repositories.Archive(project, &gogitlab.ArchiveOptions{
+		Format: gogitlab.Ptr(format),
+		SHA:    gogitlab.Ptr(ref),
+	}, gogitlab.WithContext(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("downloading archive at ref %s: %w", ref, err)
+	}
+
+	return vcs.ExtractFilesFromTarGz(bytes.NewReader(data), paths)
 }
 
 // GetFileContent retrieves the raw content of a file at a specific ref.

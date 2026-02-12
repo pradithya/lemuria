@@ -43,7 +43,7 @@ func (m *mockVCSForSync) GetRepoConfig(context.Context, string, string, string) 
 	return m.repoConfigData, nil
 }
 
-func (m *mockVCSForSync) GetFileContent(context.Context, string, string, string, string) ([]byte, error) {
+func (m *mockVCSForSync) GetFileContents(context.Context, string, string, []string, string) (map[string][]byte, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 

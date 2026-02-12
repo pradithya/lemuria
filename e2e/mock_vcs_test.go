@@ -120,15 +120,17 @@ func (m *MockVCSClient) GetRepoConfig(_ context.Context, _, _, _ string) ([]byte
 	return m.RepoConfigData, nil
 }
 
-func (m *MockVCSClient) GetFileContent(_ context.Context, _, _, path, ref string) ([]byte, error) {
+func (m *MockVCSClient) GetFileContents(_ context.Context, _, _ string, paths []string, ref string) (map[string][]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	key := path + "@" + ref
-	content, ok := m.FileContents[key]
-	if !ok {
-		return nil, fmt.Errorf("file not found: %s at ref %s", path, ref)
+	result := make(map[string][]byte, len(paths))
+	for _, p := range paths {
+		key := p + "@" + ref
+		if content, ok := m.FileContents[key]; ok {
+			result[p] = content
+		}
 	}
-	return content, nil
+	return result, nil
 }
 
 func (m *MockVCSClient) GetPR(_ context.Context, _, _ string, _ int) (*models.PullRequestDetail, error) {
