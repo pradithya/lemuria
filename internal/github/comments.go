@@ -35,6 +35,9 @@ const (
 	StaleMarker = "<!-- lemuria:stale -->"
 	// StaleNotice is prepended to invalidated comments.
 	StaleNotice = "> ⚠️ **This plan is outdated.** New changes have been pushed to this PR.\n\n"
+
+	// MaxCommentBodySize is GitHub's maximum comment body size in characters.
+	MaxCommentBodySize = 65536
 )
 
 // CreateComment posts a new comment on a PR.
@@ -186,6 +189,11 @@ func (c *Client) PostComment(ctx context.Context, owner, repo string, number int
 	return &models.CommentResult{
 		ID: comment.GetID(),
 	}, nil
+}
+
+// MaxCommentSize returns GitHub's maximum comment body size.
+func (c *Client) MaxCommentSize() int {
+	return MaxCommentBodySize
 }
 
 // InvalidatePlanComments marks all existing plan comments on a PR as stale.

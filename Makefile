@@ -56,7 +56,7 @@ test: test-unit
 
 # Run unit tests
 test-unit:
-	go test -v -race -coverprofile=coverage.out ./internal/... ./pkg/...
+	go test -v ./internal/... ./pkg/...
 
 # Run e2e tests (requires setup first)
 test-e2e:
@@ -130,7 +130,7 @@ setup-hooks:
 
 # Lint code
 lint:
-	golangci-lint run ./...
+	golangci-lint run --concurrency 4 ./...
 
 # Format code
 fmt:

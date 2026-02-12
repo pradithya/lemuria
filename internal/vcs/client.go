@@ -33,4 +33,7 @@ type Client interface {
 	InvalidatePlanComments(ctx context.Context, owner, repo string, number int) error
 	MergePullRequest(ctx context.Context, owner, repo string, number int, title, message, method string) error
 	DeleteBranch(ctx context.Context, owner, repo, branch string) error
+	// MaxCommentSize returns the maximum comment body size in characters
+	// for this VCS provider. Returns 0 if there is no limit.
+	MaxCommentSize() int
 }

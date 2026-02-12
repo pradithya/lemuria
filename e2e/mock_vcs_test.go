@@ -216,6 +216,10 @@ func (m *MockVCSClient) MergePullRequest(_ context.Context, owner, repo string, 
 	return nil
 }
 
+func (m *MockVCSClient) MaxCommentSize() int {
+	return 0 // no limit in tests
+}
+
 func (m *MockVCSClient) DeleteBranch(_ context.Context, _, _, branch string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

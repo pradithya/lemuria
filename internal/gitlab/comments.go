@@ -33,6 +33,9 @@ const (
 	StaleMarker = "<!-- lemuria:stale -->"
 	// StaleNotice is prepended to invalidated comments.
 	StaleNotice = "> :warning: **This plan is outdated.** New changes have been pushed to this MR.\n\n"
+
+	// MaxNoteBodySize is GitLab's maximum note body size in characters.
+	MaxNoteBodySize = 1_000_000
 )
 
 // PostComment creates a new note on a merge request with appropriate markers
@@ -118,6 +121,11 @@ func (c *Client) UpdateComment(ctx context.Context, owner, repo string, number i
 		return fmt.Errorf("updating MR note %d: %w", commentID, err)
 	}
 	return nil
+}
+
+// MaxCommentSize returns GitLab's maximum note body size.
+func (c *Client) MaxCommentSize() int {
+	return MaxNoteBodySize
 }
 
 // InvalidatePlanComments marks all existing plan comments on a MR as stale.

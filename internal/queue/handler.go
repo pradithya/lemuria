@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/hibiken/asynq"
 
@@ -130,6 +131,13 @@ func (h *WebhookHandler) processEvent(ctx context.Context, executor *commands.Ex
 // handleComment parses and executes commands from PR comments.
 func (h *WebhookHandler) handleComment(ctx context.Context, executor *commands.Executor, event *models.PREvent) error {
 	if event.Action != models.PRActionCreated {
+		return nil
+	}
+
+	// Skip comments posted by Lemuria itself (safety net — the webhook
+	// handlers already filter these before enqueueing).
+	if strings.Contains(event.Comment.Body, models.CommentMarker) {
+		slog.Debug("ignoring bot comment in queue handler")
 		return nil
 	}
 

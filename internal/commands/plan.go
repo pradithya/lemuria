@@ -355,7 +355,8 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 
 // renderPlanResults formats plan results as a markdown comment.
 func (e *Executor) renderPlanResults(results []appPlanResult, event *models.PREvent) string {
-	return e.renderer.RenderPlan(convertToRenderResults(results), event.PR.Number)
+	maxSize := e.vcs.MaxCommentSize()
+	return e.renderer.RenderPlan(convertToRenderResults(results), event.PR.Number, maxSize)
 }
 
 // convertToRenderResults converts internal results to renderer format.

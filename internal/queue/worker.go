@@ -15,6 +15,7 @@
 package queue
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -44,6 +45,12 @@ func NewWorker(redisCfg config.RedisConfig, queueCfg config.QueueConfig) *Worker
 			"webhooks": 10,
 		},
 		Logger: newSlogAdapter(),
+		ErrorHandler: asynq.ErrorHandlerFunc(func(ctx context.Context, task *asynq.Task, err error) {
+			slog.Error("task failed",
+				"type", task.Type(),
+				"error", err,
+			)
+		}),
 	})
 
 	return &Worker{

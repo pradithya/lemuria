@@ -20,6 +20,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
@@ -89,6 +90,16 @@ func (h *GitHubHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		// Event type not handled
 		w.WriteHeader(http.StatusOK)
 		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ignored"}); err != nil {
+			slog.Warn("failed to encode response", "error", err)
+		}
+		return
+	}
+
+	// Ignore comments posted by Lemuria itself to avoid processing our own output.
+	if event.Comment != nil && strings.Contains(event.Comment.Body, models.CommentMarker) {
+		slog.Debug("ignoring bot comment", "delivery_id", deliveryID)
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "bot comment ignored"}); err != nil {
 			slog.Warn("failed to encode response", "error", err)
 		}
 		return

@@ -46,7 +46,18 @@ func NewRenderer() *Renderer {
 }
 
 // RenderPlan formats plan results as a markdown comment.
-func (r *Renderer) RenderPlan(results []PlanResult, prNumber int) string {
+// If maxSize > 0, the output is truncated at clean structural boundaries
+// (application > resource > line) to fit within the limit.
+func (r *Renderer) RenderPlan(results []PlanResult, prNumber int, maxSize ...int) string {
+	body := r.renderPlanFull(results, prNumber)
+	if len(maxSize) > 0 && maxSize[0] > 0 && len(body) > maxSize[0] {
+		return r.truncatePlan(results, prNumber, maxSize[0])
+	}
+	return body
+}
+
+// renderPlanFull renders the complete plan without any truncation.
+func (r *Renderer) renderPlanFull(results []PlanResult, prNumber int) string {
 	var sb strings.Builder
 
 	sb.WriteString("## Lemuria Plan\n\n")
@@ -93,6 +104,222 @@ func (r *Renderer) RenderPlan(results []PlanResult, prNumber int) string {
 	sb.WriteString("To unlock: comment `lemuria unlock`\n")
 
 	return sb.String()
+}
+
+const truncationNotice = "\n\n> ⚠️ **Output truncated** due to platform comment size limit. Run `lemuria plan -a <app>` for individual application plans.\n"
+
+// truncatePlan renders the plan progressively, respecting structural boundaries.
+// Priority: omit entire apps → omit resources within an app → truncate diff content.
+func (r *Renderer) truncatePlan(results []PlanResult, prNumber int, maxSize int) string {
+	header := "## Lemuria Plan\n\n"
+	footer := "---\nTo apply: comment `lemuria sync`\nTo unlock: comment `lemuria unlock`\n"
+
+	// Reserve space for header, footer, and truncation notice
+	budget := maxSize - len(header) - len(footer) - len(truncationNotice)
+	if budget <= 0 {
+		return header + truncationNotice + footer
+	}
+
+	// Flatten all results into ordered sections (standalone first, then appset groups)
+	type appSection struct {
+		prefix string // appset group header (empty for standalone)
+		result PlanResult
+	}
+	var sections []appSection
+	var appSetGroups = make(map[string][]PlanResult)
+	var appSetOrder []string
+
+	for _, result := range results {
+		if result.ApplicationSetName == "" {
+			sections = append(sections, appSection{result: result})
+		} else {
+			if _, exists := appSetGroups[result.ApplicationSetName]; !exists {
+				appSetOrder = append(appSetOrder, result.ApplicationSetName)
+			}
+			appSetGroups[result.ApplicationSetName] = append(appSetGroups[result.ApplicationSetName], result)
+		}
+	}
+	for _, appSetName := range appSetOrder {
+		group := appSetGroups[appSetName]
+		count := len(group)
+		noun := "applications"
+		if count == 1 {
+			noun = "application"
+		}
+		groupHeader := fmt.Sprintf("### ApplicationSet: `%s` (%d %s)\n\n", appSetName, count, noun)
+		for i, result := range group {
+			prefix := ""
+			if i == 0 {
+				prefix = groupHeader
+			}
+			sections = append(sections, appSection{prefix: prefix, result: result})
+		}
+	}
+
+	// Phase 1: Try adding full app sections one by one.
+	var sb strings.Builder
+	omittedApps := 0
+	for i, sec := range sections {
+		fullApp := sec.prefix + r.renderAppPlan(sec.result) + "\n"
+		if sb.Len()+len(fullApp) <= budget {
+			sb.WriteString(fullApp)
+			continue
+		}
+
+		// This app doesn't fit fully. Try rendering it with truncated diffs.
+		remaining := budget - sb.Len()
+		truncatedApp := r.renderAppPlanTruncated(sec.result, remaining-len(sec.prefix))
+		if truncatedApp != "" && len(sec.prefix)+len(truncatedApp) <= remaining {
+			sb.WriteString(sec.prefix)
+			sb.WriteString(truncatedApp)
+		} else {
+			// Can't fit even a truncated version — count remaining as omitted
+			omittedApps = len(sections) - i
+			break
+		}
+		// All subsequent apps are omitted
+		omittedApps = len(sections) - i - 1
+		break
+	}
+
+	if omittedApps > 0 {
+		noun := "applications"
+		if omittedApps == 1 {
+			noun = "application"
+		}
+		sb.WriteString(fmt.Sprintf("\n*... %d more %s omitted*\n", omittedApps, noun))
+	}
+
+	return header + sb.String() + truncationNotice + footer
+}
+
+// renderAppPlanTruncated renders an app section that fits within maxSize,
+// progressively omitting resource diffs.
+func (r *Renderer) renderAppPlanTruncated(result PlanResult, maxSize int) string {
+	// First, render without diffs to get the minimum size
+	noDiffResult := result
+	noDiffResult.Diffs = nil
+	base := r.renderAppPlan(noDiffResult) + "\n"
+	if len(base) > maxSize {
+		return "" // Even the app header/summary doesn't fit
+	}
+
+	if len(result.Diffs) == 0 {
+		return base
+	}
+
+	// Build the diff section progressively, resource by resource
+	budget := maxSize - len(base)
+	detailsOpen := "<details>\n" + fmt.Sprintf("<summary>Diff (%d resources changed)</summary>\n\n", len(result.Diffs))
+	detailsClose := "</details>\n\n"
+	omittedNotice := func(n int) string {
+		noun := "resources"
+		if n == 1 {
+			noun = "resource"
+		}
+		return fmt.Sprintf("\n*... %d more %s omitted*\n\n", n, noun)
+	}
+
+	// Minimum: just the details wrapper with "all omitted"
+	minDiffSection := detailsOpen + omittedNotice(len(result.Diffs)) + detailsClose
+	if len(minDiffSection) > budget {
+		return base // Can't fit even the collapsed diff section
+	}
+
+	var diffSB strings.Builder
+	diffSB.WriteString(detailsOpen)
+	omittedResources := 0
+
+	for i, d := range result.Diffs {
+		resourceBlock := r.renderResourceDiff(d)
+		remaining := budget - diffSB.Len() - len(detailsClose)
+		omittedCount := len(result.Diffs) - i - 1
+
+		// Check if this resource fits (accounting for potential "omitted" notice after it)
+		spaceForOmitted := 0
+		if omittedCount > 0 {
+			spaceForOmitted = len(omittedNotice(omittedCount))
+		}
+
+		if len(resourceBlock)+spaceForOmitted <= remaining {
+			diffSB.WriteString(resourceBlock)
+			continue
+		}
+
+		// Try truncating this resource's diff content at a line boundary
+		truncated := r.renderResourceDiffTruncated(d, remaining-spaceForOmitted-len(omittedNotice(omittedCount+1)))
+		if truncated != "" {
+			diffSB.WriteString(truncated)
+			omittedResources = omittedCount
+		} else {
+			omittedResources = len(result.Diffs) - i
+		}
+		break
+	}
+
+	if omittedResources > 0 {
+		diffSB.WriteString(omittedNotice(omittedResources))
+	}
+	diffSB.WriteString(detailsClose)
+
+	return base + diffSB.String()
+}
+
+// renderResourceDiffTruncated renders a resource diff, truncating the diff
+// content at a clean line boundary to fit within maxSize.
+func (r *Renderer) renderResourceDiffTruncated(d models.ManifestDiff, maxSize int) string {
+	// Resource header
+	var actionIcon string
+	switch d.Action {
+	case models.DiffActionCreate:
+		actionIcon = "➕"
+	case models.DiffActionUpdate:
+		actionIcon = "📝"
+	case models.DiffActionDelete:
+		actionIcon = "➖"
+	default:
+		actionIcon = "ℹ️"
+	}
+	header := fmt.Sprintf("#### %s %s\n\n", actionIcon, d.Resource.String())
+	diffTruncNotice := "\n... (truncated)\n"
+	codeOpen := "```diff\n"
+	codeClose := "```\n\n"
+
+	minSize := len(header) + len(codeOpen) + len(diffTruncNotice) + len(codeClose)
+	if maxSize < minSize {
+		return ""
+	}
+
+	if d.Diff == "" {
+		if len(header) <= maxSize {
+			return header
+		}
+		return ""
+	}
+
+	// Available space for diff lines
+	available := maxSize - len(header) - len(codeOpen) - len(diffTruncNotice) - len(codeClose)
+	sanitized := sanitizeDiffForMarkdown(d.Diff)
+	if len(header)+len(codeOpen)+len(sanitized)+len("\n")+len(codeClose) <= maxSize {
+		// Full diff fits
+		return r.renderResourceDiff(d)
+	}
+
+	// Truncate at line boundary
+	lines := strings.SplitAfter(sanitized, "\n")
+	var truncSB strings.Builder
+	for _, line := range lines {
+		if truncSB.Len()+len(line) > available {
+			break
+		}
+		truncSB.WriteString(line)
+	}
+
+	if truncSB.Len() == 0 {
+		return ""
+	}
+
+	return header + codeOpen + truncSB.String() + diffTruncNotice + codeClose
 }
 
 // renderAppPlan formats a single application's plan.

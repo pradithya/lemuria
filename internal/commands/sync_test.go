@@ -82,6 +82,10 @@ func (m *mockVCSForSync) DeleteBranch(context.Context, string, string, string) e
 	return nil
 }
 
+func (m *mockVCSForSync) MaxCommentSize() int {
+	return 0
+}
+
 // mockLockManagerForSync is a minimal lock.Manager mock for sync tests.
 type mockLockManagerForSync struct{}
 

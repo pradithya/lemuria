@@ -20,6 +20,10 @@ import (
 	"github.com/org/lemuria/internal/config"
 )
 
+// CommentMarker is the HTML comment tag embedded in all Lemuria-posted
+// comments so that webhook handlers can recognise (and skip) bot comments.
+const CommentMarker = "<!-- lemuria -->"
+
 // VCSProvider identifies the version control system hosting the repository.
 type VCSProvider string
 
