@@ -475,7 +475,19 @@ func (r *Renderer) renderResourceDiff(diff models.ManifestDiff) string {
 }
 
 // RenderSync formats sync results as a markdown comment.
-func (r *Renderer) RenderSync(results []SyncResultEntry) string {
+// If maxSize > 0 and the full output exceeds the limit, plan diffs are
+// dropped (they are already shown in the plan comment) to stay within budget.
+func (r *Renderer) RenderSync(results []SyncResultEntry, maxSize ...int) string {
+	body := r.renderSyncFull(results, true)
+	if len(maxSize) > 0 && maxSize[0] > 0 && len(body) > maxSize[0] {
+		// Re-render without plan diffs — they're already in the plan comment.
+		body = r.renderSyncFull(results, false)
+	}
+	return body
+}
+
+// renderSyncFull renders the sync comment, optionally including plan diffs.
+func (r *Renderer) renderSyncFull(results []SyncResultEntry, includePlanDiffs bool) string {
 	var sb strings.Builder
 
 	sb.WriteString("## Lemuria Sync\n\n")
@@ -516,7 +528,7 @@ func (r *Renderer) RenderSync(results []SyncResultEntry) string {
 		}
 
 		// Plan diffs (detailed per-resource diffs from plan)
-		if len(result.PlanDiffs) > 0 {
+		if includePlanDiffs && len(result.PlanDiffs) > 0 {
 			sb.WriteString(r.renderPlanDiffs(result.PlanDiffs))
 		}
 

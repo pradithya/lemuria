@@ -490,7 +490,8 @@ func (e *Executor) renderSyncResults(results []syncResult) string {
 		}
 		entries[i] = entry
 	}
-	return e.renderer.RenderSync(entries)
+	maxSize := e.vcs.MaxCommentSize()
+	return e.renderer.RenderSync(entries, maxSize)
 }
 
 // autoMergePR merges the PR and optionally deletes the source branch.
