@@ -215,6 +215,12 @@ func (r *Renderer) splitAppByResources(result PlanResult, pageBudget int) []stri
 	for _, d := range result.Diffs {
 		resourceBlock := r.renderResourceDiff(d)
 
+		// If a single resource block exceeds the budget, truncate its diff
+		overhead := len(continuationHeader) + len(continuedDetailsOpen) + len(detailsClose)
+		if len(resourceBlock) > pageBudget-overhead {
+			resourceBlock = r.renderResourceDiffTruncated(d, pageBudget-overhead)
+		}
+
 		// Check if this resource fits (need space for detailsClose)
 		if current.Len()+len(resourceBlock)+len(detailsClose) <= pageBudget {
 			current.WriteString(resourceBlock)
@@ -359,24 +365,50 @@ func (r *Renderer) renderDiffs(diffs []models.ManifestDiff) string {
 	return sb.String()
 }
 
+// renderResourceDiffTruncated formats a resource diff truncated to fit within maxLen.
+func (r *Renderer) renderResourceDiffTruncated(d models.ManifestDiff, maxLen int) string {
+	truncateNotice := "\n... (diff truncated due to size)\n"
+	header := fmt.Sprintf("#### %s %s\n\n", r.actionIcon(d.Action), d.Resource.String())
+	wrapper := "```diff\n"
+	wrapperClose := "```\n\n"
+
+	available := maxLen - len(header) - len(wrapper) - len(wrapperClose) - len(truncateNotice)
+	if available <= 0 {
+		return header
+	}
+
+	content := sanitizeDiffForMarkdown(d.Diff)
+	if len(content) > available {
+		// Truncate at the last newline within budget to avoid cutting a line in half
+		content = content[:available]
+		if idx := strings.LastIndex(content, "\n"); idx > 0 {
+			content = content[:idx+1]
+		}
+		content += truncateNotice
+	}
+
+	return header + wrapper + content + wrapperClose
+}
+
+// actionIcon returns the emoji for a diff action.
+func (r *Renderer) actionIcon(action models.DiffAction) string {
+	switch action {
+	case models.DiffActionCreate:
+		return "➕"
+	case models.DiffActionUpdate:
+		return "📝"
+	case models.DiffActionDelete:
+		return "➖"
+	default:
+		return "ℹ️"
+	}
+}
+
 // renderResourceDiff formats a single resource diff.
 func (r *Renderer) renderResourceDiff(diff models.ManifestDiff) string {
 	var sb strings.Builder
 
-	// Resource header with action indicator
-	var actionIcon string
-	switch diff.Action {
-	case models.DiffActionCreate:
-		actionIcon = "➕"
-	case models.DiffActionUpdate:
-		actionIcon = "📝"
-	case models.DiffActionDelete:
-		actionIcon = "➖"
-	default:
-		actionIcon = "ℹ️"
-	}
-
-	sb.WriteString(fmt.Sprintf("#### %s %s\n\n", actionIcon, diff.Resource.String()))
+	sb.WriteString(fmt.Sprintf("#### %s %s\n\n", r.actionIcon(diff.Action), diff.Resource.String()))
 
 	if diff.Diff != "" {
 		sb.WriteString("```diff\n")

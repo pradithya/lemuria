@@ -858,6 +858,45 @@ func TestRenderPlanSplitMultipleApps(t *testing.T) {
 	}
 }
 
+func TestRenderPlanSplitOversizedResource(t *testing.T) {
+	renderer := NewRenderer()
+
+	// A single resource diff that exceeds the maxSize by itself
+	hugeDiff := strings.Repeat("-old line content\n+new line content\n", 2000)
+	results := []PlanResult{
+		{
+			Application: "big-app",
+			LockStatus:  "Locked by this PR",
+			Updated:     1,
+			Diffs: []models.ManifestDiff{
+				{
+					Resource: models.ResourceKey{Kind: "ConfigMap", Name: "huge-config", Namespace: "default"},
+					Action:   models.DiffActionUpdate,
+					Diff:     hugeDiff,
+				},
+			},
+		},
+	}
+
+	maxSize := 60000
+	parts := renderer.RenderPlan(results, 42, maxSize)
+
+	for i, part := range parts {
+		if len(part) > maxSize {
+			t.Errorf("part %d exceeds maxSize: got %d chars, limit %d", i, len(part), maxSize)
+		}
+	}
+
+	// Verify the truncation notice is present
+	combined := strings.Join(parts, "")
+	if !strings.Contains(combined, "diff truncated") {
+		t.Error("expected truncation notice in output")
+	}
+	if !strings.Contains(combined, "big-app") {
+		t.Error("expected app name in output")
+	}
+}
+
 // errTest is a test error.
 var errTest = testError("test error")
 
