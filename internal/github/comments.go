@@ -195,9 +195,11 @@ func (c *Client) PostComment(ctx context.Context, owner, repo string, number int
 	}, nil
 }
 
-// MaxCommentSize returns GitHub's maximum comment body size.
+// MaxCommentSize returns a safe usable comment body size.
+// This is set below GitHub's absolute 65536-char limit to provide buffer
+// for internal markers prepended by PostComment.
 func (c *Client) MaxCommentSize() int {
-	return MaxCommentBodySize
+	return 60000
 }
 
 // InvalidatePlanComments marks all existing plan comments on a PR as stale

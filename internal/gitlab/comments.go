@@ -123,9 +123,11 @@ func (c *Client) UpdateComment(ctx context.Context, owner, repo string, number i
 	return nil
 }
 
-// MaxCommentSize returns GitLab's maximum note body size.
+// MaxCommentSize returns a safe usable note body size.
+// This is set below GitLab's absolute 1,000,000-char limit to provide buffer
+// for internal markers prepended by PostComment.
 func (c *Client) MaxCommentSize() int {
-	return MaxNoteBodySize
+	return 990000
 }
 
 // InvalidatePlanComments marks all existing plan comments on a MR as stale

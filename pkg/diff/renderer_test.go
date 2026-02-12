@@ -806,6 +806,58 @@ func TestRenderPlanMixedGeneratedAndRegular(t *testing.T) {
 	}
 }
 
+func TestRenderPlanSplitMultipleApps(t *testing.T) {
+	renderer := NewRenderer()
+
+	// Create multiple apps with diffs large enough that the total exceeds maxSize.
+	makeDiff := func(name string) PlanResult {
+		return PlanResult{
+			Application: name,
+			LockStatus:  "Locked by this PR",
+			Updated:     2,
+			Diffs: []models.ManifestDiff{
+				{
+					Resource: models.ResourceKey{Kind: "Deployment", Name: name, Namespace: "default"},
+					Action:   models.DiffActionUpdate,
+					Diff:     strings.Repeat("-old line content here\n+new line content here\n", 50),
+				},
+			},
+		}
+	}
+
+	results := []PlanResult{
+		makeDiff("app-1"),
+		makeDiff("app-2"),
+		makeDiff("app-3"),
+	}
+
+	// First render without limit to find total size
+	fullParts := renderer.RenderPlan(results, 42)
+	fullSize := len(fullParts[0])
+
+	// Use a maxSize that's about half the full size to force splitting
+	maxSize := fullSize / 2
+	parts := renderer.RenderPlan(results, 42, maxSize)
+
+	if len(parts) < 2 {
+		t.Fatalf("expected multiple parts (full size %d, maxSize %d), got %d parts", fullSize, maxSize, len(parts))
+	}
+
+	for i, part := range parts {
+		if len(part) > maxSize {
+			t.Errorf("part %d exceeds maxSize: got %d chars, limit %d", i, len(part), maxSize)
+		}
+	}
+
+	// Verify all apps appear across parts
+	combined := strings.Join(parts, "")
+	for _, name := range []string{"app-1", "app-2", "app-3"} {
+		if !strings.Contains(combined, name) {
+			t.Errorf("expected %q to appear in split output", name)
+		}
+	}
+}
+
 // errTest is a test error.
 var errTest = testError("test error")
 
