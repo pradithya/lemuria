@@ -155,9 +155,14 @@ func (e *Executor) executePlan(ctx context.Context, cmd *Command, event *models.
 		"results_count", len(results),
 	)
 
-	// Render and post results
-	output := e.renderPlanResults(results, event)
-	return e.postPlanComment(ctx, event, output)
+	// Render and post results (may produce multiple comments)
+	parts := e.renderPlanResults(results, event)
+	for _, part := range parts {
+		if err := e.postPlanComment(ctx, event, part); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // appPlanResult holds the result of planning a single application.
@@ -494,8 +499,9 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 	return result
 }
 
-// renderPlanResults formats plan results as a markdown comment.
-func (e *Executor) renderPlanResults(results []appPlanResult, event *models.PREvent) string {
+// renderPlanResults formats plan results as markdown comments.
+// It may return multiple parts when the result exceeds the VCS comment size limit.
+func (e *Executor) renderPlanResults(results []appPlanResult, event *models.PREvent) []string {
 	maxSize := e.vcs.MaxCommentSize()
 	return e.renderer.RenderPlan(convertToRenderResults(results), event.PR.Number, maxSize)
 }

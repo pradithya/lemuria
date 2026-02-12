@@ -128,7 +128,8 @@ func (c *Client) MaxCommentSize() int {
 	return MaxNoteBodySize
 }
 
-// InvalidatePlanComments marks all existing plan comments on a MR as stale.
+// InvalidatePlanComments marks all existing plan comments on a MR as stale
+// and wraps the content in a collapsible <details> block.
 func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string, number int) error {
 	project := projectPath(owner, repo)
 
@@ -146,16 +147,7 @@ func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string,
 			body := note.Body
 			// Only invalidate plan comments that aren't already stale
 			if strings.Contains(body, PlanCommentMarker) && !strings.Contains(body, StaleMarker) {
-				// Add stale marker and notice
-				newBody := strings.Replace(body, PlanCommentMarker, PlanCommentMarker+"\n"+StaleMarker, 1)
-				// Find the end of markers and insert stale notice
-				markerEnd := strings.Index(newBody, "\n## ")
-				if markerEnd == -1 {
-					markerEnd = strings.Index(newBody, "\n#")
-				}
-				if markerEnd != -1 {
-					newBody = newBody[:markerEnd+1] + StaleNotice + newBody[markerEnd+1:]
-				}
+				newBody := buildStaleBody(body)
 
 				_, _, err := c.client.Notes.UpdateMergeRequestNote(project, int64(number), note.ID, &gogitlab.UpdateMergeRequestNoteOptions{
 					Body: gogitlab.Ptr(newBody),
@@ -173,4 +165,29 @@ func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string,
 	}
 
 	return nil
+}
+
+// buildStaleBody wraps a plan comment body in a collapsible <details> block
+// with a stale notice, so outdated plans are visually collapsed in the MR timeline.
+func buildStaleBody(body string) string {
+	// Add stale marker
+	markerBody := strings.Replace(body, PlanCommentMarker, PlanCommentMarker+"\n"+StaleMarker, 1)
+
+	// Find where the actual content starts (after markers)
+	contentStart := strings.Index(markerBody, "\n## ")
+	if contentStart == -1 {
+		contentStart = strings.Index(markerBody, "\n#")
+	}
+	if contentStart == -1 {
+		// No heading found; wrap entire body after markers
+		return markerBody
+	}
+
+	markers := markerBody[:contentStart+1]
+	content := markerBody[contentStart+1:]
+
+	return markers + StaleNotice +
+		"<details>\n<summary>Show outdated plan</summary>\n\n" +
+		content +
+		"\n</details>\n"
 }

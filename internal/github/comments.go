@@ -15,8 +15,12 @@
 package github
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/google/go-github/v60/github"
@@ -196,7 +200,8 @@ func (c *Client) MaxCommentSize() int {
 	return MaxCommentBodySize
 }
 
-// InvalidatePlanComments marks all existing plan comments on a PR as stale.
+// InvalidatePlanComments marks all existing plan comments on a PR as stale
+// and minimizes (hides) them using GitHub's GraphQL API.
 func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string, number int) error {
 	client, err := c.GetInstallationClient(ctx, owner)
 	if err != nil {
@@ -232,6 +237,16 @@ func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string,
 				if err != nil {
 					return fmt.Errorf("invalidating comment %d: %w", comment.GetID(), err)
 				}
+
+				// Minimize (hide) the comment so it collapses in the PR timeline
+				if nodeID := comment.GetNodeID(); nodeID != "" {
+					if err := c.minimizeComment(ctx, client, nodeID); err != nil {
+						slog.Warn("failed to minimize comment",
+							"comment_id", comment.GetID(),
+							"error", err,
+						)
+					}
+				}
 			}
 		}
 
@@ -240,6 +255,55 @@ func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string,
 		}
 		opts.Page = resp.NextPage
 	}
+
+	return nil
+}
+
+// minimizeComment hides a comment using GitHub's GraphQL minimizeComment mutation.
+// The comment is classified as OUTDATED so it collapses in the PR timeline.
+func (c *Client) minimizeComment(ctx context.Context, client *github.Client, nodeID string) error {
+	query := `mutation($id: ID!) {
+		minimizeComment(input: {subjectId: $id, classifier: OUTDATED}) {
+			minimizedComment {
+				isMinimized
+			}
+		}
+	}`
+
+	payload := struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}{
+		Query: query,
+		Variables: map[string]any{
+			"id": nodeID,
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshaling GraphQL request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.github.com/graphql", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("creating GraphQL request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.BareDo(ctx, req)
+	if err != nil {
+		return fmt.Errorf("GraphQL minimizeComment: %w", err)
+	}
+	defer func() {
+		err = resp.Body.Close()
+		if err != nil {
+			slog.Warn("failed to close GraphQL response body",
+				"comment_node_id", nodeID,
+				"error", err,
+			)
+		}
+	}()
 
 	return nil
 }
