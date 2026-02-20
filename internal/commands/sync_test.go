@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 	"github.com/org/lemuria/internal/vcs"
@@ -609,5 +611,199 @@ func TestCheckSyncRequirements(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestConvertV1alpha1App(t *testing.T) {
+	tests := []struct {
+		name        string
+		app         *v1alpha1.Application
+		wantRepoURL string
+		wantSources int
+	}{
+		{
+			name: "single source",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL: "https://github.com/org/repo",
+					},
+				},
+			},
+			wantRepoURL: "https://github.com/org/repo",
+			wantSources: 0,
+		},
+		{
+			name: "multi source",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{RepoURL: "https://github.com/org/repo"},
+						{RepoURL: "https://charts.bitnami.com/bitnami"},
+					},
+				},
+			},
+			wantRepoURL: "",
+			wantSources: 2,
+		},
+		{
+			name: "nil source",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{},
+			},
+			wantRepoURL: "",
+			wantSources: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertV1alpha1App(tt.app)
+			if got.RepoURL != tt.wantRepoURL {
+				t.Errorf("RepoURL = %q, want %q", got.RepoURL, tt.wantRepoURL)
+			}
+			if len(got.Sources) != tt.wantSources {
+				t.Errorf("Sources count = %d, want %d", len(got.Sources), tt.wantSources)
+			}
+		})
+	}
+}
+
+// mockLockManagerForSyncTracking tracks unlock calls for testing.
+type mockLockManagerForSyncTracking struct {
+	mockLockManagerForSync
+	unlocked []string
+}
+
+func (m *mockLockManagerForSyncTracking) Unlock(_ context.Context, application, _ string, _ int) error {
+	m.unlocked = append(m.unlocked, application)
+	return nil
+}
+
+func TestSyncDeletedApplication(t *testing.T) {
+	lockMgr := &mockLockManagerForSyncTracking{}
+	exec := &Executor{
+		lock:   lockMgr,
+		config: &config.Config{},
+	}
+
+	lock := models.Lock{
+		Application: "deleted-app",
+		PRNumber:    1,
+		Repo:        "org/repo",
+		ChangeType:  models.ApplicationDeleted,
+		PlanOutput:  "test plan output",
+	}
+	cmd := &Command{Name: CommandSync}
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner:    "org",
+			Name:     "repo",
+			FullName: "org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadSHA: "abc123",
+		},
+	}
+
+	result := exec.syncDeletedApplication(context.Background(), lock, cmd, event)
+
+	if result.Error != nil {
+		t.Fatalf("unexpected error: %v", result.Error)
+	}
+	if result.Result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.Result.Phase != models.SyncPhaseSucceeded {
+		t.Errorf("phase = %v, want %v", result.Result.Phase, models.SyncPhaseSucceeded)
+	}
+	if result.Application != "deleted-app" {
+		t.Errorf("application = %q, want %q", result.Application, "deleted-app")
+	}
+	if result.PlanOutput != "test plan output" {
+		t.Errorf("plan output = %q, want %q", result.PlanOutput, "test plan output")
+	}
+	if len(lockMgr.unlocked) != 1 || lockMgr.unlocked[0] != "deleted-app" {
+		t.Errorf("expected unlock for 'deleted-app', got %v", lockMgr.unlocked)
+	}
+}
+
+func TestSyncDeletedApplicationDryRun(t *testing.T) {
+	lockMgr := &mockLockManagerForSyncTracking{}
+	exec := &Executor{
+		lock:   lockMgr,
+		config: &config.Config{},
+	}
+
+	lock := models.Lock{
+		Application: "deleted-app",
+		PRNumber:    1,
+		Repo:        "org/repo",
+		ChangeType:  models.ApplicationDeleted,
+	}
+	cmd := &Command{Name: CommandSync, DryRun: true}
+	event := &models.PREvent{
+		Repo: models.RepoInfo{FullName: "org/repo"},
+		PR:   models.PRInfo{Number: 1},
+	}
+
+	result := exec.syncDeletedApplication(context.Background(), lock, cmd, event)
+
+	if result.Error != nil {
+		t.Fatalf("unexpected error: %v", result.Error)
+	}
+	if len(lockMgr.unlocked) != 0 {
+		t.Errorf("expected no unlock in dry-run, got %v", lockMgr.unlocked)
+	}
+}
+
+func TestSyncNewApplicationNoSourceFile(t *testing.T) {
+	exec := &Executor{
+		config: &config.Config{},
+	}
+
+	lock := models.Lock{
+		Application: "new-app",
+		ChangeType:  models.ApplicationNew,
+		// SourceFile intentionally empty
+	}
+	cmd := &Command{Name: CommandSync}
+	event := &models.PREvent{
+		PR: models.PRInfo{HeadSHA: "abc123"},
+	}
+
+	result := exec.syncNewApplication(context.Background(), lock, cmd, event, map[string][]byte{})
+
+	if result.Error == nil {
+		t.Fatal("expected error for missing source file")
+	}
+	if !strings.Contains(result.Error.Error(), "no source file") {
+		t.Errorf("error = %q, want containing 'no source file'", result.Error.Error())
+	}
+}
+
+func TestSyncNewApplicationMissingContent(t *testing.T) {
+	exec := &Executor{
+		config: &config.Config{},
+	}
+
+	lock := models.Lock{
+		Application: "new-app",
+		ChangeType:  models.ApplicationNew,
+		SourceFile:  "apps/new-app.yaml",
+	}
+	cmd := &Command{Name: CommandSync}
+	event := &models.PREvent{
+		PR: models.PRInfo{HeadSHA: "abc123"},
+	}
+
+	result := exec.syncNewApplication(context.Background(), lock, cmd, event, map[string][]byte{})
+
+	if result.Error == nil {
+		t.Fatal("expected error for missing content")
+	}
+	if !strings.Contains(result.Error.Error(), "not found in pre-fetched") {
+		t.Errorf("error = %q, want containing 'not found in pre-fetched'", result.Error.Error())
 	}
 }

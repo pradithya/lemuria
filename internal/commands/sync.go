@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
@@ -127,6 +129,11 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 				"current_head_sha", event.PR.HeadSHA,
 			)
 			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n⚠️ Plan for `%s` is stale. Please run `lemuria plan` again.", l.Application))
+		}
+
+		// New and deleted apps don't exist (or shouldn't be checked) in ArgoCD yet — skip auto-sync check
+		if l.ChangeType == models.ApplicationNew || l.ChangeType == models.ApplicationDeleted {
+			continue
 		}
 
 		// Check if auto-sync is enabled
@@ -248,9 +255,20 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 		"app", l.Application,
 		"revision", event.PR.HeadSHA,
 		"source_file", l.SourceFile,
+		"change_type", l.ChangeType,
 		"prune", cmd.Prune,
 		"dry_run", cmd.DryRun,
 	)
+
+	// Handle new apps — create in ArgoCD then sync
+	if l.ChangeType == models.ApplicationNew {
+		return e.syncNewApplication(ctx, l, cmd, event, headContents)
+	}
+
+	// Handle deleted apps — just release the lock (deletion happens on merge)
+	if l.ChangeType == models.ApplicationDeleted {
+		return e.syncDeletedApplication(ctx, l, cmd, event)
+	}
 
 	result := syncResult{
 		Application: l.Application,
@@ -349,6 +367,140 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 		slog.Debug("releasing lock after successful sync",
 			"app", l.Application,
 		)
+		if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
+			slog.Warn("failed to release lock after sync", "app", l.Application, "error", err)
+		}
+	}
+
+	return result
+}
+
+// syncNewApplication creates a new app in ArgoCD and syncs it.
+func (e *Executor) syncNewApplication(ctx context.Context, l models.Lock, cmd *Command, event *models.PREvent, headContents map[string][]byte) syncResult {
+	result := syncResult{
+		Application: l.Application,
+		PlanOutput:  l.PlanOutput,
+		PlanDiffs:   l.PlanDiffs,
+	}
+
+	if l.SourceFile == "" {
+		result.Error = fmt.Errorf("new application %s has no source file", l.Application)
+		return result
+	}
+
+	headContent, ok := headContents[l.SourceFile]
+	if !ok {
+		result.Error = fmt.Errorf("application CR %s not found in pre-fetched head contents", l.SourceFile)
+		return result
+	}
+
+	parsed, err := argocd.ParseRawApplicationFromYAML(headContent, l.Application)
+	if err != nil {
+		result.Error = fmt.Errorf("parsing application CR from head branch: %w", err)
+		return result
+	}
+
+	// Create the app in ArgoCD; if it already exists (e.g., from a prior root-app sync),
+	// update its spec instead
+	if err := e.argocd.CreateApplication(ctx, parsed); err != nil {
+		slog.Debug("create failed, trying update",
+			"app", l.Application,
+			"error", err,
+		)
+		if updateErr := e.argocd.UpdateApplicationSpec(ctx, l.Application, parsed.Spec); updateErr != nil {
+			result.Error = fmt.Errorf("creating application %s: %w (update also failed: %v)", l.Application, err, updateErr)
+			return result
+		}
+	}
+
+	opts := &argocd.SyncOptions{
+		Prune:   cmd.Prune,
+		DryRun:  cmd.DryRun,
+		Timeout: e.config.ArgoCD.SyncTimeout,
+	}
+
+	// Use the head SHA as revision since the app sources from the PR repo
+	repoURL := event.Repo.HTMLURL
+	if appSourcesFromRepo(convertV1alpha1App(parsed), repoURL) {
+		opts.Revision = event.PR.HeadSHA
+	}
+
+	slog.Debug("syncing new application",
+		"app", l.Application,
+		"revision", opts.Revision,
+	)
+
+	syncRes, err := e.argocd.SyncApplication(ctx, l.Application, opts)
+	if err != nil {
+		result.Error = err
+		return result
+	}
+
+	result.Result = syncRes
+
+	// Fetch per-resource health
+	healthInfo, err := e.argocd.GetResourceHealth(ctx, l.Application)
+	if err != nil {
+		slog.Warn("failed to fetch resource health", "app", l.Application, "error", err)
+	} else {
+		mergeResourceHealth(syncRes, healthInfo)
+	}
+
+	// Release lock on successful sync (unless dry-run)
+	if !cmd.DryRun && syncRes.Phase == models.SyncPhaseSucceeded {
+		slog.Debug("releasing lock after successful sync",
+			"app", l.Application,
+		)
+		if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
+			slog.Warn("failed to release lock after sync", "app", l.Application, "error", err)
+		}
+	}
+
+	return result
+}
+
+// convertV1alpha1App creates a minimal models.Application from a v1alpha1.Application for repo matching.
+func convertV1alpha1App(app *v1alpha1.Application) models.Application {
+	m := models.Application{
+		Name: app.Name,
+	}
+	if app.Spec.Source != nil {
+		m.RepoURL = app.Spec.Source.RepoURL
+	}
+	if len(app.Spec.Sources) > 0 {
+		for _, s := range app.Spec.Sources {
+			m.Sources = append(m.Sources, models.ApplicationSource{
+				RepoURL: s.RepoURL,
+			})
+		}
+	}
+	return m
+}
+
+// syncDeletedApplication releases the lock for a deleted app.
+// The actual deletion happens when the PR is merged and the parent app syncs.
+func (e *Executor) syncDeletedApplication(ctx context.Context, l models.Lock, cmd *Command, event *models.PREvent) syncResult {
+	result := syncResult{
+		Application: l.Application,
+		PlanOutput:  l.PlanOutput,
+		PlanDiffs:   l.PlanDiffs,
+	}
+
+	slog.Debug("handling deleted application sync — releasing lock only",
+		"app", l.Application,
+	)
+
+	// For deleted apps, there's nothing to sync — the app CR removal
+	// takes effect when the PR is merged and the parent app syncs to the new branch
+	result.Result = &models.SyncResult{
+		Application:  l.Application,
+		Phase:        models.SyncPhaseSucceeded,
+		Message:      "Application will be deleted when the PR is merged.",
+		HealthStatus: models.HealthStatusHealthy,
+	}
+
+	// Release lock (unless dry-run)
+	if !cmd.DryRun {
 		if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
 			slog.Warn("failed to release lock after sync", "app", l.Application, "error", err)
 		}

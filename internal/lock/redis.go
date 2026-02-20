@@ -74,6 +74,7 @@ func (m *RedisManager) Lock(ctx context.Context, req models.LockRequest) (*model
 	// If locked by the same PR, refresh the lock
 	if existing != nil && existing.IsHeldByPR(req.Repo, req.PRNumber) {
 		existing.LockedAt = time.Now()
+		existing.ChangeType = req.ChangeType
 		if err := m.setLock(ctx, existing); err != nil {
 			return nil, err
 		}
@@ -100,6 +101,7 @@ func (m *RedisManager) Lock(ctx context.Context, req models.LockRequest) (*model
 		Provider:    req.Provider,
 		User:        req.User,
 		LockedAt:    time.Now(),
+		ChangeType:  req.ChangeType,
 	}
 
 	if err := m.setLock(ctx, lock); err != nil {

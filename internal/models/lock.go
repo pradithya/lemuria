@@ -29,17 +29,18 @@ type PlanDiffEntry struct {
 
 // Lock represents an application lock held by a PR.
 type Lock struct {
-	Application  string          `json:"application"`
-	PRNumber     int             `json:"pr_number"`
-	Repo         string          `json:"repo"`
-	RepoURL      string          `json:"repo_url,omitempty"`
-	Provider     string          `json:"provider,omitempty"`
-	User         string          `json:"user"`
-	LockedAt     time.Time       `json:"locked_at"`
-	PlanRevision string          `json:"plan_revision"`
-	SourceFile   string          `json:"source_file,omitempty"`
-	PlanOutput   string          `json:"plan_output,omitempty"`
-	PlanDiffs    []PlanDiffEntry `json:"plan_diffs,omitempty"`
+	Application  string                `json:"application"`
+	PRNumber     int                   `json:"pr_number"`
+	Repo         string                `json:"repo"`
+	RepoURL      string                `json:"repo_url,omitempty"`
+	Provider     string                `json:"provider,omitempty"`
+	User         string                `json:"user"`
+	LockedAt     time.Time             `json:"locked_at"`
+	PlanRevision string                `json:"plan_revision"`
+	SourceFile   string                `json:"source_file,omitempty"`
+	PlanOutput   string                `json:"plan_output,omitempty"`
+	PlanDiffs    []PlanDiffEntry       `json:"plan_diffs,omitempty"`
+	ChangeType   ApplicationChangeType `json:"change_type,omitempty"`
 }
 
 // LockRequest is used when attempting to acquire a lock.
@@ -50,6 +51,7 @@ type LockRequest struct {
 	RepoURL     string
 	Provider    string
 	User        string
+	ChangeType  ApplicationChangeType
 }
 
 // LockResult represents the outcome of a lock operation.

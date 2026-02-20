@@ -210,6 +210,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			RepoURL:     event.Repo.HTMLURL,
 			Provider:    string(event.Provider),
 			User:        event.Sender.Login,
+			ChangeType:  models.ApplicationNew,
 		})
 		if err != nil {
 			result.Error = fmt.Errorf("failed to acquire lock: %w", err)
@@ -293,6 +294,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			RepoURL:     event.Repo.HTMLURL,
 			Provider:    string(event.Provider),
 			User:        event.Sender.Login,
+			ChangeType:  models.ApplicationDeleted,
 		})
 		if err != nil {
 			result.Error = fmt.Errorf("failed to acquire lock: %w", err)
@@ -391,6 +393,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		RepoURL:     event.Repo.HTMLURL,
 		Provider:    string(event.Provider),
 		User:        event.Sender.Login,
+		ChangeType:  models.ApplicationExisting,
 	})
 	if err != nil {
 		slog.Debug("failed to acquire lock",
