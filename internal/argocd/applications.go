@@ -474,9 +474,27 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			syncResult.HealthStatus = healthStatus
 			return syncResult, nil
 
-		case models.HealthStatusMissing, models.HealthStatusUnknown:
+		case models.HealthStatusMissing:
+			// Missing can be transient for new apps (health not yet evaluated).
+			// Reset healthy timer and keep waiting, just like Progressing.
+			if !healthyAt.IsZero() {
+				slog.Debug("health changed from Healthy to Missing, resetting stabilization",
+					"application", name,
+				)
+				healthyAt = time.Time{}
+				if stabilizationTimer != nil {
+					stabilizationTimer.Stop()
+					stabilizationTimer = nil
+				}
+			}
+			slog.Debug("application health is missing, waiting for evaluation",
+				"application", name,
+			)
+			continue
+
+		case models.HealthStatusUnknown:
 			// Failure: unexpected terminal health state
-			slog.Debug("application health is missing or unknown",
+			slog.Debug("application health is unknown",
 				"application", name,
 				"health", healthStatus,
 			)
