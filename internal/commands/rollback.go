@@ -150,13 +150,6 @@ func (e *Executor) rollbackApplication(ctx context.Context, cmd *Command, event 
 
 	result.Result = syncResult
 
-	// Release lock if rollback succeeds (unless dry-run)
-	if !cmd.DryRun && syncResult.Phase == models.SyncPhaseSucceeded {
-		if err := e.lock.Unlock(ctx, app.Name, event.Repo.FullName, event.PR.Number); err != nil {
-			slog.Warn("failed to release lock after rollback", "app", app.Name, "error", err)
-		}
-	}
-
 	return result
 }
 

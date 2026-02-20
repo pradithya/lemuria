@@ -122,6 +122,32 @@ func waitForAppReady(ctx context.Context, t *testing.T, client *argocd.Client, n
 	t.Fatalf("Timed out waiting for application %s to be ready", name)
 }
 
+// syncAndWaitForHealthy triggers an initial sync for an app and waits until it's healthy.
+// This ensures the app has been synced at least once and has a valid health status,
+// preventing "health is Missing" failures in subsequent sync operations.
+func syncAndWaitForHealthy(ctx context.Context, t *testing.T, client *argocd.Client, name string, timeout time.Duration) {
+	t.Helper()
+
+	_, err := client.SyncApplication(ctx, name, &argocd.SyncOptions{
+		Timeout: timeout,
+	})
+	if err != nil {
+		t.Fatalf("Failed to sync application %s: %v", name, err)
+	}
+
+	// Poll until health is not Missing
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		app, err := client.GetApplication(ctx, name)
+		if err == nil && app != nil && app.HealthStatus != "" && string(app.HealthStatus) != "Missing" {
+			t.Logf("Application %s is healthy (sync: %s, health: %s)", name, app.SyncStatus, app.HealthStatus)
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("Timed out waiting for application %s to become healthy", name)
+}
+
 // uniqueAppName generates a unique application name for a test.
 func uniqueAppName(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano()%100000)

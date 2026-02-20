@@ -724,8 +724,8 @@ func TestSyncDeletedApplication(t *testing.T) {
 	if result.PlanOutput != "test plan output" {
 		t.Errorf("plan output = %q, want %q", result.PlanOutput, "test plan output")
 	}
-	if len(lockMgr.unlocked) != 1 || lockMgr.unlocked[0] != "deleted-app" {
-		t.Errorf("expected unlock for 'deleted-app', got %v", lockMgr.unlocked)
+	if len(lockMgr.unlocked) != 0 {
+		t.Errorf("expected no unlock (deferred to auto-merge), got %v", lockMgr.unlocked)
 	}
 }
 

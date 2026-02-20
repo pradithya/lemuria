@@ -232,6 +232,24 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		)
 		if err := e.autoMergePR(ctx, event); err != nil {
 			slog.Warn("auto-merge failed", "error", err)
+		} else {
+			// Auto-merge succeeded. Revert targetRevision for new apps
+			// back to the base branch — during sync we rewrote it to the
+			// PR branch, but now that the PR is merged the files exist on
+			// the base branch.
+			for _, l := range locks {
+				if l.ChangeType == models.ApplicationNew {
+					e.revertTargetRevision(ctx, l, event)
+				}
+			}
+			// Release all locks after successful auto-merge.
+			// If auto-merge is disabled or fails, locks persist until
+			// the PR is closed/merged (cleaned up by UnlockAll).
+			for _, l := range locks {
+				if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
+					slog.Warn("failed to release lock after auto-merge", "app", l.Application, "error", err)
+				}
+			}
 		}
 	}
 
@@ -384,16 +402,6 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 		mergeResourceHealth(syncResult, healthInfo)
 	}
 
-	// Release lock on successful sync (unless dry-run)
-	if !cmd.DryRun && syncResult.Phase == models.SyncPhaseSucceeded {
-		slog.Debug("releasing lock after successful sync",
-			"app", l.Application,
-		)
-		if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
-			slog.Warn("failed to release lock after sync", "app", l.Application, "error", err)
-		}
-	}
-
 	return result
 }
 
@@ -478,16 +486,6 @@ func (e *Executor) syncNewApplication(ctx context.Context, l models.Lock, cmd *C
 		mergeResourceHealth(syncRes, healthInfo)
 	}
 
-	// Release lock on successful sync (unless dry-run)
-	if !cmd.DryRun && syncRes.Phase == models.SyncPhaseSucceeded {
-		slog.Debug("releasing lock after successful sync",
-			"app", l.Application,
-		)
-		if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
-			slog.Warn("failed to release lock after sync", "app", l.Application, "error", err)
-		}
-	}
-
 	return result
 }
 
@@ -562,13 +560,6 @@ func (e *Executor) syncDeletedApplication(ctx context.Context, l models.Lock, cm
 		Phase:        models.SyncPhaseSucceeded,
 		Message:      "Application will be deleted when the PR is merged.",
 		HealthStatus: models.HealthStatusHealthy,
-	}
-
-	// Release lock (unless dry-run)
-	if !cmd.DryRun {
-		if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
-			slog.Warn("failed to release lock after sync", "app", l.Application, "error", err)
-		}
 	}
 
 	return result

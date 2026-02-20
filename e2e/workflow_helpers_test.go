@@ -312,6 +312,21 @@ func waitForLockRelease(t *testing.T, appName string, timeout time.Duration) {
 	t.Fatalf("Timed out waiting for lock on %s to be released", appName)
 }
 
+// waitForMergeCall polls the mock VCS client until at least n merge calls are recorded.
+func waitForMergeCall(t *testing.T, mock *MockVCSClient, n int, timeout time.Duration) []MergeCall {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		calls := mock.GetMergeCalls()
+		if len(calls) >= n {
+			return calls
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Timed out waiting for %d merge call(s), got %d", n, len(mock.GetMergeCalls()))
+	return nil
+}
+
 // waitForProcessingDone waits a short period after the primary result is
 // observed, allowing secondary side effects (reactions, invalidations) to
 // complete before assertions.

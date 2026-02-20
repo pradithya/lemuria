@@ -65,3 +65,66 @@ func TestE2ERollbackCommand(t *testing.T) {
 		t.Error("Expected rollback info in comment body")
 	}
 }
+
+// TestE2ERollbackLocksRetained verifies that after a rollback, locks persist
+// (they are not released by rollback, only by auto-merge or PR close).
+func TestE2ERollbackLocksRetained(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+	t.Parallel()
+
+	appName := uniqueAppName("e2e-rb-lockretain")
+	repo := "test-owner/test-repo"
+	prNumber := int(time.Now().UnixNano()%90000) + 50000
+
+	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
+	syncAndWaitForHealthy(testCtx, t, argoClient, appName, 120*time.Second)
+
+	defer cleanupForceUnlock(testCtx, t, appName)
+
+	mockGH := NewMockVCSClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	ts := newTestServer(mockGH, nil)
+	defer ts.Close()
+
+	// Step 1: Plan to acquire lock
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
+
+	// Verify lock acquired
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil || lock == nil {
+		t.Fatalf("Expected lock to be acquired: %v", err)
+	}
+
+	// Step 2: Rollback
+	mockGH.Reset()
+	rollbackPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria rollback -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", rollbackPayload))
+
+	// Wait for rollback comment
+	comments := waitForComment(t, mockGH, 1, 120*time.Second)
+	lastComment := comments[len(comments)-1]
+	t.Logf("Rollback comment: %.300s", lastComment.Body)
+
+	if !strings.Contains(lastComment.Body, "Rollback") {
+		t.Error("Expected rollback info in comment body")
+	}
+	waitForProcessingDone()
+
+	// Assert: lock is retained after rollback
+	lock, err = lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to check lock after rollback: %v", err)
+	}
+	if lock == nil {
+		t.Error("Expected lock to still be held after rollback")
+	}
+}

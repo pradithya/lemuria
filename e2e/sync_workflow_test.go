@@ -34,10 +34,11 @@ func TestE2ESyncCommand(t *testing.T) {
 	repo := "test-owner/test-repo"
 	prNumber := 200
 
-	// Create a per-test application
+	// Create a per-test application and ensure it's synced and healthy
 	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
+	syncAndWaitForHealthy(testCtx, t, argoClient, appName, 120*time.Second)
 
 	// Ensure clean lock state
 	defer cleanupForceUnlock(testCtx, t, appName)
@@ -90,13 +91,21 @@ func TestE2ESyncCommand(t *testing.T) {
 		t.Error("Expected sync result in updated comment body")
 	}
 
-	// Assert: lock was released (successful sync releases lock)
+	// Assert: lock is retained after sync (auto-merge is disabled by default,
+	// so locks persist until PR is closed/merged)
+	waitForProcessingDone()
 	lock, err = lockManager.Get(testCtx, appName)
 	if err != nil {
 		t.Fatalf("Failed to check lock after sync: %v", err)
 	}
-	if lock != nil {
-		t.Logf("Note: lock still held after sync (sync may not have fully succeeded, phase may not be Succeeded)")
+	if lock == nil {
+		t.Error("Expected lock to still be held after sync (auto-merge disabled)")
+	}
+
+	// Assert: no merge calls were made
+	mergeCalls := mockGH.GetMergeCalls()
+	if len(mergeCalls) != 0 {
+		t.Errorf("Expected no merge calls, got %d", len(mergeCalls))
 	}
 }
 
@@ -574,5 +583,319 @@ func TestE2ESyncDegradedHealth(t *testing.T) {
 	}
 	if lock == nil {
 		t.Error("Expected lock to still be held after failed sync")
+	}
+}
+
+// TestE2ESyncAutoMergeNewApp verifies the auto-merge flow for an app locked as new:
+// lock with ChangeType=ApplicationNew → sync → auto-merge → locks released.
+// The app is pre-created and synced to avoid the health=Missing issue that occurs
+// for truly new apps (ArgoCD needs time to compute health after initial sync).
+func TestE2ESyncAutoMergeNewApp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+	t.Parallel()
+
+	appName := uniqueAppName("e2e-automerge-new")
+	repo := "test-owner/test-repo"
+	prNumber := int(time.Now().UnixNano()%90000) + 20000
+	headSHA := "abc123automerge"
+	headRef := "feature-new-app"
+	baseRef := "main"
+
+	// Pre-create and sync the app so it has healthy status.
+	// The sync code will try create (fail → exists) then update spec and sync.
+	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
+	syncAndWaitForHealthy(testCtx, t, argoClient, appName, 120*time.Second)
+
+	defer cleanupForceUnlock(testCtx, t, appName)
+
+	crFilePath := "bootstrap/" + appName + ".yaml"
+
+	// The Application CR YAML as it would appear in the PR
+	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: %s
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: e2e-test-apps`, appName)
+
+	// Step 1: Directly acquire lock with ChangeType=ApplicationNew and store plan
+	_, err := lockManager.Lock(testCtx, models.LockRequest{
+		Application: appName,
+		PRNumber:    prNumber,
+		Repo:        repo,
+		User:        "test-user",
+		ChangeType:  models.ApplicationNew,
+	})
+	if err != nil {
+		t.Fatalf("Failed to lock app: %v", err)
+	}
+	if err := lockManager.StorePlan(testCtx, appName, prNumber, headSHA, crFilePath, "new application", nil); err != nil {
+		t.Fatalf("Failed to store plan: %v", err)
+	}
+
+	// Verify lock acquired with correct fields
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil || lock == nil {
+		t.Fatalf("Expected lock to be acquired: %v", err)
+	}
+	if lock.ChangeType != models.ApplicationNew {
+		t.Fatalf("Expected lock ChangeType %q, got %q", models.ApplicationNew, lock.ChangeType)
+	}
+	if lock.SourceFile != crFilePath {
+		t.Fatalf("Expected lock SourceFile %q, got %q", crFilePath, lock.SourceFile)
+	}
+	t.Logf("Lock acquired: app=%s, change_type=%s, source_file=%s", lock.Application, lock.ChangeType, lock.SourceFile)
+
+	// Step 2: Sync with auto-merge enabled
+	mockGH := NewMockVCSClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+	mockGH.FileContents[crFilePath+"@"+headRef] = []byte(headYAML)
+	mockGH.PRHeadRef = headRef
+	mockGH.PRBaseRef = baseRef
+	mockGH.PRHeadSHA = headSHA
+
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "branch",
+			TempAppTimeout: 15 * time.Second,
+			SyncTimeout:    120 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			RequireApproval: false,
+			AutoMerge:       true,
+		},
+	}
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
+
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
+
+	// Assert: initial comment posted
+	comments := waitForComment(t, mockGH, 1, 60*time.Second)
+	if len(comments) == 0 {
+		t.Fatal("Expected initial sync progress comment")
+	}
+
+	// Assert: final result was posted as an update
+	updatedComments := waitForUpdatedComment(t, mockGH, 1, 180*time.Second)
+	lastUpdate := updatedComments[len(updatedComments)-1]
+	t.Logf("Sync comment: %.500s", lastUpdate.Body)
+
+	// Assert: auto-merge was called
+	mergeCalls := waitForMergeCall(t, mockGH, 1, 30*time.Second)
+	if mergeCalls[0].Method != "squash" {
+		t.Errorf("Expected merge method 'squash', got %q", mergeCalls[0].Method)
+	}
+	if mergeCalls[0].Number != prNumber {
+		t.Errorf("Expected merge PR number %d, got %d", prNumber, mergeCalls[0].Number)
+	}
+
+	// Assert: lock was released after auto-merge
+	waitForLockRelease(t, appName, 30*time.Second)
+}
+
+// TestE2ESyncAutoMergeDisabledLocksRetained verifies that when auto-merge is disabled
+// (the default), locks persist after a successful sync.
+func TestE2ESyncAutoMergeDisabledLocksRetained(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+	t.Parallel()
+
+	appName := uniqueAppName("e2e-noautomerge")
+	repo := "test-owner/test-repo"
+	prNumber := int(time.Now().UnixNano()%90000) + 30000
+	headSHA := "abc123noautomerge"
+
+	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
+	syncAndWaitForHealthy(testCtx, t, argoClient, appName, 120*time.Second)
+
+	defer cleanupForceUnlock(testCtx, t, appName)
+
+	mockGH := NewMockVCSClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "live",
+			TempAppTimeout: 15 * time.Second,
+			SyncTimeout:    120 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			RequireApproval: false,
+			AutoMerge:       false,
+		},
+	}
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
+
+	// Step 1: Plan to acquire lock
+	planPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria plan -a "+appName)
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", planPayload))
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	waitForProcessingDone()
+
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil || lock == nil {
+		t.Fatalf("Expected lock to be acquired: %v", err)
+	}
+
+	// Step 2: Sync with auto-merge disabled
+	mockGH.Reset()
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
+
+	// Wait for sync to complete
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	updatedComments := waitForUpdatedComment(t, mockGH, 1, 180*time.Second)
+	lastUpdate := updatedComments[len(updatedComments)-1]
+	t.Logf("Sync comment: %.300s", lastUpdate.Body)
+	waitForProcessingDone()
+
+	// Assert: lock is retained
+	lock, err = lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to check lock after sync: %v", err)
+	}
+	if lock == nil {
+		t.Error("Expected lock to still be held after sync (auto-merge disabled)")
+	}
+
+	// Assert: no merge calls were made
+	mergeCalls := mockGH.GetMergeCalls()
+	if len(mergeCalls) != 0 {
+		t.Errorf("Expected no merge calls, got %d", len(mergeCalls))
+	}
+}
+
+// TestE2ESyncAutoMergeMultipleApps verifies that when syncing multiple apps with
+// auto-merge enabled, ALL locks are released after a successful auto-merge.
+func TestE2ESyncAutoMergeMultipleApps(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+	t.Parallel()
+
+	app1Name := uniqueAppName("e2e-am-multi1")
+	app2Name := uniqueAppName("e2e-am-multi2")
+	repo := "test-owner/test-repo"
+	prNumber := int(time.Now().UnixNano()%90000) + 40000
+	headSHA := "abc123multiam"
+
+	// Create both apps and ensure they are synced and healthy
+	createTestApplication(testCtx, t, argoClient, app1Name, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, app1Name)
+	waitForAppReady(testCtx, t, argoClient, app1Name, 120*time.Second)
+	syncAndWaitForHealthy(testCtx, t, argoClient, app1Name, 120*time.Second)
+
+	createTestApplication(testCtx, t, argoClient, app2Name, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, app2Name)
+	waitForAppReady(testCtx, t, argoClient, app2Name, 120*time.Second)
+	syncAndWaitForHealthy(testCtx, t, argoClient, app2Name, 120*time.Second)
+
+	defer cleanupForceUnlock(testCtx, t, app1Name)
+	defer cleanupForceUnlock(testCtx, t, app2Name)
+
+	// Directly acquire locks and store plans (like TestE2ESyncMixedApps pattern)
+	_, err := lockManager.Lock(testCtx, models.LockRequest{
+		Application: app1Name,
+		PRNumber:    prNumber,
+		Repo:        repo,
+		User:        "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Failed to lock app1: %v", err)
+	}
+	if err := lockManager.StorePlan(testCtx, app1Name, prNumber, headSHA, "", "1 to update", nil); err != nil {
+		t.Fatalf("Failed to store plan for app1: %v", err)
+	}
+
+	_, err = lockManager.Lock(testCtx, models.LockRequest{
+		Application: app2Name,
+		PRNumber:    prNumber,
+		Repo:        repo,
+		User:        "test-user",
+	})
+	if err != nil {
+		t.Fatalf("Failed to lock app2: %v", err)
+	}
+	if err := lockManager.StorePlan(testCtx, app2Name, prNumber, headSHA, "", "1 to update", nil); err != nil {
+		t.Fatalf("Failed to store plan for app2: %v", err)
+	}
+
+	// Verify locks acquired
+	locks, err := lockManager.ListByPR(testCtx, repo, prNumber)
+	if err != nil {
+		t.Fatalf("ListByPR failed: %v", err)
+	}
+	if len(locks) < 2 {
+		t.Fatalf("Expected at least 2 locks, got %d", len(locks))
+	}
+
+	// Sync with auto-merge enabled
+	mockGH := NewMockVCSClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "live",
+			TempAppTimeout: 15 * time.Second,
+			SyncTimeout:    120 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			RequireApproval: false,
+			AutoMerge:       true,
+		},
+	}
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
+
+	syncPayload := githubCommentPayload(repo, "test-owner", "test-repo", prNumber, "lemuria sync")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "issue_comment", syncPayload))
+
+	// Wait for sync to complete
+	waitForComment(t, mockGH, 1, 60*time.Second)
+	updatedComments := waitForUpdatedComment(t, mockGH, 1, 180*time.Second)
+	lastUpdate := updatedComments[len(updatedComments)-1]
+	t.Logf("Sync comment: %.500s", lastUpdate.Body)
+
+	// Wait for auto-merge
+	mergeCalls := waitForMergeCall(t, mockGH, 1, 30*time.Second)
+	if len(mergeCalls) != 1 {
+		t.Errorf("Expected 1 merge call, got %d", len(mergeCalls))
+	}
+
+	// Assert: ALL locks released after auto-merge
+	waitForLockRelease(t, app1Name, 30*time.Second)
+	waitForLockRelease(t, app2Name, 30*time.Second)
+
+	lock1, _ := lockManager.Get(testCtx, app1Name)
+	lock2, _ := lockManager.Get(testCtx, app2Name)
+	if lock1 != nil {
+		t.Errorf("Expected lock for %s to be released", app1Name)
+	}
+	if lock2 != nil {
+		t.Errorf("Expected lock for %s to be released", app2Name)
 	}
 }
