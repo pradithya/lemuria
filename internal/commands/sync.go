@@ -447,27 +447,19 @@ func (e *Executor) syncNewApplication(ctx context.Context, l models.Lock, cmd *C
 		}
 	}
 
+	// For new apps, rewriteTargetRevision already set the correct
+	// targetRevision in the spec for each source (commit hash for git
+	// sources, original version for Helm charts). We sync without
+	// revision overrides so ArgoCD uses the spec's targetRevisions
+	// directly, avoiding issues with multi-source revision resolution.
 	opts := &argocd.SyncOptions{
 		Prune:   cmd.Prune,
 		DryRun:  cmd.DryRun,
 		Timeout: e.config.ArgoCD.SyncTimeout,
 	}
 
-	// Use the head SHA as revision since the app sources from the PR repo
-	repoURL := event.Repo.HTMLURL
-	revisions, positions := buildSyncRevisionOptions(parsed, repoURL, event.PR.HeadSHA)
-	if len(revisions) > 0 {
-		opts.Revisions = revisions
-		opts.SourcePositions = positions
-	} else if appSourcesFromRepo(convertV1alpha1App(parsed), repoURL) {
-		opts.Revision = event.PR.HeadSHA
-	}
-
 	slog.Debug("syncing new application",
 		"app", l.Application,
-		"revision", opts.Revision,
-		"revisions", opts.Revisions,
-		"sourcePositions", opts.SourcePositions,
 	)
 
 	syncRes, err := e.argocd.SyncApplication(ctx, l.Application, opts)
