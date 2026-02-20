@@ -807,3 +807,120 @@ func TestSyncNewApplicationMissingContent(t *testing.T) {
 		t.Errorf("error = %q, want containing 'not found in pre-fetched'", result.Error.Error())
 	}
 }
+
+func TestRewriteTargetRevision(t *testing.T) {
+	tests := []struct {
+		name        string
+		app         *v1alpha1.Application
+		repoURL     string
+		revision    string
+		wantSource  string   // expected targetRevision on Source
+		wantSources []string // expected targetRevisions on Sources
+	}{
+		{
+			name: "single source matching PR repo",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://github.com/org/repo",
+						TargetRevision: "main",
+					},
+				},
+			},
+			repoURL:    "https://github.com/org/repo",
+			revision:   "abc123",
+			wantSource: "abc123",
+		},
+		{
+			name: "single source not matching PR repo",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://charts.helm.sh/stable",
+						TargetRevision: "1.0.0",
+					},
+				},
+			},
+			repoURL:    "https://github.com/org/repo",
+			revision:   "abc123",
+			wantSource: "1.0.0",
+		},
+		{
+			name: "multi-source all matching PR repo",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{RepoURL: "https://github.com/org/repo", TargetRevision: "main"},
+						{RepoURL: "https://github.com/org/repo.git", TargetRevision: "main"},
+					},
+				},
+			},
+			repoURL:     "https://github.com/org/repo",
+			revision:    "abc123",
+			wantSources: []string{"abc123", "abc123"},
+		},
+		{
+			name: "multi-source mixed — PR repo and external helm",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{RepoURL: "https://github.com/org/repo", TargetRevision: "main"},
+						{RepoURL: "https://argoproj.github.io/argo-helm", TargetRevision: "5.46.0"},
+					},
+				},
+			},
+			repoURL:     "https://github.com/org/repo",
+			revision:    "abc123",
+			wantSources: []string{"abc123", "5.46.0"},
+		},
+		{
+			name: "nil source with multi-source",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{RepoURL: "https://github.com/org/repo", TargetRevision: "main"},
+					},
+				},
+			},
+			repoURL:     "https://github.com/org/repo",
+			revision:    "abc123",
+			wantSources: []string{"abc123"},
+		},
+		{
+			name: "repo URL with .git suffix matches",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://github.com/org/repo.git",
+						TargetRevision: "main",
+					},
+				},
+			},
+			repoURL:    "https://github.com/org/repo",
+			revision:   "abc123",
+			wantSource: "abc123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rewriteTargetRevision(tt.app, tt.repoURL, tt.revision)
+
+			if tt.app.Spec.Source != nil {
+				if tt.app.Spec.Source.TargetRevision != tt.wantSource {
+					t.Errorf("Source.TargetRevision = %q, want %q", tt.app.Spec.Source.TargetRevision, tt.wantSource)
+				}
+			}
+			if len(tt.wantSources) > 0 {
+				if len(tt.app.Spec.Sources) != len(tt.wantSources) {
+					t.Fatalf("Sources count = %d, want %d", len(tt.app.Spec.Sources), len(tt.wantSources))
+				}
+				for i, want := range tt.wantSources {
+					if tt.app.Spec.Sources[i].TargetRevision != want {
+						t.Errorf("Sources[%d].TargetRevision = %q, want %q", i, tt.app.Spec.Sources[i].TargetRevision, want)
+					}
+				}
+			}
+		})
+	}
+}

@@ -108,6 +108,19 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 		"pr", event.PR.Number,
 	)
 
+	// On merge, revert targetRevision for new apps back to the base branch.
+	// During sync, new apps had their targetRevision rewritten to the PR branch
+	// so ArgoCD could validate against files that only existed there. Now that
+	// the PR is merged, the files exist on the base branch and we need to point
+	// the app back to it.
+	if event.IsPRMerged() {
+		for _, l := range locks {
+			if l.ChangeType == models.ApplicationNew {
+				e.revertTargetRevision(ctx, l, event)
+			}
+		}
+	}
+
 	for _, l := range locks {
 		slog.Debug("releasing lock",
 			"app", l.Application,
@@ -123,6 +136,24 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 	}
 
 	return nil
+}
+
+// revertTargetRevision reverts the targetRevision of a new application back to
+// the base branch after a PR merge.
+func (e *Executor) revertTargetRevision(ctx context.Context, l models.Lock, event *models.PREvent) {
+	app, err := e.argocd.GetApplicationRaw(ctx, l.Application)
+	if err != nil {
+		slog.Warn("failed to get application for targetRevision revert",
+			"app", l.Application, "error", err)
+		return
+	}
+
+	rewriteTargetRevision(app, event.Repo.HTMLURL, event.PR.BaseRef)
+
+	if err := e.argocd.UpdateApplicationSpec(ctx, l.Application, app.Spec); err != nil {
+		slog.Warn("failed to revert targetRevision",
+			"app", l.Application, "error", err)
+	}
 }
 
 // getRepoConfig returns the parsed RepoConfig for the PR's repo.

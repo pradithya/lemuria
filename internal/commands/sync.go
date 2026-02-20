@@ -400,6 +400,10 @@ func (e *Executor) syncNewApplication(ctx context.Context, l models.Lock, cmd *C
 		return result
 	}
 
+	// Rewrite targetRevision for sources from the PR repo so ArgoCD
+	// validates against the PR branch (files don't exist on main yet)
+	rewriteTargetRevision(parsed, event.Repo.HTMLURL, event.PR.HeadSHA)
+
 	// Create the app in ArgoCD; if it already exists (e.g., from a prior root-app sync),
 	// update its spec instead
 	if err := e.argocd.CreateApplication(ctx, parsed); err != nil {
@@ -457,6 +461,22 @@ func (e *Executor) syncNewApplication(ctx context.Context, l models.Lock, cmd *C
 	}
 
 	return result
+}
+
+// rewriteTargetRevision updates targetRevision for sources matching the given
+// repo URL. This is needed when creating new apps from a PR branch — the
+// Application CR typically has targetRevision: main, but the referenced files
+// (values, manifests) only exist on the PR branch until merge.
+func rewriteTargetRevision(app *v1alpha1.Application, repoURL, revision string) {
+	normalized := argocd.NormalizeRepoURL(repoURL)
+	if app.Spec.Source != nil && argocd.NormalizeRepoURL(app.Spec.Source.RepoURL) == normalized {
+		app.Spec.Source.TargetRevision = revision
+	}
+	for i := range app.Spec.Sources {
+		if argocd.NormalizeRepoURL(app.Spec.Sources[i].RepoURL) == normalized {
+			app.Spec.Sources[i].TargetRevision = revision
+		}
+	}
 }
 
 // convertV1alpha1App creates a minimal models.Application from a v1alpha1.Application for repo matching.
