@@ -1,30 +1,5 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Quick Reference Commands
-
-```bash
-# Build
-make build            # Full build (frontend + backend) → bin/lemuria
-make build-go         # Backend only (faster iteration)
-
-# Test
-make test             # Unit tests (./internal/... ./pkg/...) with race detection
-make test-e2e         # E2E tests (requires Docker + k3d, see AGENTS.md)
-
-# Run a single test
-go test -v -run "TestName" ./internal/commands/...
-
-# Code quality
-make lint             # golangci-lint
-make fmt              # gofmt + goimports
-make fmt-check        # Check formatting without modifying
-
-# Dev server
-make run              # Redis + backend + frontend dev server
-```
-
 ## Architecture Overview
 
 Lemuria is a PR/MR automation tool for Argo CD (like Atlantis for Terraform). It processes VCS webhook events, computes Argo CD manifest diffs, posts results as PR comments, and triggers syncs on user command.
@@ -43,11 +18,15 @@ Lemuria is a PR/MR automation tool for Argo CD (like Atlantis for Terraform). It
 - `internal/models/` — Domain types (`Application`, `WebhookEvent`, `LockInfo`, `User`). `models.Application` is the flattened Lemuria model vs `v1alpha1.Application` (ArgoCD CRD).
 - `pkg/diff/` — Diff result → markdown rendering for PR comments.
 
-### Domain Model
+## Verification
 
-- `models.Application` (Lemuria) ↔ `v1alpha1.Application` (ArgoCD CRD) — converted via `convertV1alpha1Application()` in `argocd/applications.go`
-- ApplicationSet detection uses `ownerReferences`, not labels
-- `v1alpha1.Application` embeds `metav1.ObjectMeta` (fields like `.Name`, `.Labels` are direct)
+**IMPORTANT** For every code change ensure that:
+1. A new test case is added to verify the behavior, optionally add end to end test case.
+2. Run `make test` to run unit test.
+3. Run `make lint` to perform static code analysis.
+4. Run `make fmt` to fix formatting.
+5. Run `make test-e2e` to run complete end to end test. 
+6. Run `go test -v -run "TestName" ./internal/commands/...` to run single test.
 
 ## Important Conventions
 
