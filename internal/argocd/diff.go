@@ -88,13 +88,12 @@ func (c *Client) DiffNewApp(ctx context.Context, appSpec *v1alpha1.Application, 
 
 	tempMgr := NewTempAppManager(c)
 
-	// Create temp app using the provided spec (from head branch)
-	targetAppName, err := tempMgr.CreateTempApp(ctx, TempAppConfig{
+	// Create temp app using the actual app name (idempotent — handles pre-existing apps)
+	targetAppName, err := tempMgr.CreateNewApp(ctx, TempAppConfig{
 		OriginalAppName: appSpec.Name,
 		TargetBranch:    opts.TargetBranch,
 		PRNumber:        opts.PRNumber,
 		PRRepo:          opts.PRRepo,
-		Suffix:          "head",
 		AppSpecOverride: appSpec,
 	})
 	if err != nil {

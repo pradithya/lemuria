@@ -201,7 +201,25 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		slog.Debug("application is new (not yet in ArgoCD)",
 			"app", app.Name,
 		)
-		result.LockStatus = "New application"
+
+		// Acquire lock for new app so sync can find it later
+		lockResult, err := e.lock.Lock(ctx, models.LockRequest{
+			Application: app.Name,
+			PRNumber:    event.PR.Number,
+			Repo:        event.Repo.FullName,
+			RepoURL:     event.Repo.HTMLURL,
+			Provider:    string(event.Provider),
+			User:        event.Sender.Login,
+		})
+		if err != nil {
+			result.Error = fmt.Errorf("failed to acquire lock: %w", err)
+			return result
+		}
+		if !lockResult.Acquired {
+			result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
+			return result
+		}
+		result.LockStatus = "Locked by this PR"
 
 		// Try to generate diff for new app by reading spec from head branch
 		if app.SourceFile != "" {
@@ -265,8 +283,26 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		slog.Debug("application will be deleted",
 			"app", app.Name,
 		)
-		result.LockStatus = "Will be deleted"
 		result.Warning = "This application will be removed after the PR is merged."
+
+		// Acquire lock for deleted app so sync can find it later
+		lockResult, err := e.lock.Lock(ctx, models.LockRequest{
+			Application: app.Name,
+			PRNumber:    event.PR.Number,
+			Repo:        event.Repo.FullName,
+			RepoURL:     event.Repo.HTMLURL,
+			Provider:    string(event.Provider),
+			User:        event.Sender.Login,
+		})
+		if err != nil {
+			result.Error = fmt.Errorf("failed to acquire lock: %w", err)
+			return result
+		}
+		if !lockResult.Acquired {
+			result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
+			return result
+		}
+		result.LockStatus = "Locked by this PR"
 
 		// Try to generate diff for deleted app
 		diffMode := argocd.DiffMode(e.config.ArgoCD.DiffMode)

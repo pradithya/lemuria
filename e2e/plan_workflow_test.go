@@ -357,6 +357,10 @@ func TestE2EPlanNewStandaloneApp(t *testing.T) {
 	headSHA := "abc123newstandalone"
 	crFilePath := "apps/" + appName + ".yaml"
 
+	// Ensure clean lock state and cleanup temp app created during plan
+	defer cleanupForceUnlock(testCtx, t, appName)
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+
 	// The app does NOT exist in ArgoCD (it's new).
 	// Head branch YAML defines the Application CR.
 	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
@@ -435,6 +439,23 @@ spec:
 	if strings.Contains(lastComment.Body, "❌ **Error:**") {
 		t.Errorf("Plan comment should not contain errors")
 	}
+
+	// Assert: lock was acquired for the new app
+	waitForProcessingDone()
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to get lock: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("Expected lock to be acquired for new app after plan")
+	}
+	if lock.PRNumber != prNumber {
+		t.Errorf("Expected lock PR number %d, got %d", prNumber, lock.PRNumber)
+	}
+	if lock.PlanRevision != headSHA {
+		t.Errorf("Expected lock PlanRevision %q, got %q", headSHA, lock.PlanRevision)
+	}
+	t.Logf("Lock acquired for new app: app=%s, pr=%d, plan_revision=%s", lock.Application, lock.PRNumber, lock.PlanRevision)
 }
 
 // TestE2EPlanDeletedStandaloneApp verifies that when a PR removes a standalone
@@ -455,6 +476,9 @@ func TestE2EPlanDeletedStandaloneApp(t *testing.T) {
 	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
+
+	// Ensure clean lock state
+	defer cleanupForceUnlock(testCtx, t, appName)
 
 	// Base branch has the Application CR (being removed in the PR)
 	baseYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
@@ -535,6 +559,162 @@ spec:
 	// Assert: no error in the plan
 	if strings.Contains(lastComment.Body, "❌ **Error:**") {
 		t.Errorf("Plan comment should not contain errors")
+	}
+
+	// Assert: lock was acquired for the deleted app
+	waitForProcessingDone()
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to get lock: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("Expected lock to be acquired for deleted app after plan")
+	}
+	if lock.PRNumber != prNumber {
+		t.Errorf("Expected lock PR number %d, got %d", prNumber, lock.PRNumber)
+	}
+	if lock.PlanRevision != headSHA {
+		t.Errorf("Expected lock PlanRevision %q, got %q", headSHA, lock.PlanRevision)
+	}
+	t.Logf("Lock acquired for deleted app: app=%s, pr=%d, plan_revision=%s", lock.Application, lock.PRNumber, lock.PlanRevision)
+}
+
+// TestE2EPlanNewAppIdempotent verifies that when a "new" app already exists in
+// ArgoCD (e.g., created by a prior sync of the parent app), re-running plan
+// still treats it as "new" and succeeds. This tests the idempotency fix:
+// the app is NOT reclassified to "existing" (which would fail because the base
+// branch doesn't have the source files), and DiffNewApp handles the pre-existing
+// app by deleting it (non-cascade) before recreating as a temp app.
+func TestE2EPlanNewAppIdempotent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping E2E command test in short mode")
+	}
+	t.Parallel()
+
+	appName := uniqueAppName("e2e-new-idemp")
+	repo := "test-owner/test-repo"
+	prNumber := 2700
+	headSHA := "abc123idemp"
+	crFilePath := "apps/" + appName + ".yaml"
+
+	// Create the app in ArgoCD FIRST — simulating a prior sync that already
+	// created this child app. The app now exists in ArgoCD, but the PR still
+	// shows it as a new file (FileStatusAdded).
+	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	defer deleteTestApplication(testCtx, t, argoClient, appName)
+	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
+
+	defer cleanupForceUnlock(testCtx, t, appName)
+
+	// Head branch YAML defines the Application CR (same as what git diff shows as "added")
+	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: %s
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps.git
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: e2e-test-apps`, appName)
+
+	mockGH := NewMockVCSClient()
+	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
+	mockGH.ChangedFiles = []models.ChangedFile{
+		{Filename: crFilePath, Status: models.FileStatusAdded},
+	}
+	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(headYAML)
+	mockGH.PRHeadRef = "feature-branch"
+	mockGH.PRBaseRef = "main"
+	mockGH.PRHeadSHA = headSHA
+
+	cfg := &config.Config{
+		ArgoCD: config.ArgoCDConfig{
+			DiffMode:       "branch",
+			TempAppTimeout: 30 * time.Second,
+		},
+		Defaults: config.DefaultsConfig{
+			Autoplan:        true,
+			RequireApproval: false,
+		},
+	}
+	ts := newTestServer(mockGH, cfg)
+	defer ts.Close()
+
+	// Use autoplan event: PR opened
+	payload := githubPRPayload("opened", repo, "test-owner", "test-repo", prNumber, headSHA, "feature-branch", "main")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "pull_request", payload))
+
+	// Wait for plan comment (longer timeout for temp app manifest rendering)
+	comments := waitForComment(t, mockGH, 1, 90*time.Second)
+	lastComment := comments[len(comments)-1]
+	t.Logf("Plan comment:\n%s", lastComment.Body)
+
+	// Assert: the app is detected and treated as new (not reclassified to existing)
+	if !strings.Contains(lastComment.Body, appName) {
+		t.Fatalf("Expected plan comment to mention app %q", appName)
+	}
+
+	// Assert: plan succeeded — no errors about base branch or reclassification failures
+	if strings.Contains(lastComment.Body, "❌ **Error:**") {
+		t.Error("Plan should succeed even when the new app already exists in ArgoCD")
+	}
+
+	// Assert: diffs are generated (the new app diff path works idempotently)
+	if !strings.Contains(lastComment.Body, "to create") {
+		t.Error("Expected plan comment to show 'to create' for new app resources")
+	}
+
+	// Assert: lock was acquired
+	waitForProcessingDone()
+	lock, err := lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to get lock: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("Expected lock to be acquired for idempotent new app plan")
+	}
+	if lock.PRNumber != prNumber {
+		t.Errorf("Expected lock PR number %d, got %d", prNumber, lock.PRNumber)
+	}
+	if lock.PlanRevision != headSHA {
+		t.Errorf("Expected lock PlanRevision %q, got %q", headSHA, lock.PlanRevision)
+	}
+	t.Logf("Lock acquired: app=%s, pr=%d, plan_revision=%s", lock.Application, lock.PRNumber, lock.PlanRevision)
+
+	// Run plan again — should still succeed (fully idempotent)
+	mockGH.Reset()
+	headSHA2 := "def456idemp2"
+	mockGH.PRHeadSHA = headSHA2
+	payload2 := githubPRPayload("opened", repo, "test-owner", "test-repo", prNumber, headSHA2, "feature-branch", "main")
+	assertAccepted(t, sendGitHubWebhook(t, ts.URL, "pull_request", payload2))
+
+	comments2 := waitForComment(t, mockGH, 1, 90*time.Second)
+	lastComment2 := comments2[len(comments2)-1]
+	t.Logf("Second plan comment:\n%s", lastComment2.Body)
+
+	if strings.Contains(lastComment2.Body, "❌ **Error:**") {
+		t.Error("Second plan should also succeed (idempotent)")
+	}
+	if !strings.Contains(lastComment2.Body, appName) {
+		t.Error("Expected second plan comment to mention the app")
+	}
+
+	// Assert: lock updated with new revision
+	waitForProcessingDone()
+	lock2, err := lockManager.Get(testCtx, appName)
+	if err != nil {
+		t.Fatalf("Failed to get lock after second plan: %v", err)
+	}
+	if lock2 == nil {
+		t.Fatal("Expected lock to still exist after second plan")
+	}
+	if lock2.PlanRevision != headSHA2 {
+		t.Errorf("Expected lock PlanRevision %q after second plan, got %q", headSHA2, lock2.PlanRevision)
 	}
 }
 

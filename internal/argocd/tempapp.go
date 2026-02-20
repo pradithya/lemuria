@@ -90,6 +90,45 @@ func (m *TempAppManager) CreateTempApp(ctx context.Context, cfg TempAppConfig) (
 	return tempName, nil
 }
 
+// CreateNewApp creates a temporary application using the actual app name (no suffix).
+// This is used for new apps introduced by a PR. It handles idempotency:
+//   - If an app with this name already exists (e.g., from a prior sync), it is deleted
+//     (non-cascade to preserve resources) and recreated as a temp app.
+//   - The created app has temp labels, disabled auto-sync, and points to the target branch.
+func (m *TempAppManager) CreateNewApp(ctx context.Context, cfg TempAppConfig) (string, error) {
+	var appSpec *v1alpha1.Application
+	if cfg.AppSpecOverride != nil {
+		appSpec = cfg.AppSpecOverride
+	} else {
+		return "", fmt.Errorf("AppSpecOverride is required for CreateNewApp")
+	}
+
+	appName := appSpec.Name
+
+	// Check if an app with this name already exists
+	existing, err := m.client.GetApplicationRaw(ctx, appName)
+	if err == nil && existing != nil {
+		// App exists — delete it (non-cascade) before recreating as temp app
+		slog.Debug("app already exists, deleting before recreating as temp app",
+			"app", appName,
+			"has_temp_label", existing.Labels[labelTempApp] == "true",
+		)
+		if delErr := m.client.DeleteApplication(ctx, appName, false); delErr != nil {
+			return "", fmt.Errorf("deleting existing app %s before recreating: %w", appName, delErr)
+		}
+	}
+
+	// Build temp app spec using actual name
+	tempApp := buildTempAppSpec(appSpec, appName, cfg)
+
+	// Create the application
+	if err := m.client.CreateApplication(ctx, tempApp); err != nil {
+		return "", fmt.Errorf("creating new app as temp application: %w", err)
+	}
+
+	return appName, nil
+}
+
 // WaitForManifests waits for ArgoCD to render manifests for the temp app.
 // It polls until manifests are available or timeout is reached.
 func (m *TempAppManager) WaitForManifests(ctx context.Context, appName string, timeout time.Duration) ([]models.Manifest, error) {

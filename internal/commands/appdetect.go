@@ -599,7 +599,11 @@ func containsAppByName(apps []models.Application, name string) bool {
 	return false
 }
 
-// verifyNewAppsExist checks which "new" apps already exist in ArgoCD (created outside the PR).
+// verifyNewAppsExist logs which "new" apps already exist in ArgoCD.
+// These apps are kept in parsed.New (not reclassified) because the new-app
+// diff path (DiffNewApp) handles idempotency — it works correctly whether
+// the app already exists or not. Reclassifying to "existing" would cause
+// failures when the base branch doesn't contain the app's source files.
 func (e *Executor) verifyNewAppsExist(ctx context.Context, parsed *argocd.ParsedApplications) error {
 	if len(parsed.New) == 0 {
 		slog.Debug("no new applications to verify")
@@ -620,30 +624,17 @@ func (e *Executor) verifyNewAppsExist(ctx context.Context, parsed *argocd.Parsed
 		existingByName[app.Name] = true
 	}
 
-	// Partition new apps into truly new vs already existing
-	var trulyNew []models.Application
 	for _, app := range parsed.New {
 		if existingByName[app.Name] {
-			slog.Debug("application marked as new already exists in ArgoCD",
+			slog.Debug("application marked as new already exists in ArgoCD (keeping as new for idempotent diff)",
 				"app", app.Name,
-				"reclassifying_to", "existing",
 			)
-			// App already exists, treat as modified
-			app.ChangeType = models.ApplicationExisting
-			parsed.Modified = append(parsed.Modified, app)
 		} else {
 			slog.Debug("application confirmed as truly new",
 				"app", app.Name,
 			)
-			trulyNew = append(trulyNew, app)
 		}
 	}
-	parsed.New = trulyNew
-
-	slog.Debug("new applications verification complete",
-		"truly_new_count", len(trulyNew),
-		"reclassified_to_modified", len(parsed.New)-len(trulyNew),
-	)
 
 	return nil
 }
