@@ -506,18 +506,39 @@ func rewriteTargetRevision(app *v1alpha1.Application, repoURL, revision string) 
 }
 
 // buildSyncRevisionOptions returns per-source revisions and positions for
-// multi-source apps. Only sources matching repoURL get the given revision.
+// multi-source apps. Sources matching repoURL get the given revision; other
+// sources (e.g. Helm chart repos) keep their existing targetRevision.
+// All sources are included because ArgoCD requires complete revision lists
+// for multi-source sync requests.
 // Returns nil slices for single-source apps (caller should use opts.Revision).
 func buildSyncRevisionOptions(app *v1alpha1.Application, repoURL, revision string) (revisions []string, sourcePositions []int64) {
 	if len(app.Spec.Sources) == 0 {
 		return nil, nil
 	}
 	normalized := argocd.NormalizeRepoURL(repoURL)
+
+	// Check if any source matches the repo URL first.
+	hasMatch := false
+	for _, src := range app.Spec.Sources {
+		if argocd.NormalizeRepoURL(src.RepoURL) == normalized {
+			hasMatch = true
+			break
+		}
+	}
+	if !hasMatch {
+		return nil, nil
+	}
+
+	// Include ALL sources: matching sources get the PR revision, non-matching
+	// sources (e.g. Helm chart repos) keep their existing targetRevision.
+	// ArgoCD requires complete revision lists for multi-source sync requests.
 	for i, src := range app.Spec.Sources {
 		if argocd.NormalizeRepoURL(src.RepoURL) == normalized {
 			revisions = append(revisions, revision)
-			sourcePositions = append(sourcePositions, int64(i+1)) // 1-based
+		} else {
+			revisions = append(revisions, src.TargetRevision)
 		}
+		sourcePositions = append(sourcePositions, int64(i+1)) // 1-based
 	}
 	return revisions, sourcePositions
 }

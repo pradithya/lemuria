@@ -847,20 +847,20 @@ func TestBuildSyncRevisionOptions(t *testing.T) {
 			wantPositions: []int64{1, 2},
 		},
 		{
-			name: "multi-source mixed — only PR repo sources get revision",
+			name: "multi-source mixed — all sources included, non-matching keep original targetRevision",
 			app: &v1alpha1.Application{
 				Spec: v1alpha1.ApplicationSpec{
 					Sources: v1alpha1.ApplicationSources{
-						{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd"},
+						{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd", TargetRevision: "5.51.0"},
 						{RepoURL: "https://github.com/org/repo", Path: "values"},
-						{RepoURL: "https://charts.bitnami.com/bitnami", Chart: "redis"},
+						{RepoURL: "https://charts.bitnami.com/bitnami", Chart: "redis", TargetRevision: "18.6.1"},
 					},
 				},
 			},
 			repoURL:       "https://github.com/org/repo",
 			revision:      "def456",
-			wantRevisions: []string{"def456"},
-			wantPositions: []int64{2},
+			wantRevisions: []string{"5.51.0", "def456", "18.6.1"},
+			wantPositions: []int64{1, 2, 3},
 		},
 		{
 			name: "multi-source with no matching sources",
