@@ -25,7 +25,7 @@ Lemuria is a PR/MR automation tool for Argo CD (like Atlantis for Terraform). It
 2. Run `make test` to run unit test.
 3. Run `make lint` to perform static code analysis.
 4. Run `make fmt` to fix formatting.
-5. Run `make test-e2e` to run complete end to end test. 
+5. Run `make test-e2e` to run complete end to end test. If the e2e infra is not yet setup, run `make e2e`.
 6. Run `go test -v -run "TestName" ./internal/commands/...` to run single test.
 
 ## Important Conventions
