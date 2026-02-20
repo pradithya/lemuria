@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/org/lemuria/internal/argocd"
+	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
 
@@ -262,6 +263,89 @@ func TestConvertToRenderResultsIsGeneratedApp(t *testing.T) {
 	}
 	if rendered[1].ApplicationSetName != "my-appset" {
 		t.Errorf("expected ApplicationSetName %q, got %q", "my-appset", rendered[1].ApplicationSetName)
+	}
+}
+
+func TestIsAppAffected_ExactMappingTakesPrecedenceOverWildcard(t *testing.T) {
+	e := &Executor{}
+
+	tests := []struct {
+		name     string
+		app      models.Application
+		repoURL  string
+		files    []string
+		config   *config.RepoConfig
+		expected bool
+	}{
+		{
+			name:    "exact mapping matches paths - affected",
+			app:     models.Application{Name: "sealed-secrets"},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"bootstrap/sealed-secret/sealed-secrets-app.yaml"},
+			config: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "sealed-secrets", Paths: []string{"bootstrap/sealed-secret/**"}},
+					{Name: "*", Paths: []string{"apps/**"}},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:    "exact mapping exists but paths dont match - NOT affected even though wildcard would match",
+			app:     models.Application{Name: "sealed-secrets"},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"apps/grafana/values.yaml", "apps/loki/values.yaml"},
+			config: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "sealed-secrets", Paths: []string{"bootstrap/sealed-secret/**"}},
+					{Name: "*", Paths: []string{"apps/**"}},
+				},
+			},
+			expected: false,
+		},
+		{
+			name:    "no exact mapping - wildcard matches - affected",
+			app:     models.Application{Name: "grafana"},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"apps/grafana/values.yaml"},
+			config: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "sealed-secrets", Paths: []string{"bootstrap/sealed-secret/**"}},
+					{Name: "*", Paths: []string{"apps/**"}},
+				},
+			},
+			expected: true,
+		},
+		{
+			name:    "no exact mapping - wildcard paths dont match - NOT affected",
+			app:     models.Application{Name: "grafana"},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"bootstrap/root-app.yaml"},
+			config: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "sealed-secrets", Paths: []string{"bootstrap/sealed-secret/**"}},
+					{Name: "*", Paths: []string{"apps/**"}},
+				},
+			},
+			expected: false,
+		},
+		{
+			name:    "no config - falls through to repo URL matching",
+			app:     models.Application{Name: "my-app", RepoURL: "https://github.com/org/repo", Path: "apps/my-app"},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"apps/my-app/deployment.yaml"},
+			config:  nil,
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.isAppAffected(tt.app, tt.repoURL, tt.files, tt.config)
+			if got != tt.expected {
+				t.Errorf("isAppAffected() = %v, want %v", got, tt.expected)
+			}
+		})
 	}
 }
 

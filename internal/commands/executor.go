@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
@@ -402,28 +403,68 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 	// First, check if there's an explicit path mapping in .lemuria.yaml
 	// If there is, use it regardless of whether the app's source references this repo
 	// (e.g., Helm chart apps where the Application CR is in this repo but the chart is external)
+	//
+	// Exact name mappings take precedence over wildcard mappings.
+	// If an exact mapping exists for this app, its result is authoritative —
+	// wildcard mappings will NOT be consulted even if the exact mapping's paths don't match.
 	if repoConfig != nil {
+		hasExactMapping := false
 		for _, mapping := range repoConfig.Applications {
 			nameMatches := matchAppName(mapping.Name, app.Name)
+			isWildcard := strings.ContainsRune(mapping.Name, '*')
 			slog.Debug("checking repo config mapping",
 				"app", app.Name,
 				"mapping_name", mapping.Name,
 				"mapping_paths", mapping.Paths,
 				"name_matches", nameMatches,
+				"is_wildcard", isWildcard,
 			)
-			if nameMatches {
+			if !nameMatches {
+				continue
+			}
+			// Skip wildcard mappings for now; process them only if no exact mapping matched
+			if isWildcard {
+				continue
+			}
+			hasExactMapping = true
+			matched := vcs.FilterFilesByPatterns(
+				filesToChangedFiles(files),
+				mapping.Paths,
+			)
+			slog.Debug("path pattern matching result",
+				"app", app.Name,
+				"patterns", mapping.Paths,
+				"matched_files", matched,
+				"matched_count", len(matched),
+			)
+			if len(matched) > 0 {
+				slog.Debug("application affected via explicit .lemuria.yaml mapping",
+					"app", app.Name,
+				)
+				return true
+			}
+		}
+		// Only check wildcard mappings if no exact mapping was found for this app
+		if !hasExactMapping {
+			for _, mapping := range repoConfig.Applications {
+				if !strings.ContainsRune(mapping.Name, '*') {
+					continue
+				}
+				if !matchAppName(mapping.Name, app.Name) {
+					continue
+				}
 				matched := vcs.FilterFilesByPatterns(
 					filesToChangedFiles(files),
 					mapping.Paths,
 				)
-				slog.Debug("path pattern matching result",
+				slog.Debug("path pattern matching result (wildcard)",
 					"app", app.Name,
 					"patterns", mapping.Paths,
 					"matched_files", matched,
 					"matched_count", len(matched),
 				)
 				if len(matched) > 0 {
-					slog.Debug("application affected via explicit .lemuria.yaml mapping",
+					slog.Debug("application affected via wildcard .lemuria.yaml mapping",
 						"app", app.Name,
 					)
 					return true
