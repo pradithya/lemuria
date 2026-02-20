@@ -330,11 +330,11 @@ func TestIsAppAffected_ExactMappingTakesPrecedenceOverWildcard(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:    "no config - falls through to repo URL matching",
-			app:     models.Application{Name: "my-app", RepoURL: "https://github.com/org/repo", Path: "apps/my-app"},
-			repoURL: "https://github.com/org/repo",
-			files:   []string{"apps/my-app/deployment.yaml"},
-			config:  nil,
+			name:     "no config - falls through to repo URL matching",
+			app:      models.Application{Name: "my-app", RepoURL: "https://github.com/org/repo", Path: "apps/my-app"},
+			repoURL:  "https://github.com/org/repo",
+			files:    []string{"apps/my-app/deployment.yaml"},
+			config:   nil,
 			expected: true,
 		},
 	}
