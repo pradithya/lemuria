@@ -808,6 +808,100 @@ func TestSyncNewApplicationMissingContent(t *testing.T) {
 	}
 }
 
+func TestBuildSyncRevisionOptions(t *testing.T) {
+	tests := []struct {
+		name          string
+		app           *v1alpha1.Application
+		repoURL       string
+		revision      string
+		wantRevisions []string
+		wantPositions []int64
+	}{
+		{
+			name: "single source returns nil (caller uses opts.Revision)",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL: "https://github.com/org/repo",
+					},
+				},
+			},
+			repoURL:       "https://github.com/org/repo",
+			revision:      "abc123",
+			wantRevisions: nil,
+			wantPositions: nil,
+		},
+		{
+			name: "multi-source all matching PR repo",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{RepoURL: "https://github.com/org/repo", Path: "manifests"},
+						{RepoURL: "https://github.com/org/repo.git", Path: "values"},
+					},
+				},
+			},
+			repoURL:       "https://github.com/org/repo",
+			revision:      "abc123",
+			wantRevisions: []string{"abc123", "abc123"},
+			wantPositions: []int64{1, 2},
+		},
+		{
+			name: "multi-source mixed — only PR repo sources get revision",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd"},
+						{RepoURL: "https://github.com/org/repo", Path: "values"},
+						{RepoURL: "https://charts.bitnami.com/bitnami", Chart: "redis"},
+					},
+				},
+			},
+			repoURL:       "https://github.com/org/repo",
+			revision:      "def456",
+			wantRevisions: []string{"def456"},
+			wantPositions: []int64{2},
+		},
+		{
+			name: "multi-source with no matching sources",
+			app: &v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd"},
+						{RepoURL: "https://charts.bitnami.com/bitnami", Chart: "redis"},
+					},
+				},
+			},
+			repoURL:       "https://github.com/org/repo",
+			revision:      "abc123",
+			wantRevisions: nil,
+			wantPositions: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			revisions, positions := buildSyncRevisionOptions(tt.app, tt.repoURL, tt.revision)
+			if len(revisions) != len(tt.wantRevisions) {
+				t.Fatalf("revisions count = %d, want %d", len(revisions), len(tt.wantRevisions))
+			}
+			for i, want := range tt.wantRevisions {
+				if revisions[i] != want {
+					t.Errorf("revisions[%d] = %q, want %q", i, revisions[i], want)
+				}
+			}
+			if len(positions) != len(tt.wantPositions) {
+				t.Fatalf("positions count = %d, want %d", len(positions), len(tt.wantPositions))
+			}
+			for i, want := range tt.wantPositions {
+				if positions[i] != want {
+					t.Errorf("positions[%d] = %d, want %d", i, positions[i], want)
+				}
+			}
+		})
+	}
+}
+
 func TestRewriteTargetRevision(t *testing.T) {
 	tests := []struct {
 		name        string

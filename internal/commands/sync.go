@@ -289,6 +289,9 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 	// If the Application CR was modified in the PR, update the live app's spec
 	// before syncing. This handles cases where the PR modifies Helm values,
 	// chart versions, or other spec fields in the Application CR file.
+	// We also keep a reference to the parsed v1alpha1.Application for building
+	// multi-source revision options below.
+	var parsed *v1alpha1.Application
 	if l.SourceFile != "" {
 		slog.Debug("updating application spec from PR head branch",
 			"app", l.Application,
@@ -301,7 +304,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 			return result
 		}
 
-		parsed, err := argocd.ParseRawApplicationFromYAML(headContent, l.Application)
+		parsed, err = argocd.ParseRawApplicationFromYAML(headContent, l.Application)
 		if err != nil {
 			result.Error = fmt.Errorf("parsing application CR from head branch: %w", err)
 			return result
@@ -323,16 +326,35 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 		Timeout: e.config.ArgoCD.SyncTimeout,
 	}
 
-	// Only set revision for apps sourcing from the PR repo.
-	// External sources (e.g., Helm chart repos) should use the revision
-	// already configured in the app spec.
+	// Build revision options: use per-source revisions for multi-source apps,
+	// or a single revision for single-source apps.
 	if fromPRRepo {
-		opts.Revision = event.PR.HeadSHA
+		// Get the raw v1alpha1.Application to inspect sources
+		var rawApp *v1alpha1.Application
+		if parsed != nil {
+			rawApp = parsed
+		} else {
+			rawApp, err = e.argocd.GetApplicationRaw(ctx, l.Application)
+			if err != nil {
+				result.Error = fmt.Errorf("getting raw application %s: %w", l.Application, err)
+				return result
+			}
+		}
+
+		revisions, positions := buildSyncRevisionOptions(rawApp, repoURL, event.PR.HeadSHA)
+		if len(revisions) > 0 {
+			opts.Revisions = revisions
+			opts.SourcePositions = positions
+		} else {
+			opts.Revision = event.PR.HeadSHA
+		}
 	}
 
 	slog.Debug("triggering sync",
 		"app", l.Application,
 		"revision", opts.Revision,
+		"revisions", opts.Revisions,
+		"sourcePositions", opts.SourcePositions,
 		"from_pr_repo", fromPRRepo,
 	)
 
@@ -425,13 +447,19 @@ func (e *Executor) syncNewApplication(ctx context.Context, l models.Lock, cmd *C
 
 	// Use the head SHA as revision since the app sources from the PR repo
 	repoURL := event.Repo.HTMLURL
-	if appSourcesFromRepo(convertV1alpha1App(parsed), repoURL) {
+	revisions, positions := buildSyncRevisionOptions(parsed, repoURL, event.PR.HeadSHA)
+	if len(revisions) > 0 {
+		opts.Revisions = revisions
+		opts.SourcePositions = positions
+	} else if appSourcesFromRepo(convertV1alpha1App(parsed), repoURL) {
 		opts.Revision = event.PR.HeadSHA
 	}
 
 	slog.Debug("syncing new application",
 		"app", l.Application,
 		"revision", opts.Revision,
+		"revisions", opts.Revisions,
+		"sourcePositions", opts.SourcePositions,
 	)
 
 	syncRes, err := e.argocd.SyncApplication(ctx, l.Application, opts)
@@ -477,6 +505,23 @@ func rewriteTargetRevision(app *v1alpha1.Application, repoURL, revision string) 
 			app.Spec.Sources[i].TargetRevision = revision
 		}
 	}
+}
+
+// buildSyncRevisionOptions returns per-source revisions and positions for
+// multi-source apps. Only sources matching repoURL get the given revision.
+// Returns nil slices for single-source apps (caller should use opts.Revision).
+func buildSyncRevisionOptions(app *v1alpha1.Application, repoURL, revision string) (revisions []string, sourcePositions []int64) {
+	if len(app.Spec.Sources) == 0 {
+		return nil, nil
+	}
+	normalized := argocd.NormalizeRepoURL(repoURL)
+	for i, src := range app.Spec.Sources {
+		if argocd.NormalizeRepoURL(src.RepoURL) == normalized {
+			revisions = append(revisions, revision)
+			sourcePositions = append(sourcePositions, int64(i+1)) // 1-based
+		}
+	}
+	return revisions, sourcePositions
 }
 
 // convertV1alpha1App creates a minimal models.Application from a v1alpha1.Application for repo matching.

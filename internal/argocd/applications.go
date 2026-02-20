@@ -31,11 +31,13 @@ import (
 
 // SyncOptions configures a sync operation.
 type SyncOptions struct {
-	Revision  string
-	Prune     bool
-	DryRun    bool
-	Resources []SyncResource
-	Timeout   time.Duration // Maximum time to wait for sync and healthy state. 0 means use default (10m).
+	Revision        string
+	Revisions       []string // per-source revisions (multi-source apps)
+	SourcePositions []int64  // 1-based source positions (multi-source apps)
+	Prune           bool
+	DryRun          bool
+	Resources       []SyncResource
+	Timeout         time.Duration // Maximum time to wait for sync and healthy state. 0 means use default (10m).
 }
 
 // SyncResource identifies a specific resource to sync.
@@ -175,7 +177,10 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 	}
 
 	if opts != nil {
-		if opts.Revision != "" {
+		if len(opts.Revisions) > 0 {
+			payload["revisions"] = opts.Revisions
+			payload["sourcePositions"] = opts.SourcePositions
+		} else if opts.Revision != "" {
 			payload["revision"] = opts.Revision
 		}
 		if opts.Prune {
