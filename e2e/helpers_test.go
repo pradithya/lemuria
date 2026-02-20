@@ -184,7 +184,7 @@ func createTestApplicationWithBadImage(ctx context.Context, t *testing.T, client
 				Kustomize: &v1alpha1.ApplicationSourceKustomize{
 					Images: v1alpha1.KustomizeImages{
 						// Override guestbook image with a non-existent image
-						"gcr.io/heptio-images/ks-guestbook-demo=nonexistent.invalid/bad-image:v999",
+						"gcr.io/google-samples/gb-frontend=nonexistent.invalid/bad-image:v999",
 					},
 				},
 			},
