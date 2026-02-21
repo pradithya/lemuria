@@ -56,7 +56,8 @@ test: test-unit
 
 # Run unit tests
 test-unit:
-	go test -v ./internal/... ./pkg/...
+	@# Run tests with coverage, filtering out packages with no test files to avoid covdata errors
+	go test -v -coverprofile=coverage.out $$(go list ./internal/... ./pkg/... | xargs -I{} sh -c 'go list -f "{{if .TestGoFiles}}{{.ImportPath}}{{end}}" {} 2>/dev/null' | grep .)
 
 # Run e2e tests (requires setup first)
 test-e2e:
