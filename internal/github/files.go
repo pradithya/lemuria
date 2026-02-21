@@ -28,7 +28,7 @@ import (
 
 // GetChangedFiles returns the list of files changed in a PR.
 func (c *Client) GetChangedFiles(ctx context.Context, owner, repo string, number int) ([]models.ChangedFile, error) {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func GetFilePaths(files []models.ChangedFile) []string {
 
 // GetFileContent retrieves the content of a file at a specific ref (branch, tag, or commit SHA).
 func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref string) ([]byte, error) {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (c *Client) GetFileContents(ctx context.Context, owner, repo string, paths 
 		return map[string][]byte{}, nil
 	}
 
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err
 	}

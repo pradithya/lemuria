@@ -16,6 +16,8 @@ package auth
 
 import (
 	"testing"
+
+	"golang.org/x/oauth2"
 )
 
 func TestOIDCProvider_isEmailDomainAllowed(t *testing.T) {
@@ -245,5 +247,143 @@ func TestOIDCProvider_buildUser(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOIDCProvider_Name(t *testing.T) {
+	p := &OIDCProvider{name: "My SSO"}
+	if got := p.Name(); got != "oidc" {
+		t.Errorf("Name() = %q, want %q", got, "oidc")
+	}
+}
+
+func TestOIDCProvider_DisplayName(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider *OIDCProvider
+		want     string
+	}{
+		{
+			name:     "custom name",
+			provider: &OIDCProvider{name: "Corporate SSO"},
+			want:     "Corporate SSO",
+		},
+		{
+			name:     "default name",
+			provider: &OIDCProvider{name: "SSO"},
+			want:     "SSO",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.provider.DisplayName(); got != tt.want {
+				t.Errorf("DisplayName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOIDCProvider_AuthURL(t *testing.T) {
+	p := &OIDCProvider{
+		config: &oauth2.Config{
+			ClientID: "oidc-client-id",
+			Endpoint: oauth2.Endpoint{
+				AuthURL: "https://idp.example.com/authorize",
+			},
+			RedirectURL: "https://app.example.com/auth/oidc/callback",
+			Scopes:      []string{"openid", "profile", "email"},
+		},
+	}
+
+	url := p.AuthURL("test-state-xyz")
+	if url == "" {
+		t.Error("AuthURL() returned empty string")
+	}
+	if !contains(url, "client_id=oidc-client-id") {
+		t.Errorf("AuthURL() = %q, expected to contain client_id", url)
+	}
+	if !contains(url, "state=test-state-xyz") {
+		t.Errorf("AuthURL() = %q, expected to contain state", url)
+	}
+	if !contains(url, "idp.example.com") {
+		t.Errorf("AuthURL() = %q, expected to contain idp URL", url)
+	}
+}
+
+func TestOIDCProvider_buildUser_WithPicture(t *testing.T) {
+	p := &OIDCProvider{
+		usernameClaim: "preferred_username",
+		emailClaim:    "email",
+	}
+
+	claims := map[string]any{
+		"preferred_username": "picuser",
+		"email":              "pic@example.com",
+		"name":               "Pic User",
+		"picture":            "https://idp.example.com/avatar/123",
+	}
+
+	user := p.buildUser("subj-123", claims)
+	if user.AvatarURL != "https://idp.example.com/avatar/123" {
+		t.Errorf("AvatarURL = %q, want %q", user.AvatarURL, "https://idp.example.com/avatar/123")
+	}
+}
+
+func TestOIDCProvider_buildUser_GivenNameOnly(t *testing.T) {
+	p := &OIDCProvider{
+		usernameClaim: "preferred_username",
+		emailClaim:    "email",
+	}
+
+	claims := map[string]any{
+		"preferred_username": "givenonly",
+		"given_name":         "OnlyGiven",
+	}
+
+	user := p.buildUser("subj-456", claims)
+	if user.Name != "OnlyGiven" {
+		t.Errorf("Name = %q, want %q", user.Name, "OnlyGiven")
+	}
+}
+
+func TestOIDCProvider_buildUser_EmptyClaims(t *testing.T) {
+	p := &OIDCProvider{
+		usernameClaim: "preferred_username",
+		emailClaim:    "email",
+		groupsClaim:   "groups",
+	}
+
+	user := p.buildUser("subj-empty", map[string]any{})
+	if user.ID != "oidc:subj-empty" {
+		t.Errorf("ID = %q, want %q", user.ID, "oidc:subj-empty")
+	}
+	if user.Login != "" {
+		t.Errorf("Login = %q, want empty for missing claims", user.Login)
+	}
+	if user.Email != "" {
+		t.Errorf("Email = %q, want empty for missing claims", user.Email)
+	}
+	if len(user.Groups) != 0 {
+		t.Errorf("Groups = %v, want empty", user.Groups)
+	}
+}
+
+func TestOIDCProvider_buildUser_GroupsWithNonStringEntries(t *testing.T) {
+	p := &OIDCProvider{
+		usernameClaim: "preferred_username",
+		emailClaim:    "email",
+		groupsClaim:   "groups",
+	}
+
+	claims := map[string]any{
+		"preferred_username": "mixedgroups",
+		"groups":             []any{"admin", 42, "developers", true},
+	}
+
+	user := p.buildUser("subj-mixed", claims)
+	// Only string entries should be included
+	if len(user.Groups) != 2 {
+		t.Errorf("Groups count = %d, want 2 (only strings)", len(user.Groups))
 	}
 }

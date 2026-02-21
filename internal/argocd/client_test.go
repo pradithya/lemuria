@@ -19,8 +19,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/org/lemuria/internal/models"
 )
 
 // newTestClient creates a Client pointing at the given test server.
@@ -536,5 +542,857 @@ func TestClientPut(t *testing.T) {
 	}
 	if result["status"] != "updated" {
 		t.Errorf("result = %v, want status=updated", result)
+	}
+}
+
+func TestGetResourceHealth(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		wantErr   bool
+		wantCount int
+		checkFunc func(t *testing.T, results []models.ResourceHealthInfo)
+	}{
+		{
+			name:   "resources with health info",
+			status: http.StatusOK,
+			body: `{
+				"metadata": {"name": "my-app", "namespace": "argocd"},
+				"spec": {"project": "default"},
+				"status": {
+					"resources": [
+						{
+							"group": "apps",
+							"version": "v1",
+							"kind": "Deployment",
+							"name": "web",
+							"namespace": "default",
+							"health": {"status": "Healthy", "message": "running"}
+						},
+						{
+							"version": "v1",
+							"kind": "Service",
+							"name": "web-svc",
+							"namespace": "default",
+							"health": {"status": "Healthy"}
+						},
+						{
+							"version": "v1",
+							"kind": "ConfigMap",
+							"name": "config",
+							"namespace": "default"
+						}
+					]
+				}
+			}`,
+			wantCount: 2,
+			checkFunc: func(t *testing.T, results []models.ResourceHealthInfo) {
+				if results[0].Resource.APIVersion != "apps/v1" {
+					t.Errorf("results[0].APIVersion = %q, want apps/v1", results[0].Resource.APIVersion)
+				}
+				if results[0].Resource.Kind != "Deployment" {
+					t.Errorf("results[0].Kind = %q, want Deployment", results[0].Resource.Kind)
+				}
+				if results[0].HealthStatus != models.HealthStatusHealthy {
+					t.Errorf("results[0].HealthStatus = %q, want Healthy", results[0].HealthStatus)
+				}
+				if results[0].HealthMessage != "running" {
+					t.Errorf("results[0].HealthMessage = %q, want running", results[0].HealthMessage)
+				}
+				// Service has no group, so APIVersion should just be "v1"
+				if results[1].Resource.APIVersion != "v1" {
+					t.Errorf("results[1].APIVersion = %q, want v1", results[1].Resource.APIVersion)
+				}
+			},
+		},
+		{
+			name:      "no resources with health",
+			status:    http.StatusOK,
+			body:      `{"metadata": {"name": "empty-app"}, "spec": {}, "status": {"resources": []}}`,
+			wantCount: 0,
+		},
+		{
+			name:    "API error",
+			status:  http.StatusNotFound,
+			body:    `{"message": "app not found"}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/applications/my-app" {
+					t.Errorf("path = %q, want /api/v1/applications/my-app", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			results, err := client.GetResourceHealth(context.Background(), "my-app")
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetResourceHealth() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(results) != tt.wantCount {
+				t.Fatalf("got %d results, want %d", len(results), tt.wantCount)
+			}
+			if tt.checkFunc != nil {
+				tt.checkFunc(t, results)
+			}
+		})
+	}
+}
+
+func TestUpdateApplicationSpec(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		wantErr bool
+	}{
+		{
+			name:   "successful update",
+			status: http.StatusOK,
+		},
+		{
+			name:    "API error",
+			status:  http.StatusBadRequest,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPut {
+					t.Errorf("method = %q, want PUT", r.Method)
+				}
+				if r.URL.Path != "/api/v1/applications/my-app/spec" {
+					t.Errorf("path = %q, want /api/v1/applications/my-app/spec", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			spec := v1alpha1.ApplicationSpec{
+				Project: "default",
+				Source: &v1alpha1.ApplicationSource{
+					RepoURL:        "https://github.com/org/repo",
+					Path:           "manifests",
+					TargetRevision: "feature-branch",
+				},
+			}
+
+			err := client.UpdateApplicationSpec(context.Background(), "my-app", spec)
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("UpdateApplicationSpec() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGetApplicationHistory(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		body        string
+		wantErr     bool
+		wantHistory int
+	}{
+		{
+			name:   "application with history",
+			status: http.StatusOK,
+			body: `{
+				"metadata": {"name": "my-app", "namespace": "argocd"},
+				"spec": {"project": "default"},
+				"status": {
+					"history": [
+						{"id": 1, "revision": "abc123"},
+						{"id": 2, "revision": "def456"}
+					]
+				}
+			}`,
+			wantHistory: 2,
+		},
+		{
+			name:        "application with no history",
+			status:      http.StatusOK,
+			body:        `{"metadata": {"name": "new-app"}, "spec": {}, "status": {}}`,
+			wantHistory: 0,
+		},
+		{
+			name:    "API error",
+			status:  http.StatusInternalServerError,
+			body:    `{"message": "internal error"}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/applications/my-app" {
+					t.Errorf("path = %q, want /api/v1/applications/my-app", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			history, err := client.GetApplicationHistory(context.Background(), "my-app")
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetApplicationHistory() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(history) != tt.wantHistory {
+				t.Errorf("got %d history entries, want %d", len(history), tt.wantHistory)
+			}
+		})
+	}
+}
+
+func TestRollbackApplication(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       *RollbackOptions
+		status     int
+		body       string
+		wantErr    bool
+		wantErrMsg string
+		wantPhase  models.SyncPhase
+	}{
+		{
+			name:   "successful rollback",
+			opts:   &RollbackOptions{ID: 5},
+			status: http.StatusOK,
+			body: `{
+				"status": {
+					"operationState": {
+						"phase": "Succeeded",
+						"message": "rollback completed"
+					}
+				}
+			}`,
+			wantPhase: models.SyncPhaseSucceeded,
+		},
+		{
+			name:   "rollback with prune and dry-run",
+			opts:   &RollbackOptions{ID: 3, Prune: true, DryRun: true},
+			status: http.StatusOK,
+			body: `{
+				"status": {
+					"operationState": {
+						"phase": "Succeeded",
+						"message": "dry run completed"
+					}
+				}
+			}`,
+			wantPhase: models.SyncPhaseSucceeded,
+		},
+		{
+			name:       "nil opts returns error",
+			opts:       nil,
+			wantErr:    true,
+			wantErrMsg: "rollback ID is required",
+		},
+		{
+			name:       "zero ID returns error",
+			opts:       &RollbackOptions{ID: 0},
+			wantErr:    true,
+			wantErrMsg: "rollback ID is required",
+		},
+		{
+			name:    "API error",
+			opts:    &RollbackOptions{ID: 1},
+			status:  http.StatusBadRequest,
+			body:    `{"message": "bad request"}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Errorf("method = %q, want POST", r.Method)
+				}
+				if r.URL.Path != "/api/v1/applications/my-app/rollback" {
+					t.Errorf("path = %q, want /api/v1/applications/my-app/rollback", r.URL.Path)
+				}
+				// Verify payload
+				var payload map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Errorf("failed to decode request body: %v", err)
+				}
+				if id, ok := payload["id"].(float64); ok {
+					if int64(id) != tt.opts.ID {
+						t.Errorf("payload id = %v, want %v", id, tt.opts.ID)
+					}
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			result, err := client.RollbackApplication(context.Background(), "my-app", tt.opts)
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("RollbackApplication() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if tt.wantErrMsg != "" && err != nil && !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("error = %q, want to contain %q", err.Error(), tt.wantErrMsg)
+				}
+				return
+			}
+			if result.Phase != tt.wantPhase {
+				t.Errorf("Phase = %q, want %q", result.Phase, tt.wantPhase)
+			}
+			if result.Application != "my-app" {
+				t.Errorf("Application = %q, want my-app", result.Application)
+			}
+		})
+	}
+}
+
+func TestCreateApplication(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		wantErr bool
+	}{
+		{
+			name:   "successful create",
+			status: http.StatusOK,
+		},
+		{
+			name:    "conflict error",
+			status:  http.StatusConflict,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost {
+					t.Errorf("method = %q, want POST", r.Method)
+				}
+				if r.URL.Path != "/api/v1/applications" {
+					t.Errorf("path = %q, want /api/v1/applications", r.URL.Path)
+				}
+				// Verify the payload is a valid Application
+				var app v1alpha1.Application
+				if err := json.NewDecoder(r.Body).Decode(&app); err != nil {
+					t.Errorf("failed to decode request body: %v", err)
+				}
+				if app.Name != "new-app" {
+					t.Errorf("app name = %q, want new-app", app.Name)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			app := &v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "new-app",
+					Namespace: "argocd",
+				},
+				Spec: v1alpha1.ApplicationSpec{
+					Project: "default",
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://github.com/org/repo",
+						Path:           "manifests",
+						TargetRevision: "main",
+					},
+					Destination: v1alpha1.ApplicationDestination{
+						Server:    "https://kubernetes.default.svc",
+						Namespace: "default",
+					},
+				},
+			}
+
+			err := client.CreateApplication(context.Background(), app)
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("CreateApplication() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestDeleteApplication(t *testing.T) {
+	tests := []struct {
+		name        string
+		cascade     bool
+		status      int
+		wantErr     bool
+		wantCascade string
+	}{
+		{
+			name:        "delete with cascade",
+			cascade:     true,
+			status:      http.StatusOK,
+			wantCascade: "true",
+		},
+		{
+			name:        "delete without cascade",
+			cascade:     false,
+			status:      http.StatusOK,
+			wantCascade: "false",
+		},
+		{
+			name:        "delete returns 204",
+			cascade:     true,
+			status:      http.StatusNoContent,
+			wantCascade: "true",
+		},
+		{
+			name:    "API error",
+			cascade: true,
+			status:  http.StatusForbidden,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodDelete {
+					t.Errorf("method = %q, want DELETE", r.Method)
+				}
+				if r.URL.Path != "/api/v1/applications/my-app" {
+					t.Errorf("path = %q, want /api/v1/applications/my-app", r.URL.Path)
+				}
+				cascade := r.URL.Query().Get("cascade")
+				if !tt.wantErr && cascade != tt.wantCascade {
+					t.Errorf("cascade = %q, want %q", cascade, tt.wantCascade)
+				}
+				w.WriteHeader(tt.status)
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			err := client.DeleteApplication(context.Background(), "my-app", tt.cascade)
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("DeleteApplication() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestGetApplicationRaw(t *testing.T) {
+	tests := []struct {
+		name     string
+		status   int
+		body     string
+		wantErr  bool
+		wantName string
+	}{
+		{
+			name:   "successful get",
+			status: http.StatusOK,
+			body: `{
+				"metadata": {"name": "raw-app", "namespace": "argocd"},
+				"spec": {
+					"project": "default",
+					"source": {
+						"repoURL": "https://github.com/org/repo",
+						"path": "manifests",
+						"targetRevision": "main"
+					},
+					"destination": {
+						"server": "https://kubernetes.default.svc",
+						"namespace": "default"
+					}
+				},
+				"status": {
+					"sync": {"status": "Synced"},
+					"health": {"status": "Healthy"}
+				}
+			}`,
+			wantName: "raw-app",
+		},
+		{
+			name:    "API error",
+			status:  http.StatusNotFound,
+			body:    `{"message": "not found"}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/applications/raw-app" {
+					t.Errorf("path = %q, want /api/v1/applications/raw-app", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			app, err := client.GetApplicationRaw(context.Background(), "raw-app")
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetApplicationRaw() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if app.Name != tt.wantName {
+				t.Errorf("Name = %q, want %q", app.Name, tt.wantName)
+			}
+			// Verify it returns the typed v1alpha1.Application (not models.Application)
+			if app.Spec.Project != "default" {
+				t.Errorf("Spec.Project = %q, want default", app.Spec.Project)
+			}
+			if app.Spec.Source == nil {
+				t.Fatal("Spec.Source should not be nil")
+			}
+			if app.Spec.Source.RepoURL != "https://github.com/org/repo" {
+				t.Errorf("Spec.Source.RepoURL = %q, want https://github.com/org/repo", app.Spec.Source.RepoURL)
+			}
+		})
+	}
+}
+
+func TestGetApplicationWithSpecialCharacters(t *testing.T) {
+	// Verify URL path escaping for application names with special characters.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The name "my app/test" should be URL-encoded
+		expectedPath := "/api/v1/applications/my%20app%2Ftest"
+		if r.URL.RawPath != expectedPath {
+			t.Errorf("path = %q, want %q", r.URL.RawPath, expectedPath)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{
+			"metadata": map[string]any{"name": "my app/test", "namespace": "argocd"},
+			"spec":     map[string]any{"project": "default"},
+			"status":   map[string]any{},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	client := newTestClient(ts)
+	app, err := client.GetApplication(context.Background(), "my app/test")
+	if err != nil {
+		t.Fatalf("GetApplication() error = %v", err)
+	}
+	if app.Name != "my app/test" {
+		t.Errorf("Name = %q, want %q", app.Name, "my app/test")
+	}
+}
+
+func TestGetManagedResources(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		wantErr   bool
+		wantCount int
+	}{
+		{
+			name:   "returns managed resources",
+			status: http.StatusOK,
+			body: `{
+				"items": [
+					{
+						"group": "apps",
+						"kind": "Deployment",
+						"namespace": "default",
+						"name": "web",
+						"liveState": "{\"kind\":\"Deployment\"}",
+						"normalizedLiveState": "{\"kind\":\"Deployment\"}"
+					},
+					{
+						"kind": "ConfigMap",
+						"namespace": "default",
+						"name": "config",
+						"liveState": "{\"kind\":\"ConfigMap\"}"
+					}
+				]
+			}`,
+			wantCount: 2,
+		},
+		{
+			name:      "empty items",
+			status:    http.StatusOK,
+			body:      `{"items": []}`,
+			wantCount: 0,
+		},
+		{
+			name:    "API error",
+			status:  http.StatusNotFound,
+			body:    `{"message": "not found"}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/applications/my-app/managed-resources" {
+					t.Errorf("path = %q, want /api/v1/applications/my-app/managed-resources", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			resources, err := client.getManagedResources(context.Background(), "my-app")
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("getManagedResources() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(resources) != tt.wantCount {
+				t.Errorf("got %d resources, want %d", len(resources), tt.wantCount)
+			}
+		})
+	}
+}
+
+func TestGetManifests(t *testing.T) {
+	tests := []struct {
+		name          string
+		params        *GetManifestsParams
+		status        int
+		body          string
+		wantErr       bool
+		wantManifests int
+		wantRevision  string
+		checkQuery    func(t *testing.T, query url.Values)
+	}{
+		{
+			name:   "basic manifests fetch",
+			params: nil,
+			status: http.StatusOK,
+			body: `{
+				"manifests": [
+					"{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"name\":\"web\",\"namespace\":\"default\"}}",
+					"{\"apiVersion\":\"v1\",\"kind\":\"Service\",\"metadata\":{\"name\":\"web-svc\",\"namespace\":\"default\"}}"
+				],
+				"revision": "abc123"
+			}`,
+			wantManifests: 2,
+			wantRevision:  "abc123",
+		},
+		{
+			name:   "with revision param",
+			params: &GetManifestsParams{Revision: "feature-branch"},
+			status: http.StatusOK,
+			body:   `{"manifests": [], "revision": "def456"}`,
+			checkQuery: func(t *testing.T, query url.Values) {
+				if query.Get("revision") != "feature-branch" {
+					t.Errorf("revision query = %q, want feature-branch", query.Get("revision"))
+				}
+			},
+			wantManifests: 0,
+			wantRevision:  "def456",
+		},
+		{
+			name: "with source positions and revisions (multi-source)",
+			params: &GetManifestsParams{
+				SourcePositions: []int{1, 2},
+				Revisions:       []string{"main", "v1.0.0"},
+			},
+			status: http.StatusOK,
+			body:   `{"manifests": ["{\"apiVersion\":\"v1\",\"kind\":\"ConfigMap\",\"metadata\":{\"name\":\"test\"}}"], "revision": ""}`,
+			checkQuery: func(t *testing.T, query url.Values) {
+				positions := query["sourcePositions"]
+				if len(positions) != 2 || positions[0] != "1" || positions[1] != "2" {
+					t.Errorf("sourcePositions = %v, want [1 2]", positions)
+				}
+				revisions := query["revisions"]
+				if len(revisions) != 2 || revisions[0] != "main" || revisions[1] != "v1.0.0" {
+					t.Errorf("revisions = %v, want [main v1.0.0]", revisions)
+				}
+			},
+			wantManifests: 1,
+		},
+		{
+			name:   "skips unparseable manifests",
+			status: http.StatusOK,
+			body: `{
+				"manifests": [
+					"{\"apiVersion\":\"v1\",\"kind\":\"ConfigMap\",\"metadata\":{\"name\":\"valid\"}}",
+					"not valid json"
+				]
+			}`,
+			wantManifests: 1,
+		},
+		{
+			name:    "API error",
+			status:  http.StatusInternalServerError,
+			body:    `{"message": "internal error"}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasPrefix(r.URL.Path, "/api/v1/applications/my-app/manifests") {
+					t.Errorf("path = %q, want prefix /api/v1/applications/my-app/manifests", r.URL.Path)
+				}
+				if tt.checkQuery != nil {
+					tt.checkQuery(t, r.URL.Query())
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			manifests, revision, err := client.GetManifests(context.Background(), "my-app", tt.params)
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetManifests() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(manifests) != tt.wantManifests {
+				t.Errorf("got %d manifests, want %d", len(manifests), tt.wantManifests)
+			}
+			if tt.wantRevision != "" && revision != tt.wantRevision {
+				t.Errorf("revision = %q, want %q", revision, tt.wantRevision)
+			}
+		})
+	}
+}
+
+func TestGetManifestsFetchRevision(t *testing.T) {
+	// When FetchRevision is true and the manifests API returns no revision,
+	// GetManifests should fetch the revision from the application status.
+	callCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/manifests"):
+			// Manifests API returns empty revision (ArgoCD v3+)
+			_, _ = w.Write([]byte(`{"manifests": ["{\"apiVersion\":\"v1\",\"kind\":\"ConfigMap\",\"metadata\":{\"name\":\"test\"}}"], "revision": ""}`))
+		case r.URL.Path == "/api/v1/applications/my-app":
+			// Application API returns revision in status
+			_, _ = w.Write([]byte(`{
+				"metadata": {"name": "my-app"},
+				"spec": {"project": "default"},
+				"status": {"sync": {"revision": "fetched-rev-123"}}
+			}`))
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestClient(ts)
+	_, revision, err := client.GetManifests(context.Background(), "my-app", &GetManifestsParams{FetchRevision: true})
+	if err != nil {
+		t.Fatalf("GetManifests() error = %v", err)
+	}
+	if revision != "fetched-rev-123" {
+		t.Errorf("revision = %q, want fetched-rev-123", revision)
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 API calls (manifests + app status), got %d", callCount)
+	}
+}
+
+func TestGetLiveManifests(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		wantErr   bool
+		wantCount int
+	}{
+		{
+			name:   "returns live manifests",
+			status: http.StatusOK,
+			body: `{
+				"items": [
+					{"liveState": "{\"apiVersion\":\"v1\",\"kind\":\"ConfigMap\",\"metadata\":{\"name\":\"live-cm\",\"namespace\":\"default\"}}"},
+					{"liveState": "{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"name\":\"web\",\"namespace\":\"default\"}}"}
+				]
+			}`,
+			wantCount: 2,
+		},
+		{
+			name:   "skips empty and null live states",
+			status: http.StatusOK,
+			body: `{
+				"items": [
+					{"liveState": "{\"apiVersion\":\"v1\",\"kind\":\"ConfigMap\",\"metadata\":{\"name\":\"valid\"}}"},
+					{"liveState": ""},
+					{"liveState": "null"}
+				]
+			}`,
+			wantCount: 1,
+		},
+		{
+			name:    "API error",
+			status:  http.StatusNotFound,
+			body:    `{"message": "not found"}`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/v1/applications/my-app/managed-resources" {
+					t.Errorf("path = %q, want /api/v1/applications/my-app/managed-resources", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			manifests, err := client.GetLiveManifests(context.Background(), "my-app")
+
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetLiveManifests() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(manifests) != tt.wantCount {
+				t.Errorf("got %d manifests, want %d", len(manifests), tt.wantCount)
+			}
+		})
 	}
 }

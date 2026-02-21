@@ -107,3 +107,211 @@ func TestWebhookTaskPayloadExcludesRepoConfig(t *testing.T) {
 		t.Error("RepoConfigLoaded should not be present in JSON")
 	}
 }
+
+func TestNewWebhookTask_EmptyDeliveryID(t *testing.T) {
+	event := &models.PREvent{
+		Provider: models.VCSProviderGitHub,
+		Type:     models.EventTypePullRequest,
+		Action:   models.PRActionOpened,
+		Repo: models.RepoInfo{
+			Owner:    "org",
+			Name:     "repo",
+			FullName: "org/repo",
+		},
+		PR: models.PRInfo{
+			Number: 1,
+		},
+		ReceivedAt: time.Now(),
+	}
+
+	task, err := NewWebhookTask("", event)
+	if err != nil {
+		t.Fatalf("NewWebhookTask() error = %v", err)
+	}
+
+	// Verify the task is created with empty delivery ID
+	var payload WebhookTaskPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+
+	if payload.DeliveryID != "" {
+		t.Errorf("delivery ID = %q, want empty string", payload.DeliveryID)
+	}
+	if payload.Event == nil {
+		t.Fatal("event should not be nil")
+	}
+}
+
+func TestNewWebhookTask_NilEvent(t *testing.T) {
+	task, err := NewWebhookTask("delivery-nil", nil)
+	if err != nil {
+		t.Fatalf("NewWebhookTask() error = %v", err)
+	}
+
+	// A nil event should serialize successfully (as JSON null)
+	var payload WebhookTaskPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+
+	if payload.DeliveryID != "delivery-nil" {
+		t.Errorf("delivery ID = %q, want %q", payload.DeliveryID, "delivery-nil")
+	}
+	if payload.Event != nil {
+		t.Errorf("event should be nil, got %+v", payload.Event)
+	}
+}
+
+func TestNewWebhookTask_PreservesAllFields(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	event := &models.PREvent{
+		Provider: models.VCSProviderGitLab,
+		Type:     models.EventTypeIssueComment,
+		Action:   models.PRActionCreated,
+		Repo: models.RepoInfo{
+			Owner:    "myorg",
+			Name:     "myrepo",
+			FullName: "myorg/myrepo",
+			CloneURL: "https://gitlab.com/myorg/myrepo.git",
+			HTMLURL:  "https://gitlab.com/myorg/myrepo",
+		},
+		PR: models.PRInfo{
+			Number:  99,
+			Title:   "MR Title",
+			HeadSHA: "def456",
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+			State:   models.PRStateOpen,
+			Draft:   true,
+		},
+		Comment: &models.Comment{
+			ID:   789,
+			Body: "lemuria plan",
+			Author: models.UserInfo{
+				Login: "user1",
+				ID:    100,
+			},
+		},
+		Sender: models.UserInfo{
+			Login: "user1",
+			ID:    100,
+		},
+		ReceivedAt: now,
+	}
+
+	task, err := NewWebhookTask("delivery-full", event)
+	if err != nil {
+		t.Fatalf("NewWebhookTask() error = %v", err)
+	}
+
+	var payload WebhookTaskPayload
+	if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		got  interface{}
+		want interface{}
+	}{
+		{"delivery ID", payload.DeliveryID, "delivery-full"},
+		{"provider", string(payload.Event.Provider), string(models.VCSProviderGitLab)},
+		{"event type", string(payload.Event.Type), string(models.EventTypeIssueComment)},
+		{"action", string(payload.Event.Action), string(models.PRActionCreated)},
+		{"repo owner", payload.Event.Repo.Owner, "myorg"},
+		{"repo name", payload.Event.Repo.Name, "myrepo"},
+		{"repo full name", payload.Event.Repo.FullName, "myorg/myrepo"},
+		{"repo clone URL", payload.Event.Repo.CloneURL, "https://gitlab.com/myorg/myrepo.git"},
+		{"PR number", payload.Event.PR.Number, 99},
+		{"PR title", payload.Event.PR.Title, "MR Title"},
+		{"PR head SHA", payload.Event.PR.HeadSHA, "def456"},
+		{"PR head ref", payload.Event.PR.HeadRef, "feature-branch"},
+		{"PR base ref", payload.Event.PR.BaseRef, "main"},
+		{"PR draft", payload.Event.PR.Draft, true},
+		{"comment body", payload.Event.Comment.Body, "lemuria plan"},
+		{"comment author", payload.Event.Comment.Author.Login, "user1"},
+		{"sender login", payload.Event.Sender.Login, "user1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("got %v, want %v", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewWebhookTask_TaskType(t *testing.T) {
+	if TypeWebhookProcess != "webhook:process" {
+		t.Errorf("TypeWebhookProcess = %q, want %q", TypeWebhookProcess, "webhook:process")
+	}
+}
+
+func TestWebhookTaskPayload_JSONRoundtrip(t *testing.T) {
+	tests := []struct {
+		name       string
+		deliveryID string
+		event      *models.PREvent
+	}{
+		{
+			name:       "github PR opened",
+			deliveryID: "gh-123",
+			event: &models.PREvent{
+				Provider: models.VCSProviderGitHub,
+				Type:     models.EventTypePullRequest,
+				Action:   models.PRActionOpened,
+				Repo:     models.RepoInfo{FullName: "org/repo"},
+				PR:       models.PRInfo{Number: 1},
+			},
+		},
+		{
+			name:       "gitlab comment",
+			deliveryID: "gl-456",
+			event: &models.PREvent{
+				Provider: models.VCSProviderGitLab,
+				Type:     models.EventTypeIssueComment,
+				Action:   models.PRActionCreated,
+				Repo:     models.RepoInfo{FullName: "group/project"},
+				PR:       models.PRInfo{Number: 10},
+				Comment:  &models.Comment{Body: "lemuria plan"},
+			},
+		},
+		{
+			name:       "PR closed",
+			deliveryID: "close-789",
+			event: &models.PREvent{
+				Provider: models.VCSProviderGitHub,
+				Type:     models.EventTypePullRequest,
+				Action:   models.PRActionClosed,
+				Repo:     models.RepoInfo{FullName: "org/repo"},
+				PR:       models.PRInfo{Number: 5, Merged: true},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task, err := NewWebhookTask(tt.deliveryID, tt.event)
+			if err != nil {
+				t.Fatalf("NewWebhookTask() error = %v", err)
+			}
+
+			var payload WebhookTaskPayload
+			if err := json.Unmarshal(task.Payload(), &payload); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+
+			if payload.DeliveryID != tt.deliveryID {
+				t.Errorf("delivery ID = %q, want %q", payload.DeliveryID, tt.deliveryID)
+			}
+			if payload.Event.Provider != tt.event.Provider {
+				t.Errorf("provider = %q, want %q", payload.Event.Provider, tt.event.Provider)
+			}
+			if payload.Event.PR.Number != tt.event.PR.Number {
+				t.Errorf("PR number = %d, want %d", payload.Event.PR.Number, tt.event.PR.Number)
+			}
+		})
+	}
+}
