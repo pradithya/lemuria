@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/org/lemuria/internal/models"
 )
@@ -389,12 +390,12 @@ func TestMiddleware_SetSessionCookie(t *testing.T) {
 		cookieSecure: true,
 	}
 
+	now := time.Now()
 	session := &models.Session{
-		ID: "sess-abc-123",
+		ID:        "sess-abc-123",
+		CreatedAt: now,
+		ExpiresAt: now.Add(time.Hour),
 	}
-	// Set times so MaxAge can be computed
-	now := session.CreatedAt
-	session.ExpiresAt = now.Add(3600_000_000_000) // 1 hour in nanoseconds (time.Hour)
 
 	w := httptest.NewRecorder()
 	m.SetSessionCookie(w, session)
@@ -421,6 +422,10 @@ func TestMiddleware_SetSessionCookie(t *testing.T) {
 	}
 	if c.Path != "/" {
 		t.Errorf("cookie path = %q, want %q", c.Path, "/")
+	}
+	// MaxAge should reflect the session duration (1 hour = 3600 seconds)
+	if c.MaxAge != int(time.Hour.Seconds()) {
+		t.Errorf("cookie MaxAge = %d, want %d", c.MaxAge, int(time.Hour.Seconds()))
 	}
 }
 

@@ -206,9 +206,14 @@ func TestQueueCollector_ImplementsCollector(t *testing.T) {
 }
 
 func TestQueueCollector_Collect_InvalidRedis(t *testing.T) {
-	// Use an address that doesn't have a running Redis
+	// Start a miniredis, capture its address, then close it to guarantee
+	// the address is unreachable (avoids flakiness of hardcoded ports).
+	mr := miniredis.RunT(t)
+	deadAddr := mr.Addr()
+	mr.Close()
+
 	cfg := config.RedisConfig{
-		Address: "localhost:1", // unlikely to have Redis running here
+		Address: deadAddr,
 	}
 
 	collector := NewQueueCollector(cfg)
