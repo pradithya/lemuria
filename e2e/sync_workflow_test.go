@@ -257,14 +257,18 @@ func TestE2ESyncMixedApps(t *testing.T) {
 	prNumber := int(time.Now().UnixNano()%90000) + 10000
 	headSHA := "abc123mixed"
 
-	// Create both apps
+	// Create both apps and ensure they are synced and healthy before the test sync.
+	// Without the initial sync, CI environments may take >2m to pull images and
+	// reach Healthy, causing the test's SyncTimeout to expire.
 	createTestApplication(testCtx, t, argoClient, gitAppName, "e2e-test-apps")
 	defer deleteTestApplication(testCtx, t, argoClient, gitAppName)
 	waitForAppReady(testCtx, t, argoClient, gitAppName, 120*time.Second)
+	syncAndWaitForHealthy(testCtx, t, argoClient, gitAppName, 120*time.Second)
 
 	createTestHelmChartApplication(testCtx, t, argoClient, helmAppName, "e2e-test-apps")
 	defer deleteTestApplication(testCtx, t, argoClient, helmAppName)
 	waitForAppReady(testCtx, t, argoClient, helmAppName, 120*time.Second)
+	syncAndWaitForHealthy(testCtx, t, argoClient, helmAppName, 120*time.Second)
 
 	defer cleanupForceUnlock(testCtx, t, gitAppName)
 	defer cleanupForceUnlock(testCtx, t, helmAppName)
