@@ -126,7 +126,8 @@ install-helm-plugins:
 setup-hooks:
 	@echo "Configuring git to use .githooks directory..."
 	@git config core.hooksPath .githooks
-	@echo "Git hooks installed! Pre-commit hook will run: make fmt, make lint, make license-check"
+	@chmod +x .githooks/*
+	@echo "Git hooks installed! Hooks: pre-commit (fmt, lint, license-check), commit-msg (conventional commits)"
 
 # Lint code
 lint:
