@@ -194,20 +194,31 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 		}
 	}
 
-	// Trigger the sync. The response may not reflect the new operation state yet
-	// because ArgoCD processes the operation asynchronously.
-	if err := c.post(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/sync", nil, payload, nil); err != nil {
-		return nil, fmt.Errorf("syncing application %s: %w", name, err)
-	}
-
 	// Determine timeout: use opts.Timeout if set, otherwise default.
 	timeout := defaultSyncWaitTimeout
 	if opts != nil && opts.Timeout > 0 {
 		timeout = opts.Timeout
 	}
 
-	// Poll until the operation reaches a terminal phase.
-	return c.waitForSyncComplete(ctx, name, timeout)
+	// Open the watch stream BEFORE triggering sync to avoid a race condition
+	// where the sync completes before the watch stream is established, causing
+	// the watch to miss all events and eventually time out.
+	watchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	events, err := c.watchApplication(watchCtx, name)
+	if err != nil {
+		return nil, fmt.Errorf("watching application %s: %w", name, err)
+	}
+
+	// Trigger the sync. The response may not reflect the new operation state yet
+	// because ArgoCD processes the operation asynchronously.
+	if err := c.post(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/sync", nil, payload, nil); err != nil {
+		return nil, fmt.Errorf("syncing application %s: %w", name, err)
+	}
+
+	// Wait until the operation reaches a terminal phase using the pre-opened watch stream.
+	return c.waitForSyncComplete(ctx, name, timeout, events)
 }
 
 // FindApplicationsByRepo returns applications that reference the given repository.
@@ -338,16 +349,37 @@ const missingHealthGracePeriod = 30 * time.Second
 // the operation reaches a terminal phase and the application becomes healthy.
 // Returns an error if the application enters a degraded state or fails to become
 // healthy within the timeout period.
-func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout time.Duration) (*models.SyncResult, error) {
-	watchCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
+//
+// When preOpenedEvents is non-nil, it is used instead of opening a new watch stream.
+// This allows callers (like SyncApplication) to open the watch before triggering the
+// operation, avoiding a race where the operation completes before the watch starts.
+func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout time.Duration, preOpenedEvents <-chan watchEvent) (*models.SyncResult, error) {
 	slog.Debug("waiting for sync to complete", "application", name, "timeout", timeout)
 
-	events, err := c.watchApplication(watchCtx, name)
-	if err != nil {
-		return nil, fmt.Errorf("watching application %s: %w", name, err)
+	// Always enforce the timeout regardless of whether the events channel
+	// was pre-opened by the caller. This ensures consistent timeout semantics
+	// and prevents indefinite waits if the caller's channel context is longer.
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
+
+	events := preOpenedEvents
+	if events == nil {
+		var err error
+		events, err = c.watchApplication(ctx, name)
+		if err != nil {
+			return nil, fmt.Errorf("watching application %s: %w", name, err)
+		}
+	}
+
+	// When using a pre-opened watch stream (opened before sync trigger), the
+	// first events may reflect the PREVIOUS operation's state. We must skip
+	// these stale events to avoid prematurely treating the old operation's
+	// terminal phase as the new sync's result. We skip until we see a
+	// non-terminal phase (e.g., Running), which indicates the new sync has started.
+	skipStaleEvents := preOpenedEvents != nil
 
 	var syncResult *models.SyncResult
 	var healthyAt time.Time // When we first saw Healthy status
@@ -419,7 +451,30 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			"health", healthStatus,
 			"syncCompleted", syncResult != nil,
 			"healthyAt", healthyAt,
+			"skipStale", skipStaleEvents,
 		)
+
+		// When using a pre-opened watch, skip events from the previous operation.
+		// Terminal phases (Succeeded/Failed/Error) or empty phases (no operation)
+		// before we see a Running phase are stale — they predate the sync POST.
+		if skipStaleEvents {
+			isTerminal := phase == models.SyncPhaseSucceeded || phase == models.SyncPhaseFailed || phase == models.SyncPhaseError
+			noOperation := status.OperationPhase == ""
+			if isTerminal || noOperation {
+				slog.Debug("skipping stale event from previous operation",
+					"application", name,
+					"phase", phase,
+					"health", healthStatus,
+				)
+				continue
+			}
+			// Non-terminal, non-empty phase (e.g., Running) means the new sync has started.
+			skipStaleEvents = false
+			slog.Debug("new sync operation detected, processing events normally",
+				"application", name,
+				"phase", phase,
+			)
+		}
 
 		// Wait for sync to reach a terminal phase.
 		if syncResult == nil {
