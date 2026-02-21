@@ -16,15 +16,23 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 
+	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 	"github.com/org/lemuria/internal/vcs"
+	"github.com/org/lemuria/pkg/diff"
 )
 
 // mockVCSForSync is a minimal vcs.Client mock for sync requirement tests.
@@ -614,61 +622,6 @@ func TestCheckSyncRequirements(t *testing.T) {
 	}
 }
 
-func TestConvertV1alpha1App(t *testing.T) {
-	tests := []struct {
-		name        string
-		app         *v1alpha1.Application
-		wantRepoURL string
-		wantSources int
-	}{
-		{
-			name: "single source",
-			app: &v1alpha1.Application{
-				Spec: v1alpha1.ApplicationSpec{
-					Source: &v1alpha1.ApplicationSource{
-						RepoURL: "https://github.com/org/repo",
-					},
-				},
-			},
-			wantRepoURL: "https://github.com/org/repo",
-			wantSources: 0,
-		},
-		{
-			name: "multi source",
-			app: &v1alpha1.Application{
-				Spec: v1alpha1.ApplicationSpec{
-					Sources: v1alpha1.ApplicationSources{
-						{RepoURL: "https://github.com/org/repo"},
-						{RepoURL: "https://charts.bitnami.com/bitnami"},
-					},
-				},
-			},
-			wantRepoURL: "",
-			wantSources: 2,
-		},
-		{
-			name: "nil source",
-			app: &v1alpha1.Application{
-				Spec: v1alpha1.ApplicationSpec{},
-			},
-			wantRepoURL: "",
-			wantSources: 0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := convertV1alpha1App(tt.app)
-			if got.RepoURL != tt.wantRepoURL {
-				t.Errorf("RepoURL = %q, want %q", got.RepoURL, tt.wantRepoURL)
-			}
-			if len(got.Sources) != tt.wantSources {
-				t.Errorf("Sources count = %d, want %d", len(got.Sources), tt.wantSources)
-			}
-		})
-	}
-}
-
 // mockLockManagerForSyncTracking tracks unlock calls for testing.
 type mockLockManagerForSyncTracking struct {
 	mockLockManagerForSync
@@ -808,100 +761,6 @@ func TestSyncNewApplicationMissingContent(t *testing.T) {
 	}
 }
 
-func TestBuildSyncRevisionOptions(t *testing.T) {
-	tests := []struct {
-		name          string
-		app           *v1alpha1.Application
-		repoURL       string
-		revision      string
-		wantRevisions []string
-		wantPositions []int64
-	}{
-		{
-			name: "single source returns nil (caller uses opts.Revision)",
-			app: &v1alpha1.Application{
-				Spec: v1alpha1.ApplicationSpec{
-					Source: &v1alpha1.ApplicationSource{
-						RepoURL: "https://github.com/org/repo",
-					},
-				},
-			},
-			repoURL:       "https://github.com/org/repo",
-			revision:      "abc123",
-			wantRevisions: nil,
-			wantPositions: nil,
-		},
-		{
-			name: "multi-source all matching PR repo",
-			app: &v1alpha1.Application{
-				Spec: v1alpha1.ApplicationSpec{
-					Sources: v1alpha1.ApplicationSources{
-						{RepoURL: "https://github.com/org/repo", Path: "manifests"},
-						{RepoURL: "https://github.com/org/repo.git", Path: "values"},
-					},
-				},
-			},
-			repoURL:       "https://github.com/org/repo",
-			revision:      "abc123",
-			wantRevisions: []string{"abc123", "abc123"},
-			wantPositions: []int64{1, 2},
-		},
-		{
-			name: "multi-source mixed — all sources included, non-matching keep original targetRevision",
-			app: &v1alpha1.Application{
-				Spec: v1alpha1.ApplicationSpec{
-					Sources: v1alpha1.ApplicationSources{
-						{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd", TargetRevision: "5.51.0"},
-						{RepoURL: "https://github.com/org/repo", Path: "values"},
-						{RepoURL: "https://charts.bitnami.com/bitnami", Chart: "redis", TargetRevision: "18.6.1"},
-					},
-				},
-			},
-			repoURL:       "https://github.com/org/repo",
-			revision:      "def456",
-			wantRevisions: []string{"5.51.0", "def456", "18.6.1"},
-			wantPositions: []int64{1, 2, 3},
-		},
-		{
-			name: "multi-source with no matching sources",
-			app: &v1alpha1.Application{
-				Spec: v1alpha1.ApplicationSpec{
-					Sources: v1alpha1.ApplicationSources{
-						{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd"},
-						{RepoURL: "https://charts.bitnami.com/bitnami", Chart: "redis"},
-					},
-				},
-			},
-			repoURL:       "https://github.com/org/repo",
-			revision:      "abc123",
-			wantRevisions: nil,
-			wantPositions: nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			revisions, positions := buildSyncRevisionOptions(tt.app, tt.repoURL, tt.revision)
-			if len(revisions) != len(tt.wantRevisions) {
-				t.Fatalf("revisions count = %d, want %d", len(revisions), len(tt.wantRevisions))
-			}
-			for i, want := range tt.wantRevisions {
-				if revisions[i] != want {
-					t.Errorf("revisions[%d] = %q, want %q", i, revisions[i], want)
-				}
-			}
-			if len(positions) != len(tt.wantPositions) {
-				t.Fatalf("positions count = %d, want %d", len(positions), len(tt.wantPositions))
-			}
-			for i, want := range tt.wantPositions {
-				if positions[i] != want {
-					t.Errorf("positions[%d] = %d, want %d", i, positions[i], want)
-				}
-			}
-		})
-	}
-}
-
 func TestRewriteTargetRevision(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1016,5 +875,355 @@ func TestRewriteTargetRevision(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// fakeArgoServer creates an httptest server that mocks the ArgoCD API
+// for syncApplication tests. It tracks calls to key endpoints.
+type fakeArgoServer struct {
+	server *httptest.Server
+
+	// Application returned by GET /api/v1/applications/{name}
+	app v1alpha1.Application
+
+	// Tracking
+	specUpdateCount atomic.Int32
+	specUpdateBody  atomic.Value // stores last v1alpha1.ApplicationSpec as JSON
+	syncCallCount   atomic.Int32
+	syncRequestBody atomic.Value // stores last sync request body as map
+}
+
+func newFakeArgoServer(app v1alpha1.Application) *fakeArgoServer {
+	f := &fakeArgoServer{app: app}
+	mux := http.NewServeMux()
+
+	// GET /api/v1/applications/{name} - GetApplication / GetApplicationRaw / GetResourceHealth
+	mux.HandleFunc("GET /api/v1/applications/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(f.app) //nolint:errcheck
+	})
+
+	// PUT /api/v1/applications/{name}/spec - UpdateApplicationSpec
+	mux.HandleFunc("PUT /api/v1/applications/", func(w http.ResponseWriter, r *http.Request) {
+		f.specUpdateCount.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		f.specUpdateBody.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(body) //nolint:errcheck
+	})
+
+	// POST /api/v1/applications/{name}/sync - SyncApplication
+	mux.HandleFunc("POST /api/v1/applications/", func(w http.ResponseWriter, r *http.Request) {
+		f.syncCallCount.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		f.syncRequestBody.Store(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(f.app) //nolint:errcheck
+	})
+
+	// GET /api/v1/stream/applications - Watch (for waitForSyncComplete)
+	// Returns a single event showing sync succeeded + healthy, then closes.
+	mux.HandleFunc("GET /api/v1/stream/applications", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		event := map[string]any{
+			"result": map[string]any{
+				"type": "MODIFIED",
+				"application": map[string]any{
+					"status": map[string]any{
+						"health": map[string]any{
+							"status": "Healthy",
+						},
+						"operationState": map[string]any{
+							"phase":   "Succeeded",
+							"message": "sync completed",
+							"syncResult": map[string]any{
+								"revision":  "abc123",
+								"resources": []any{},
+							},
+						},
+					},
+				},
+			},
+		}
+		json.NewEncoder(w).Encode(event) //nolint:errcheck
+	})
+
+	f.server = httptest.NewServer(mux)
+	return f
+}
+
+func (f *fakeArgoServer) close() {
+	f.server.Close()
+}
+
+func (f *fakeArgoServer) client() *argocd.Client {
+	client, _ := argocd.NewClient(config.ArgoCDConfig{
+		ServerURL: f.server.URL,
+		Token:     "test-token",
+		Insecure:  true,
+	})
+	return client
+}
+
+func (f *fakeArgoServer) lastSyncRequest() map[string]any {
+	raw, ok := f.syncRequestBody.Load().(string)
+	if !ok || raw == "" {
+		return nil
+	}
+	var m map[string]any
+	json.Unmarshal([]byte(raw), &m) //nolint:errcheck
+	return m
+}
+
+func (f *fakeArgoServer) lastSpecUpdate() *v1alpha1.ApplicationSpec {
+	raw, ok := f.specUpdateBody.Load().(string)
+	if !ok || raw == "" {
+		return nil
+	}
+	var spec v1alpha1.ApplicationSpec
+	json.Unmarshal([]byte(raw), &spec) //nolint:errcheck
+	return &spec
+}
+
+func TestSyncApplicationMultiSource(t *testing.T) {
+	tests := []struct {
+		name                string
+		app                 v1alpha1.Application
+		dryRun              bool
+		wantSpecUpdate      bool
+		wantTargetRevisions []string // expected targetRevisions in spec update (nil if no update expected)
+		wantSyncRevision    bool     // true if sync request should have "revision" field
+		wantTargetRewritten bool
+	}{
+		{
+			name: "multi-source app rewrites targetRevision and updates spec",
+			app: v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{RepoURL: "https://github.com/org/repo", Path: "manifests", TargetRevision: "main"},
+						{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd", TargetRevision: "5.51.0"},
+					},
+				},
+			},
+			wantSpecUpdate:      true,
+			wantTargetRevisions: []string{"abc123", "5.51.0"},
+			wantSyncRevision:    false, // no revision override for multi-source
+			wantTargetRewritten: true,
+		},
+		{
+			name: "multi-source app dry-run does not update spec",
+			app: v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{RepoURL: "https://github.com/org/repo", Path: "manifests", TargetRevision: "main"},
+						{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd", TargetRevision: "5.51.0"},
+					},
+				},
+			},
+			dryRun:              true,
+			wantSpecUpdate:      false,
+			wantSyncRevision:    false,
+			wantTargetRewritten: false,
+		},
+		{
+			name: "single-source app uses revision override",
+			app: v1alpha1.Application{
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://github.com/org/repo",
+						Path:           "manifests",
+						TargetRevision: "main",
+					},
+				},
+			},
+			wantSpecUpdate:      false,
+			wantSyncRevision:    true, // single-source uses opts.Revision
+			wantTargetRewritten: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newFakeArgoServer(tt.app)
+			defer fake.close()
+
+			exec := &Executor{
+				vcs:      &mockVCSForSync{prMergeable: true},
+				argocd:   fake.client(),
+				lock:     &mockLockManagerForSync{},
+				config:   &config.Config{ArgoCD: config.ArgoCDConfig{SyncTimeout: 30 * time.Second}},
+				renderer: diff.NewRenderer(),
+			}
+
+			lock := models.Lock{
+				Application:  "test-app",
+				PlanRevision: "abc123",
+			}
+			cmd := &Command{Name: CommandSync, DryRun: tt.dryRun}
+			event := &models.PREvent{
+				Repo: models.RepoInfo{
+					Owner:    "org",
+					Name:     "repo",
+					FullName: "org/repo",
+					HTMLURL:  "https://github.com/org/repo",
+				},
+				PR: models.PRInfo{
+					Number:  1,
+					HeadSHA: "abc123",
+					HeadRef: "feature-branch",
+				},
+			}
+
+			result := exec.syncApplication(context.Background(), lock, cmd, event, map[string][]byte{})
+
+			if result.Error != nil {
+				t.Fatalf("unexpected error: %v", result.Error)
+			}
+
+			// Check spec update calls
+			specUpdates := int(fake.specUpdateCount.Load())
+			if tt.wantSpecUpdate && specUpdates == 0 {
+				t.Error("expected UpdateApplicationSpec to be called, but it was not")
+			}
+			if !tt.wantSpecUpdate && specUpdates > 0 {
+				t.Errorf("expected no UpdateApplicationSpec call, got %d", specUpdates)
+			}
+
+			// Check targetRevisions in spec update
+			if tt.wantTargetRevisions != nil {
+				spec := fake.lastSpecUpdate()
+				if spec == nil {
+					t.Fatal("expected spec update body, got nil")
+				}
+				if len(spec.Sources) != len(tt.wantTargetRevisions) {
+					t.Fatalf("spec sources count = %d, want %d", len(spec.Sources), len(tt.wantTargetRevisions))
+				}
+				for i, want := range tt.wantTargetRevisions {
+					if spec.Sources[i].TargetRevision != want {
+						t.Errorf("spec.Sources[%d].TargetRevision = %q, want %q", i, spec.Sources[i].TargetRevision, want)
+					}
+				}
+			}
+
+			// Check sync request
+			syncReq := fake.lastSyncRequest()
+			if syncReq != nil {
+				_, hasRevision := syncReq["revision"]
+				if tt.wantSyncRevision && !hasRevision {
+					t.Error("expected sync request to have 'revision' field, but it was missing")
+				}
+				if !tt.wantSyncRevision && hasRevision {
+					t.Errorf("expected sync request without 'revision' field, got %v", syncReq["revision"])
+				}
+				_, hasRevisions := syncReq["revisions"]
+				if hasRevisions {
+					t.Error("expected sync request without 'revisions' field (multi-source override), but it was present")
+				}
+			}
+
+			// Check TargetRevRewritten flag
+			if result.TargetRevRewritten != tt.wantTargetRewritten {
+				t.Errorf("TargetRevRewritten = %v, want %v", result.TargetRevRewritten, tt.wantTargetRewritten)
+			}
+		})
+	}
+}
+
+func TestSyncApplicationMultiSourceWithSourceFile(t *testing.T) {
+	// When SourceFile is set AND app is multi-source AND fromPRRepo,
+	// the parsed spec should have rewritten targetRevisions and
+	// UpdateApplicationSpec should be called exactly once.
+	fake := newFakeArgoServer(v1alpha1.Application{
+		Spec: v1alpha1.ApplicationSpec{
+			Sources: v1alpha1.ApplicationSources{
+				{RepoURL: "https://github.com/org/repo", Path: "manifests", TargetRevision: "main"},
+				{RepoURL: "https://argoproj.github.io/argo-helm", Chart: "argo-cd", TargetRevision: "5.51.0"},
+			},
+		},
+	})
+	defer fake.close()
+
+	// Minimal valid Application YAML for the source file
+	sourceFileContent := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: test-app
+spec:
+  sources:
+    - repoURL: https://github.com/org/repo
+      path: manifests
+      targetRevision: main
+    - repoURL: https://argoproj.github.io/argo-helm
+      chart: argo-cd
+      targetRevision: 5.51.0
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  project: default
+`
+
+	exec := &Executor{
+		vcs:      &mockVCSForSync{prMergeable: true},
+		argocd:   fake.client(),
+		lock:     &mockLockManagerForSync{},
+		config:   &config.Config{ArgoCD: config.ArgoCDConfig{SyncTimeout: 30 * time.Second}},
+		renderer: diff.NewRenderer(),
+	}
+
+	lock := models.Lock{
+		Application:  "test-app",
+		PlanRevision: "abc123",
+		SourceFile:   "apps/test-app.yaml",
+	}
+	cmd := &Command{Name: CommandSync}
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner:    "org",
+			Name:     "repo",
+			FullName: "org/repo",
+			HTMLURL:  "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadSHA: "abc123",
+			HeadRef: "feature-branch",
+		},
+	}
+
+	headContents := map[string][]byte{
+		"apps/test-app.yaml": []byte(sourceFileContent),
+	}
+
+	result := exec.syncApplication(context.Background(), lock, cmd, event, headContents)
+
+	if result.Error != nil {
+		t.Fatalf("unexpected error: %v", result.Error)
+	}
+
+	// Should call UpdateApplicationSpec exactly once (with rewritten targetRevisions)
+	specUpdates := int(fake.specUpdateCount.Load())
+	if specUpdates != 1 {
+		t.Errorf("expected exactly 1 UpdateApplicationSpec call, got %d", specUpdates)
+	}
+
+	// Check that the spec update has rewritten targetRevisions
+	spec := fake.lastSpecUpdate()
+	if spec == nil {
+		t.Fatal("expected spec update body, got nil")
+	}
+	if len(spec.Sources) != 2 {
+		t.Fatalf("spec sources count = %d, want 2", len(spec.Sources))
+	}
+	// Git source should have PR SHA
+	if spec.Sources[0].TargetRevision != "abc123" {
+		t.Errorf("spec.Sources[0].TargetRevision = %q, want %q", spec.Sources[0].TargetRevision, "abc123")
+	}
+	// Helm source should keep original version
+	if spec.Sources[1].TargetRevision != "5.51.0" {
+		t.Errorf("spec.Sources[1].TargetRevision = %q, want %q", spec.Sources[1].TargetRevision, "5.51.0")
+	}
+
+	if !result.TargetRevRewritten {
+		t.Error("expected TargetRevRewritten to be true")
 	}
 }
