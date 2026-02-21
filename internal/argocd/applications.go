@@ -328,6 +328,12 @@ const defaultSyncWaitTimeout = 10 * time.Minute
 // before transitioning to Degraded (e.g., when a pod fails to pull an image).
 const healthStabilizationPeriod = 10 * time.Second
 
+// missingHealthGracePeriod is the duration to wait for health to transition
+// from Missing after sync succeeds. If health stays Missing for this period,
+// we treat it as success (the app has no health-assessable resources or
+// ArgoCD cannot evaluate health).
+const missingHealthGracePeriod = 30 * time.Second
+
 // waitForSyncComplete watches the application using the streaming Watch API until
 // the operation reaches a terminal phase and the application becomes healthy.
 // Returns an error if the application enters a degraded state or fails to become
@@ -344,16 +350,25 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 	}
 
 	var syncResult *models.SyncResult
-	var healthyAt time.Time // When we first saw Healthy status
+	var healthyAt time.Time  // When we first saw Healthy status
+	var missingAt time.Time  // When health first stayed Missing after sync succeeded
 
 	// stabilizationTimer fires after the health stabilization period.
 	// It's nil until the app first becomes healthy and is stopped if health
 	// regresses (e.g., back to Progressing). This ensures we don't block
 	// indefinitely on the watch channel waiting for events that may never come.
 	var stabilizationTimer *time.Timer
+	// missingGraceTimer fires after the missing health grace period.
+	// It's nil until health stays Missing after sync succeeds, and is stopped
+	// if health transitions to a non-Missing state. This prevents waiting
+	// forever for apps that have no health-assessable resources.
+	var missingGraceTimer *time.Timer
 	defer func() {
 		if stabilizationTimer != nil {
 			stabilizationTimer.Stop()
+		}
+		if missingGraceTimer != nil {
+			missingGraceTimer.Stop()
 		}
 	}()
 
@@ -361,21 +376,30 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 		var event watchEvent
 		var ok bool
 
-		// When a stabilization timer is running, use select so we can
-		// return as soon as the timer fires, even without a new event.
-		if stabilizationTimer != nil {
+		// When a timer is running, use select so we can return as soon
+		// as the timer fires, even without a new event.
+		if stabilizationTimer != nil || missingGraceTimer != nil {
+			stabilizationCh := nilTimerChan(stabilizationTimer)
+			missingGraceCh := nilTimerChan(missingGraceTimer)
 			select {
 			case event, ok = <-events:
 				if !ok {
 					// Channel closed — handle below the loop.
 					goto streamEnded
 				}
-			case <-stabilizationTimer.C:
+			case <-stabilizationCh:
 				slog.Debug("health stabilized, sync complete",
 					"application", name,
 					"stableDuration", time.Since(healthyAt),
 				)
 				syncResult.HealthStatus = models.HealthStatusHealthy
+				return syncResult, nil
+			case <-missingGraceCh:
+				slog.Debug("health stayed Missing after grace period, treating as success",
+					"application", name,
+					"missingDuration", time.Since(missingAt),
+				)
+				syncResult.HealthStatus = models.HealthStatusMissing
 				return syncResult, nil
 			}
 		} else {
@@ -426,6 +450,14 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 		// Sync succeeded — wait for health to become Healthy or reach a terminal state.
 		switch healthStatus {
 		case models.HealthStatusHealthy:
+			// Reset missing grace timer since health transitioned
+			if !missingAt.IsZero() {
+				missingAt = time.Time{}
+				if missingGraceTimer != nil {
+					missingGraceTimer.Stop()
+					missingGraceTimer = nil
+				}
+			}
 			// Track when we first saw Healthy
 			if healthyAt.IsZero() {
 				healthyAt = time.Now()
@@ -475,8 +507,9 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			return syncResult, nil
 
 		case models.HealthStatusMissing:
-			// Missing can be transient for new apps (health not yet evaluated).
-			// Reset healthy timer and keep waiting, just like Progressing.
+			// Missing can be transient for new apps (health not yet evaluated)
+			// or permanent for apps with no health-assessable resources.
+			// Reset healthy timer and start missing grace timer.
 			if !healthyAt.IsZero() {
 				slog.Debug("health changed from Healthy to Missing, resetting stabilization",
 					"application", name,
@@ -486,6 +519,23 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 					stabilizationTimer.Stop()
 					stabilizationTimer = nil
 				}
+			}
+			// Start missing grace timer if not already running
+			if missingAt.IsZero() {
+				missingAt = time.Now()
+				missingGraceTimer = time.NewTimer(missingHealthGracePeriod)
+				slog.Debug("health is missing, starting grace period",
+					"application", name,
+					"gracePeriod", missingHealthGracePeriod,
+				)
+			} else if time.Since(missingAt) >= missingHealthGracePeriod {
+				// Grace period elapsed during event processing
+				slog.Debug("health stayed Missing after grace period, treating as success",
+					"application", name,
+					"missingDuration", time.Since(missingAt),
+				)
+				syncResult.HealthStatus = models.HealthStatusMissing
+				return syncResult, nil
 			}
 			slog.Debug("application health is missing, waiting for evaluation",
 				"application", name,
@@ -513,6 +563,14 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 				if stabilizationTimer != nil {
 					stabilizationTimer.Stop()
 					stabilizationTimer = nil
+				}
+			}
+			// Reset missing grace timer since health transitioned
+			if !missingAt.IsZero() {
+				missingAt = time.Time{}
+				if missingGraceTimer != nil {
+					missingGraceTimer.Stop()
+					missingGraceTimer = nil
 				}
 			}
 			slog.Debug("application still progressing, waiting for next event",
@@ -705,6 +763,15 @@ func convertV1alpha1Application(app v1alpha1.Application, sourceFile string) mod
 	}
 
 	return result
+}
+
+// nilTimerChan returns the timer's channel, or a nil channel if the timer is nil.
+// A nil channel blocks forever in select, effectively disabling that case.
+func nilTimerChan(t *time.Timer) <-chan time.Time {
+	if t == nil {
+		return nil
+	}
+	return t.C
 }
 
 // buildSyncResult converts an appSyncStatus into a SyncResult.
