@@ -1,0 +1,155 @@
+# Copyright 2026 Lemuria Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — show next version without creating a tag'
+        required: false
+        type: boolean
+        default: false
+      override_version:
+        description: 'Override version (e.g. 1.0.0) — skip automatic detection'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release Tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: latest-tag
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
+          echo "tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+          echo "Latest tag: ${LATEST_TAG}"
+
+      - name: Determine next version
+        id: next-version
+        run: |
+          OVERRIDE_VERSION="${{ inputs.override_version }}"
+          if [ -n "$OVERRIDE_VERSION" ]; then
+            # Strip leading 'v' if provided
+            OVERRIDE_VERSION="${OVERRIDE_VERSION#v}"
+
+            # Validate override version matches semver X.Y.Z
+            if ! echo "$OVERRIDE_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "Error: override_version '$OVERRIDE_VERSION' is not a valid semantic version (expected format: X.Y.Z, e.g. 1.2.3)."
+              exit 1
+            fi
+
+            echo "version=${OVERRIDE_VERSION}" >> $GITHUB_OUTPUT
+            echo "Using override version: v${OVERRIDE_VERSION}"
+            exit 0
+          fi
+
+          LATEST_TAG="${{ steps.latest-tag.outputs.tag }}"
+          VERSION="${LATEST_TAG#v}"
+
+          # Parse current version
+          # Strip any pre-release or build metadata (e.g., -rc1, +meta)
+          VERSION=${VERSION%%[-+]*}
+
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          # Default missing components to 0 (e.g., handle v1 or v1.2)
+          [ -z "$MINOR" ] && MINOR=0
+          [ -z "$PATCH" ] && PATCH=0
+
+          # Validate numeric semver components; fall back if invalid
+          if ! echo "$MAJOR.$MINOR.$PATCH" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Warning: latest tag '${LATEST_TAG}' is not a valid semver (vX.Y.Z); defaulting to v0.0.0"
+            MAJOR=0
+            MINOR=0
+            PATCH=0
+          fi
+
+          # Analyze commits since last tag
+          BUMP="patch"
+          COMMITS=$(git log --pretty=format:"%s" ${LATEST_TAG}..HEAD 2>/dev/null || git log --pretty=format:"%s")
+
+          while IFS= read -r msg; do
+            [ -z "$msg" ] && continue
+
+            # Check for breaking changes
+            if echo "$msg" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9._-]+\))?!: ' || echo "$msg" | grep -q 'BREAKING CHANGE'; then
+              BUMP="major"
+              break
+            fi
+
+            # Check for features
+            if echo "$msg" | grep -qE '^feat(\([a-zA-Z0-9._-]+\))?: .+'; then
+              BUMP="minor"
+            fi
+          done <<< "$COMMITS"
+
+          case "$BUMP" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=${NEXT_VERSION}" >> $GITHUB_OUTPUT
+          echo "Bump type: ${BUMP}"
+          echo "Next version: v${NEXT_VERSION}"
+
+      - name: Summary
+        run: |
+          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Previous tag:** ${{ steps.latest-tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Next version:** v${{ steps.next-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dry run:** ${{ inputs.dry_run }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Commits since last tag" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          git log --pretty=format:"- %s (%h)" ${{ steps.latest-tag.outputs.tag }}..HEAD 2>/dev/null >> $GITHUB_STEP_SUMMARY || \
+            git log --pretty=format:"- %s (%h)" HEAD~10..HEAD >> $GITHUB_STEP_SUMMARY
+
+      - name: Create and push tag
+        if: inputs.dry_run != true
+        run: |
+          TAG="v${{ steps.next-version.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists. Skipping tag creation and push."
+            exit 0
+          fi
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+          echo "Created and pushed tag: ${TAG}"
