@@ -350,8 +350,8 @@ spec:
         path: guestbook
       destination:
         server: https://kubernetes.default.svc
-        namespace: e2e-test-apps
-`, appSetName, appSetName)
+        namespace: %s
+`, appSetName, appSetName, appSetName)
 
 	// Head YAML: list generator with dev, staging, prod (added prod)
 	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
@@ -381,8 +381,8 @@ spec:
         path: guestbook
       destination:
         server: https://kubernetes.default.svc
-        namespace: e2e-test-apps
-`, appSetName, appSetName)
+        namespace: %s
+`, appSetName, appSetName, appSetName)
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
@@ -485,8 +485,8 @@ spec:
         path: guestbook
       destination:
         server: https://kubernetes.default.svc
-        namespace: e2e-test-apps
-`, appSetName, appSetName)
+        namespace: %s
+`, appSetName, appSetName, appSetName)
 
 	// Head YAML: list generator with only dev (removed staging)
 	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
@@ -514,8 +514,8 @@ spec:
         path: guestbook
       destination:
         server: https://kubernetes.default.svc
-        namespace: e2e-test-apps
-`, appSetName, appSetName)
+        namespace: %s
+`, appSetName, appSetName, appSetName)
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")

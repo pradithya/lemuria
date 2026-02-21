@@ -145,7 +145,7 @@ spec:
     targetRevision: "1.4.1"
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	// Head YAML (modified Helm values)
 	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
@@ -164,7 +164,7 @@ spec:
         createClusterRoles: false
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
@@ -292,7 +292,7 @@ spec:
         createClusterRoles: false
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, helmAppName)
+    namespace: %s`, helmAppName, helmAppName)
 
 	// Step 1: Directly acquire locks and store plans (bypassing diff generation)
 	_, err := lockManager.Lock(testCtx, models.LockRequest{
@@ -633,7 +633,7 @@ spec:
     path: guestbook
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	// Step 1: Directly acquire lock with ChangeType=ApplicationNew and store plan
 	_, err := lockManager.Lock(testCtx, models.LockRequest{

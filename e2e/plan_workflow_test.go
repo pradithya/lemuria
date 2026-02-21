@@ -161,7 +161,7 @@ spec:
     targetRevision: "1.4.1"
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	// Head version (modified Helm values — added helm.values)
 	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
@@ -180,7 +180,7 @@ spec:
         createClusterRoles: false
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	mockGH.FileContents[crFilePath+"@main"] = []byte(baseYAML)
 	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(headYAML)
@@ -376,7 +376,7 @@ spec:
     path: guestbook
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
@@ -494,7 +494,7 @@ spec:
     path: guestbook
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
@@ -620,7 +620,7 @@ spec:
     path: guestbook
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")

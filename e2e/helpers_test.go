@@ -252,7 +252,7 @@ func createTestApplicationSet(ctx context.Context, t *testing.T, client *argocd.
 					},
 					Destination: v1alpha1.ApplicationDestination{
 						Server:    "https://kubernetes.default.svc",
-						Namespace: name,
+						Namespace: name + "-{{ .env }}",
 					},
 					SyncPolicy: &v1alpha1.SyncPolicy{
 						SyncOptions: v1alpha1.SyncOptions{"CreateNamespace=true"},
