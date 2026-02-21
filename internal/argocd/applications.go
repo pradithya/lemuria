@@ -350,8 +350,8 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 	}
 
 	var syncResult *models.SyncResult
-	var healthyAt time.Time  // When we first saw Healthy status
-	var missingAt time.Time  // When health first stayed Missing after sync succeeded
+	var healthyAt time.Time // When we first saw Healthy status
+	var missingAt time.Time // When health first stayed Missing after sync succeeded
 
 	// stabilizationTimer fires after the health stabilization period.
 	// It's nil until the app first becomes healthy and is stopped if health

@@ -209,6 +209,7 @@ func TestBuildTempAppSpec_HelmReleaseName(t *testing.T) {
 			},
 			cfg: TempAppConfig{
 				OriginalAppName: "cert-manager",
+				TargetBranch:    "feature/update",
 				PRNumber:        14,
 				PRRepo:          "https://github.com/org/repo",
 				Suffix:          "base",
@@ -233,6 +234,7 @@ func TestBuildTempAppSpec_HelmReleaseName(t *testing.T) {
 			},
 			cfg: TempAppConfig{
 				OriginalAppName: "my-app",
+				TargetBranch:    "feature/update",
 				PRNumber:        5,
 				PRRepo:          "https://github.com/org/repo",
 				Suffix:          "head",
@@ -261,6 +263,7 @@ func TestBuildTempAppSpec_HelmReleaseName(t *testing.T) {
 			},
 			cfg: TempAppConfig{
 				OriginalAppName: "grafana",
+				TargetBranch:    "feature/update-values",
 				PRNumber:        14,
 				PRRepo:          "https://github.com/org/repo",
 				Suffix:          "head",
@@ -269,7 +272,7 @@ func TestBuildTempAppSpec_HelmReleaseName(t *testing.T) {
 			sourceIndex:     1,
 		},
 		{
-			name: "git-only source is unaffected",
+			name: "git-only source does not get ReleaseName",
 			original: &v1alpha1.Application{
 				ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
 				Spec: v1alpha1.ApplicationSpec{
@@ -282,8 +285,9 @@ func TestBuildTempAppSpec_HelmReleaseName(t *testing.T) {
 			},
 			cfg: TempAppConfig{
 				OriginalAppName: "my-app",
+				TargetBranch:    "feature/update",
 				PRNumber:        7,
-				PRRepo:          "https://github.com/org/repo",
+				PRRepo:          "https://github.com/other-org/other-repo",
 				Suffix:          "base",
 			},
 			wantReleaseName: "",
