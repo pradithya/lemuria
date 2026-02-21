@@ -8,7 +8,6 @@
   <a href="https://goreportcard.com/report/github.com/pradithya/lemuria"><img src="https://goreportcard.com/badge/github.com/pradithya/lemuria" alt="Go Report Card"></a>
   <a href="https://github.com/pradithya/lemuria/releases/latest"><img src="https://img.shields.io/github/v/release/pradithya/lemuria" alt="Latest Release"></a>
   <a href="https://github.com/pradithya/lemuria/blob/main/LICENSE"><img src="https://img.shields.io/github/license/pradithya/lemuria" alt="License"></a>
-  <!-- Register at https://www.bestpractices.dev/en/projects/new and replace PROJECT_ID below -->
   <a href="https://www.bestpractices.dev/projects/11996"><img src="https://www.bestpractices.dev/projects/11996/badge" alt="OpenSSF Best Practices"></a>
 </p>
 
