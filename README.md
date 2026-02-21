@@ -2,6 +2,16 @@
   <img src="assets/lemuria-logo.png" alt="Lemuria Logo">
 </p>
 
+<p align="center">
+  <a href="https://github.com/pradithya/lemuria/actions/workflows/ci.yaml"><img src="https://github.com/pradithya/lemuria/actions/workflows/ci.yaml/badge.svg?branch=main" alt="CI/CD Pipeline"></a>
+  <a href="https://codecov.io/gh/pradithya/lemuria"><img src="https://codecov.io/gh/pradithya/lemuria/branch/main/graph/badge.svg" alt="Code Coverage"></a>
+  <a href="https://goreportcard.com/report/github.com/pradithya/lemuria"><img src="https://goreportcard.com/badge/github.com/pradithya/lemuria" alt="Go Report Card"></a>
+  <a href="https://github.com/pradithya/lemuria/releases/latest"><img src="https://img.shields.io/github/v/release/pradithya/lemuria" alt="Latest Release"></a>
+  <a href="https://github.com/pradithya/lemuria/blob/main/LICENSE"><img src="https://img.shields.io/github/license/pradithya/lemuria" alt="License"></a>
+  <!-- Register at https://www.bestpractices.dev/en/projects/new and replace PROJECT_ID below -->
+  <a href="https://www.bestpractices.dev/projects/11996"><img src="https://www.bestpractices.dev/projects/11996/badge" alt="OpenSSF Best Practices"></a>
+</p>
+
 # Lemuria
 
 Argo CD Pull Request Automation.
