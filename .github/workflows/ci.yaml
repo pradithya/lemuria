@@ -269,10 +269,53 @@ jobs:
       - name: Run chart-testing (lint)
         run: ct lint --charts charts/lemuria --validate-maintainers=false
 
+  check-commits:
+    name: Check Conventional Commits
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          COMMITS=$(git log --format="%H %s" ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }})
+          PATTERN='^[0-9a-f]+ (feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9._-]+\))?!?: .+'
+          FAILED=0
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            SHA=$(echo "$line" | cut -c1-12)
+            MSG=$(echo "$line" | cut -d' ' -f2-)
+
+            # Skip merge commits
+            if echo "$MSG" | grep -qE '^Merge '; then
+              continue
+            fi
+
+            if ! echo "$line" | grep -qE "$PATTERN"; then
+              echo "::error::Invalid commit message: $SHA - $MSG"
+              FAILED=1
+            fi
+          done <<< "$COMMITS"
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo ""
+            echo "Commit messages must follow Conventional Commits format:"
+            echo "  <type>[optional scope]: <description>"
+            echo ""
+            echo "Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+            exit 1
+          fi
+
+          echo "All commit messages follow Conventional Commits format."
+
   test-e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: [lint-backend, lint-frontend, test-backend, test-frontend, secrets-scan, test-helm-chart]
+    needs: [lint-backend, lint-frontend, test-backend, test-frontend, secrets-scan, test-helm-chart, check-commits]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -546,12 +589,45 @@ jobs:
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           if [ -n "$PREV_TAG" ]; then
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD)
+            COMMITS=$(git log --pretty=format:"%s (%h)" $PREV_TAG..HEAD)
           else
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" HEAD~10..HEAD)
+            COMMITS=$(git log --pretty=format:"%s (%h)" HEAD~10..HEAD)
           fi
+
+          BREAKING=""
+          FEATURES=""
+          FIXES=""
+          OTHER=""
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            if echo "$line" | grep -qE '^[a-z]+(\([a-zA-Z0-9._-]+\))?!:' || echo "$line" | grep -q 'BREAKING CHANGE'; then
+              BREAKING="${BREAKING}- ${line}\n"
+            elif echo "$line" | grep -qE '^feat(\(|:)'; then
+              FEATURES="${FEATURES}- ${line}\n"
+            elif echo "$line" | grep -qE '^fix(\(|:)'; then
+              FIXES="${FIXES}- ${line}\n"
+            else
+              OTHER="${OTHER}- ${line}\n"
+            fi
+          done <<< "$COMMITS"
+
+          CHANGELOG=""
+          if [ -n "$BREAKING" ]; then
+            CHANGELOG="${CHANGELOG}### Breaking Changes\n\n${BREAKING}\n"
+          fi
+          if [ -n "$FEATURES" ]; then
+            CHANGELOG="${CHANGELOG}### Features\n\n${FEATURES}\n"
+          fi
+          if [ -n "$FIXES" ]; then
+            CHANGELOG="${CHANGELOG}### Bug Fixes\n\n${FIXES}\n"
+          fi
+          if [ -n "$OTHER" ]; then
+            CHANGELOG="${CHANGELOG}### Other\n\n${OTHER}\n"
+          fi
+
           echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Determine version
