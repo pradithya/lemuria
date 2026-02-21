@@ -15,7 +15,13 @@
 package argocd
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -552,5 +558,212 @@ func TestBuildSyncResult(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSyncApplicationWatchBeforeSync(t *testing.T) {
+	// Verify that the watch stream is opened BEFORE the sync POST is triggered.
+	// This prevents a race condition where the sync completes before the watch
+	// starts, causing the watch to miss all events.
+
+	var watchOpened atomic.Int64
+	var syncTriggered atomic.Int64
+	var counter atomic.Int64
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/stream/applications" && r.Method == http.MethodGet:
+			// Record the order of the watch request
+			watchOpened.Store(counter.Add(1))
+
+			// Stream a sync-succeeded + healthy event then close
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				http.Error(w, "streaming not supported", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+
+			event := watchEvent{}
+			event.Result.Type = "MODIFIED"
+			event.Result.Application.Status.Health.Status = "Healthy"
+			event.Result.Application.Status.OperationState = &struct {
+				Phase      string `json:"phase"`
+				Message    string `json:"message"`
+				SyncResult struct {
+					Revision  string               `json:"revision"`
+					Resources []syncResourceResult `json:"resources"`
+				} `json:"syncResult"`
+			}{
+				Phase:   "Succeeded",
+				Message: "sync completed",
+			}
+			event.Result.Application.Status.OperationState.SyncResult.Revision = "abc123"
+
+			data, _ := json.Marshal(event)
+			_, _ = w.Write(data)
+			_, _ = w.Write([]byte("\n"))
+			flusher.Flush()
+			// Keep connection open briefly so client can read
+			time.Sleep(100 * time.Millisecond)
+
+		case r.URL.Path == "/api/v1/applications/test-app/sync" && r.Method == http.MethodPost:
+			// Record the order of the sync request
+			syncTriggered.Store(counter.Add(1))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	client := &Client{
+		baseURL:    ts.URL,
+		token:      "test-token",
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := client.SyncApplication(ctx, "test-app", &SyncOptions{
+		Timeout: 15 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("SyncApplication failed: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("Expected non-nil SyncResult")
+	}
+
+	// Verify ordering: watch must be opened before sync is triggered
+	watchOrder := watchOpened.Load()
+	syncOrder := syncTriggered.Load()
+
+	if watchOrder == 0 {
+		t.Error("Watch stream was never opened")
+	}
+	if syncOrder == 0 {
+		t.Error("Sync was never triggered")
+	}
+	if watchOrder >= syncOrder {
+		t.Errorf("Watch was opened (order=%d) AFTER sync was triggered (order=%d); expected watch first",
+			watchOrder, syncOrder)
+	}
+}
+
+func TestWaitForSyncCompleteWithPreOpenedEvents(t *testing.T) {
+	// Verify that waitForSyncComplete uses a pre-opened events channel
+	// instead of opening a new watch stream.
+
+	client := &Client{
+		baseURL:    "http://unused",
+		token:      "test-token",
+		httpClient: &http.Client{},
+	}
+
+	// Create a pre-opened events channel and send events on it
+	events := make(chan watchEvent, 2)
+
+	// Send a sync-succeeded event
+	succeededEvent := watchEvent{}
+	succeededEvent.Result.Application.Status.Health.Status = "Healthy"
+	succeededEvent.Result.Application.Status.OperationState = &struct {
+		Phase      string `json:"phase"`
+		Message    string `json:"message"`
+		SyncResult struct {
+			Revision  string               `json:"revision"`
+			Resources []syncResourceResult `json:"resources"`
+		} `json:"syncResult"`
+	}{
+		Phase:   "Succeeded",
+		Message: "sync completed",
+	}
+	succeededEvent.Result.Application.Status.OperationState.SyncResult.Revision = "def456"
+
+	events <- succeededEvent
+	close(events)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := client.waitForSyncComplete(ctx, "test-app", 5*time.Second, events)
+	if err != nil {
+		t.Fatalf("waitForSyncComplete failed: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("Expected non-nil SyncResult")
+	}
+	if result.Phase != models.SyncPhaseSucceeded {
+		t.Errorf("Phase = %q, want %q", result.Phase, models.SyncPhaseSucceeded)
+	}
+	if result.Revision != "def456" {
+		t.Errorf("Revision = %q, want %q", result.Revision, "def456")
+	}
+}
+
+func TestWaitForSyncCompleteNilEventsOpensWatch(t *testing.T) {
+	// Verify that waitForSyncComplete opens its own watch stream when
+	// preOpenedEvents is nil (used by callers like RollbackApplication
+	// that don't pre-open a watch).
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/stream/applications" && r.Method == http.MethodGet {
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				http.Error(w, "streaming not supported", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+
+			event := watchEvent{}
+			event.Result.Application.Status.Health.Status = "Healthy"
+			event.Result.Application.Status.OperationState = &struct {
+				Phase      string `json:"phase"`
+				Message    string `json:"message"`
+				SyncResult struct {
+					Revision  string               `json:"revision"`
+					Resources []syncResourceResult `json:"resources"`
+				} `json:"syncResult"`
+			}{
+				Phase: "Succeeded",
+			}
+
+			data, _ := json.Marshal(event)
+			_, _ = w.Write(data)
+			_, _ = w.Write([]byte("\n"))
+			flusher.Flush()
+			time.Sleep(100 * time.Millisecond)
+			return
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := &Client{
+		baseURL:    ts.URL,
+		token:      "test-token",
+		httpClient: &http.Client{Timeout: 10 * time.Second},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := client.waitForSyncComplete(ctx, "test-app", 10*time.Second, nil)
+	if err != nil {
+		t.Fatalf("waitForSyncComplete with nil events failed: %v", err)
+	}
+
+	if result == nil {
+		t.Fatal("Expected non-nil SyncResult")
+	}
+	if result.Phase != models.SyncPhaseSucceeded {
+		t.Errorf("Phase = %q, want %q", result.Phase, models.SyncPhaseSucceeded)
 	}
 }

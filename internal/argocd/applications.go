@@ -194,20 +194,31 @@ func (c *Client) SyncApplication(ctx context.Context, name string, opts *SyncOpt
 		}
 	}
 
-	// Trigger the sync. The response may not reflect the new operation state yet
-	// because ArgoCD processes the operation asynchronously.
-	if err := c.post(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/sync", nil, payload, nil); err != nil {
-		return nil, fmt.Errorf("syncing application %s: %w", name, err)
-	}
-
 	// Determine timeout: use opts.Timeout if set, otherwise default.
 	timeout := defaultSyncWaitTimeout
 	if opts != nil && opts.Timeout > 0 {
 		timeout = opts.Timeout
 	}
 
-	// Poll until the operation reaches a terminal phase.
-	return c.waitForSyncComplete(ctx, name, timeout)
+	// Open the watch stream BEFORE triggering sync to avoid a race condition
+	// where the sync completes before the watch stream is established, causing
+	// the watch to miss all events and eventually time out.
+	watchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	events, err := c.watchApplication(watchCtx, name)
+	if err != nil {
+		return nil, fmt.Errorf("watching application %s: %w", name, err)
+	}
+
+	// Trigger the sync. The response may not reflect the new operation state yet
+	// because ArgoCD processes the operation asynchronously.
+	if err := c.post(ctx, "/api/v1/applications/"+url.PathEscape(name)+"/sync", nil, payload, nil); err != nil {
+		return nil, fmt.Errorf("syncing application %s: %w", name, err)
+	}
+
+	// Wait until the operation reaches a terminal phase using the pre-opened watch stream.
+	return c.waitForSyncComplete(ctx, name, timeout, events)
 }
 
 // FindApplicationsByRepo returns applications that reference the given repository.
@@ -338,15 +349,23 @@ const missingHealthGracePeriod = 30 * time.Second
 // the operation reaches a terminal phase and the application becomes healthy.
 // Returns an error if the application enters a degraded state or fails to become
 // healthy within the timeout period.
-func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout time.Duration) (*models.SyncResult, error) {
-	watchCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
+//
+// When preOpenedEvents is non-nil, it is used instead of opening a new watch stream.
+// This allows callers (like SyncApplication) to open the watch before triggering the
+// operation, avoiding a race where the operation completes before the watch starts.
+func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout time.Duration, preOpenedEvents <-chan watchEvent) (*models.SyncResult, error) {
 	slog.Debug("waiting for sync to complete", "application", name, "timeout", timeout)
 
-	events, err := c.watchApplication(watchCtx, name)
-	if err != nil {
-		return nil, fmt.Errorf("watching application %s: %w", name, err)
+	events := preOpenedEvents
+	if events == nil {
+		watchCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		var err error
+		events, err = c.watchApplication(watchCtx, name)
+		if err != nil {
+			return nil, fmt.Errorf("watching application %s: %w", name, err)
+		}
 	}
 
 	var syncResult *models.SyncResult

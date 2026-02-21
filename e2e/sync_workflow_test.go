@@ -351,6 +351,7 @@ spec:
 		ArgoCD: config.ArgoCDConfig{
 			DiffMode:       "live",
 			TempAppTimeout: 15 * time.Second,
+			SyncTimeout:    120 * time.Second,
 		},
 		Defaults: config.DefaultsConfig{
 			RequireApproval: false,
