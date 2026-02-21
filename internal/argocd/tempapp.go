@@ -250,6 +250,26 @@ func buildTempAppSpec(original *v1alpha1.Application, tempName string, cfg TempA
 		tempApp.Spec.SyncPolicy.Automated = nil
 	}
 
+	// Set Helm release name for chart-based sources so that base and head
+	// temp apps produce identical resource names despite having different app
+	// names. Without this, Helm uses the app name as the release name,
+	// causing every resource name to differ between base and head.
+	setHelmReleaseName := func(src *v1alpha1.ApplicationSource) {
+		if src.Chart != "" && (src.Helm == nil || src.Helm.ReleaseName == "") {
+			if src.Helm == nil {
+				src.Helm = &v1alpha1.ApplicationSourceHelm{}
+			}
+			src.Helm.ReleaseName = cfg.OriginalAppName
+		}
+	}
+
+	if tempApp.Spec.Source != nil {
+		setHelmReleaseName(tempApp.Spec.Source)
+	}
+	for i := range tempApp.Spec.Sources {
+		setHelmReleaseName(&tempApp.Spec.Sources[i])
+	}
+
 	// Update source(s) to point to target branch
 	prRepoNormalized := NormalizeRepoURL(cfg.PRRepo)
 

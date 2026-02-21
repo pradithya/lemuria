@@ -922,17 +922,33 @@ func newFakeArgoServer(app v1alpha1.Application) *fakeArgoServer {
 	})
 
 	// GET /api/v1/stream/applications - Watch (for waitForSyncComplete)
-	// Returns a single event showing sync succeeded + healthy, then closes.
+	// Returns a Running event (to clear the stale event filter from pre-opened
+	// watch), then a Succeeded + Healthy event, then closes.
 	mux.HandleFunc("GET /api/v1/stream/applications", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		event := map[string]any{
+		encoder := json.NewEncoder(w)
+		// 1. Running event — indicates the new sync has started.
+		encoder.Encode(map[string]any{ //nolint:errcheck
 			"result": map[string]any{
 				"type": "MODIFIED",
 				"application": map[string]any{
 					"status": map[string]any{
-						"health": map[string]any{
-							"status": "Healthy",
+						"health": map[string]any{"status": "Progressing"},
+						"operationState": map[string]any{
+							"phase":   "Running",
+							"message": "syncing",
 						},
+					},
+				},
+			},
+		})
+		// 2. Succeeded + Healthy event — sync completed.
+		encoder.Encode(map[string]any{ //nolint:errcheck
+			"result": map[string]any{
+				"type": "MODIFIED",
+				"application": map[string]any{
+					"status": map[string]any{
+						"health": map[string]any{"status": "Healthy"},
 						"operationState": map[string]any{
 							"phase":   "Succeeded",
 							"message": "sync completed",
@@ -944,8 +960,7 @@ func newFakeArgoServer(app v1alpha1.Application) *fakeArgoServer {
 					},
 				},
 			},
-		}
-		json.NewEncoder(w).Encode(event) //nolint:errcheck
+		})
 	})
 
 	f.server = httptest.NewServer(mux)
