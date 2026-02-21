@@ -368,6 +368,13 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 		}
 	}
 
+	// When using a pre-opened watch stream (opened before sync trigger), the
+	// first events may reflect the PREVIOUS operation's state. We must skip
+	// these stale events to avoid prematurely treating the old operation's
+	// terminal phase as the new sync's result. We skip until we see a
+	// non-terminal phase (e.g., Running), which indicates the new sync has started.
+	skipStaleEvents := preOpenedEvents != nil
+
 	var syncResult *models.SyncResult
 	var healthyAt time.Time // When we first saw Healthy status
 	var missingAt time.Time // When health first stayed Missing after sync succeeded
@@ -438,7 +445,30 @@ func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout t
 			"health", healthStatus,
 			"syncCompleted", syncResult != nil,
 			"healthyAt", healthyAt,
+			"skipStale", skipStaleEvents,
 		)
+
+		// When using a pre-opened watch, skip events from the previous operation.
+		// Terminal phases (Succeeded/Failed/Error) or empty phases (no operation)
+		// before we see a Running phase are stale — they predate the sync POST.
+		if skipStaleEvents {
+			isTerminal := phase == models.SyncPhaseSucceeded || phase == models.SyncPhaseFailed || phase == models.SyncPhaseError
+			noOperation := status.OperationPhase == ""
+			if isTerminal || noOperation {
+				slog.Debug("skipping stale event from previous operation",
+					"application", name,
+					"phase", phase,
+					"health", healthStatus,
+				)
+				continue
+			}
+			// Non-terminal, non-empty phase (e.g., Running) means the new sync has started.
+			skipStaleEvents = false
+			slog.Debug("new sync operation detected, processing events normally",
+				"application", name,
+				"phase", phase,
+			)
+		}
 
 		// Wait for sync to reach a terminal phase.
 		if syncResult == nil {

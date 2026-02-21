@@ -562,13 +562,13 @@ func TestBuildSyncResult(t *testing.T) {
 }
 
 func TestSyncApplicationWatchBeforeSync(t *testing.T) {
-	// Verify that the watch stream is opened BEFORE the sync POST is triggered.
-	// This prevents a race condition where the sync completes before the watch
-	// starts, causing the watch to miss all events.
+	// Verify that the watch stream is opened BEFORE the sync POST is triggered,
+	// and that stale events from the previous operation are skipped.
 
 	var watchOpened atomic.Int64
 	var syncTriggered atomic.Int64
 	var counter atomic.Int64
+	syncDone := make(chan struct{})
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -576,7 +576,6 @@ func TestSyncApplicationWatchBeforeSync(t *testing.T) {
 			// Record the order of the watch request
 			watchOpened.Store(counter.Add(1))
 
-			// Stream a sync-succeeded + healthy event then close
 			flusher, ok := w.(http.Flusher)
 			if !ok {
 				http.Error(w, "streaming not supported", http.StatusInternalServerError)
@@ -585,10 +584,54 @@ func TestSyncApplicationWatchBeforeSync(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 
-			event := watchEvent{}
-			event.Result.Type = "MODIFIED"
-			event.Result.Application.Status.Health.Status = "Healthy"
-			event.Result.Application.Status.OperationState = &struct {
+			// 1. Send stale event from previous operation (Succeeded + Healthy).
+			//    This should be skipped by the stale event filter.
+			staleEvent := watchEvent{}
+			staleEvent.Result.Type = "MODIFIED"
+			staleEvent.Result.Application.Status.Health.Status = "Healthy"
+			staleEvent.Result.Application.Status.OperationState = &struct {
+				Phase      string `json:"phase"`
+				Message    string `json:"message"`
+				SyncResult struct {
+					Revision  string               `json:"revision"`
+					Resources []syncResourceResult `json:"resources"`
+				} `json:"syncResult"`
+			}{
+				Phase:   "Succeeded",
+				Message: "previous sync",
+			}
+			data, _ := json.Marshal(staleEvent)
+			_, _ = w.Write(data)
+			_, _ = w.Write([]byte("\n"))
+			flusher.Flush()
+
+			// Wait for the sync POST to be processed before sending new events
+			<-syncDone
+
+			// 2. Send Running event (new sync started)
+			runningEvent := watchEvent{}
+			runningEvent.Result.Type = "MODIFIED"
+			runningEvent.Result.Application.Status.Health.Status = "Progressing"
+			runningEvent.Result.Application.Status.OperationState = &struct {
+				Phase      string `json:"phase"`
+				Message    string `json:"message"`
+				SyncResult struct {
+					Revision  string               `json:"revision"`
+					Resources []syncResourceResult `json:"resources"`
+				} `json:"syncResult"`
+			}{
+				Phase: "Running",
+			}
+			data, _ = json.Marshal(runningEvent)
+			_, _ = w.Write(data)
+			_, _ = w.Write([]byte("\n"))
+			flusher.Flush()
+
+			// 3. Send Succeeded + Healthy event (new sync completed)
+			succeededEvent := watchEvent{}
+			succeededEvent.Result.Type = "MODIFIED"
+			succeededEvent.Result.Application.Status.Health.Status = "Healthy"
+			succeededEvent.Result.Application.Status.OperationState = &struct {
 				Phase      string `json:"phase"`
 				Message    string `json:"message"`
 				SyncResult struct {
@@ -599,12 +642,12 @@ func TestSyncApplicationWatchBeforeSync(t *testing.T) {
 				Phase:   "Succeeded",
 				Message: "sync completed",
 			}
-			event.Result.Application.Status.OperationState.SyncResult.Revision = "abc123"
-
-			data, _ := json.Marshal(event)
+			succeededEvent.Result.Application.Status.OperationState.SyncResult.Revision = "abc123"
+			data, _ = json.Marshal(succeededEvent)
 			_, _ = w.Write(data)
 			_, _ = w.Write([]byte("\n"))
 			flusher.Flush()
+
 			// Keep connection open briefly so client can read
 			time.Sleep(100 * time.Millisecond)
 
@@ -613,6 +656,7 @@ func TestSyncApplicationWatchBeforeSync(t *testing.T) {
 			syncTriggered.Store(counter.Add(1))
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
+			close(syncDone)
 
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
@@ -640,6 +684,10 @@ func TestSyncApplicationWatchBeforeSync(t *testing.T) {
 		t.Fatal("Expected non-nil SyncResult")
 	}
 
+	if result.Phase != models.SyncPhaseSucceeded {
+		t.Errorf("Phase = %q, want %q", result.Phase, models.SyncPhaseSucceeded)
+	}
+
 	// Verify ordering: watch must be opened before sync is triggered
 	watchOrder := watchOpened.Load()
 	syncOrder := syncTriggered.Load()
@@ -657,8 +705,8 @@ func TestSyncApplicationWatchBeforeSync(t *testing.T) {
 }
 
 func TestWaitForSyncCompleteWithPreOpenedEvents(t *testing.T) {
-	// Verify that waitForSyncComplete uses a pre-opened events channel
-	// instead of opening a new watch stream.
+	// Verify that waitForSyncComplete uses a pre-opened events channel,
+	// skips stale terminal events, and processes the new operation's events.
 
 	client := &Client{
 		baseURL:    "http://unused",
@@ -666,26 +714,46 @@ func TestWaitForSyncCompleteWithPreOpenedEvents(t *testing.T) {
 		httpClient: &http.Client{},
 	}
 
-	// Create a pre-opened events channel and send events on it
-	events := make(chan watchEvent, 2)
-
-	// Send a sync-succeeded event
-	succeededEvent := watchEvent{}
-	succeededEvent.Result.Application.Status.Health.Status = "Healthy"
-	succeededEvent.Result.Application.Status.OperationState = &struct {
+	newOpState := func(phase string) *struct {
 		Phase      string `json:"phase"`
 		Message    string `json:"message"`
 		SyncResult struct {
 			Revision  string               `json:"revision"`
 			Resources []syncResourceResult `json:"resources"`
 		} `json:"syncResult"`
-	}{
-		Phase:   "Succeeded",
-		Message: "sync completed",
+	} {
+		return &struct {
+			Phase      string `json:"phase"`
+			Message    string `json:"message"`
+			SyncResult struct {
+				Revision  string               `json:"revision"`
+				Resources []syncResourceResult `json:"resources"`
+			} `json:"syncResult"`
+		}{Phase: phase}
 	}
-	succeededEvent.Result.Application.Status.OperationState.SyncResult.Revision = "def456"
 
+	// Create a pre-opened events channel and send events on it
+	events := make(chan watchEvent, 4)
+
+	// 1. Stale event from previous operation (should be skipped)
+	staleEvent := watchEvent{}
+	staleEvent.Result.Application.Status.Health.Status = "Healthy"
+	staleEvent.Result.Application.Status.OperationState = newOpState("Succeeded")
+	events <- staleEvent
+
+	// 2. Running event (new sync started, no longer stale)
+	runningEvent := watchEvent{}
+	runningEvent.Result.Application.Status.Health.Status = "Progressing"
+	runningEvent.Result.Application.Status.OperationState = newOpState("Running")
+	events <- runningEvent
+
+	// 3. Succeeded + Healthy event (new sync completed)
+	succeededEvent := watchEvent{}
+	succeededEvent.Result.Application.Status.Health.Status = "Healthy"
+	succeededEvent.Result.Application.Status.OperationState = newOpState("Succeeded")
+	succeededEvent.Result.Application.Status.OperationState.SyncResult.Revision = "def456"
 	events <- succeededEvent
+
 	close(events)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
