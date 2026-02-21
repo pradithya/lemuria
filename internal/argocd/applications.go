@@ -356,13 +356,19 @@ const missingHealthGracePeriod = 30 * time.Second
 func (c *Client) waitForSyncComplete(ctx context.Context, name string, timeout time.Duration, preOpenedEvents <-chan watchEvent) (*models.SyncResult, error) {
 	slog.Debug("waiting for sync to complete", "application", name, "timeout", timeout)
 
+	// Always enforce the timeout regardless of whether the events channel
+	// was pre-opened by the caller. This ensures consistent timeout semantics
+	// and prevents indefinite waits if the caller's channel context is longer.
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
 	events := preOpenedEvents
 	if events == nil {
-		watchCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-
 		var err error
-		events, err = c.watchApplication(watchCtx, name)
+		events, err = c.watchApplication(ctx, name)
 		if err != nil {
 			return nil, fmt.Errorf("watching application %s: %w", name, err)
 		}
