@@ -35,7 +35,7 @@ func TestE2ESyncCommand(t *testing.T) {
 	prNumber := 200
 
 	// Create a per-test application and ensure it's synced and healthy
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 	syncAndWaitForHealthy(testCtx, t, argoClient, appName, 120*time.Second)
@@ -123,7 +123,7 @@ func TestE2ESyncExternalSourceApp(t *testing.T) {
 	headSHA := "abc123extsync"
 
 	// Create an app with an external Helm chart source
-	createTestHelmChartApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestHelmChartApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
@@ -260,12 +260,12 @@ func TestE2ESyncMixedApps(t *testing.T) {
 	// Create both apps and ensure they are synced and healthy before the test sync.
 	// Without the initial sync, CI environments may take >2m to pull images and
 	// reach Healthy, causing the test's SyncTimeout to expire.
-	createTestApplication(testCtx, t, argoClient, gitAppName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, gitAppName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, gitAppName)
 	waitForAppReady(testCtx, t, argoClient, gitAppName, 120*time.Second)
 	syncAndWaitForHealthy(testCtx, t, argoClient, gitAppName, 120*time.Second)
 
-	createTestHelmChartApplication(testCtx, t, argoClient, helmAppName, "e2e-test-apps")
+	createTestHelmChartApplication(testCtx, t, argoClient, helmAppName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, helmAppName)
 	waitForAppReady(testCtx, t, argoClient, helmAppName, 120*time.Second)
 	syncAndWaitForHealthy(testCtx, t, argoClient, helmAppName, 120*time.Second)
@@ -425,7 +425,7 @@ func TestE2ESyncStalePlan(t *testing.T) {
 	repo := "test-owner/test-repo"
 	prNumber := 500
 
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
@@ -515,7 +515,7 @@ func TestE2ESyncDegradedHealth(t *testing.T) {
 	headSHA := "abc123degraded"
 
 	// Create an application with a non-existent image to trigger Degraded health
-	createTestApplicationWithBadImage(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplicationWithBadImage(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
@@ -610,7 +610,7 @@ func TestE2ESyncAutoMergeNewApp(t *testing.T) {
 
 	// Pre-create and sync the app so it has healthy status.
 	// The sync code will try create (fail → exists) then update spec and sync.
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 	syncAndWaitForHealthy(testCtx, t, argoClient, appName, 120*time.Second)
@@ -725,7 +725,7 @@ func TestE2ESyncAutoMergeDisabledLocksRetained(t *testing.T) {
 	prNumber := int(time.Now().UnixNano()%90000) + 30000
 	headSHA := "abc123noautomerge"
 
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 	syncAndWaitForHealthy(testCtx, t, argoClient, appName, 120*time.Second)
@@ -806,12 +806,12 @@ func TestE2ESyncAutoMergeMultipleApps(t *testing.T) {
 	headSHA := "abc123multiam"
 
 	// Create both apps and ensure they are synced and healthy
-	createTestApplication(testCtx, t, argoClient, app1Name, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, app1Name, "")
 	defer deleteTestApplication(testCtx, t, argoClient, app1Name)
 	waitForAppReady(testCtx, t, argoClient, app1Name, 120*time.Second)
 	syncAndWaitForHealthy(testCtx, t, argoClient, app1Name, 120*time.Second)
 
-	createTestApplication(testCtx, t, argoClient, app2Name, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, app2Name, "")
 	defer deleteTestApplication(testCtx, t, argoClient, app2Name)
 	waitForAppReady(testCtx, t, argoClient, app2Name, 120*time.Second)
 	syncAndWaitForHealthy(testCtx, t, argoClient, app2Name, 120*time.Second)

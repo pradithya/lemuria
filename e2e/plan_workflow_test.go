@@ -129,7 +129,7 @@ func TestE2EPlanDetectsModifiedExternalChartApp(t *testing.T) {
 	appName := uniqueAppName("e2e-helm")
 
 	// Create an app with an external Helm chart source (not a git repo)
-	createTestHelmChartApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestHelmChartApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 
 	// Wait for app to appear in ArgoCD
@@ -473,7 +473,7 @@ func TestE2EPlanDeletedStandaloneApp(t *testing.T) {
 	crFilePath := "apps/" + appName + ".yaml"
 
 	// Create the app in ArgoCD so it exists
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
 
@@ -600,7 +600,7 @@ func TestE2EPlanNewAppIdempotent(t *testing.T) {
 	// Create the app in ArgoCD FIRST — simulating a prior sync that already
 	// created this child app. The app now exists in ArgoCD, but the PR still
 	// shows it as a new file (FileStatusAdded).
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
 

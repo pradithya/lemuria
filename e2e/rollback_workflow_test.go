@@ -31,7 +31,7 @@ func TestE2ERollbackCommand(t *testing.T) {
 	prNumber := 300
 
 	// Create a per-test application
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
@@ -78,7 +78,7 @@ func TestE2ERollbackLocksRetained(t *testing.T) {
 	repo := "test-owner/test-repo"
 	prNumber := int(time.Now().UnixNano()%90000) + 50000
 
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 	syncAndWaitForHealthy(testCtx, t, argoClient, appName, 120*time.Second)

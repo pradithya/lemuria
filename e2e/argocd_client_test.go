@@ -202,7 +202,7 @@ func TestListApplicationsExcludesTempApps(t *testing.T) {
 
 	// Also create a real app to ensure it IS included
 	realAppName := uniqueAppName("e2e-real-app")
-	createTestApplication(testCtx, t, argoClient, realAppName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, realAppName, "")
 	defer deleteTestApplication(context.Background(), t, argoClient, realAppName)
 
 	// ListApplications should NOT include the temp app

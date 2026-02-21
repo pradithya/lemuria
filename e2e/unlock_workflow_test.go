@@ -31,7 +31,7 @@ func TestE2EUnlockCommand(t *testing.T) {
 	repo := "test-owner/test-repo"
 	prNumber := 400
 
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
@@ -92,7 +92,7 @@ func TestE2ELockConflictBetweenPRs(t *testing.T) {
 
 	appName := uniqueAppName("e2e-conflict")
 
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
@@ -162,7 +162,7 @@ func TestE2EUnlockAll(t *testing.T) {
 	repo := "test-owner/test-repo"
 	prNumber := 800
 
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 120*time.Second)
 
