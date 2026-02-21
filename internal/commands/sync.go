@@ -233,12 +233,12 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		if err := e.autoMergePR(ctx, event); err != nil {
 			slog.Warn("auto-merge failed", "error", err)
 		} else {
-			// Auto-merge succeeded. Revert targetRevision for new apps
-			// back to the base branch — during sync we rewrote it to the
-			// PR branch, but now that the PR is merged the files exist on
-			// the base branch.
-			for _, l := range locks {
-				if l.ChangeType == models.ApplicationNew {
+			// Auto-merge succeeded. Revert targetRevision back to the base
+			// branch for apps where we rewrote it during sync — during sync
+			// we set it to the PR SHA, but now that the PR is merged the
+			// files exist on the base branch.
+			for i, l := range locks {
+				if l.ChangeType == models.ApplicationNew || results[i].TargetRevRewritten {
 					e.revertTargetRevision(ctx, l, event)
 				}
 			}
@@ -260,11 +260,12 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 
 // syncResult holds the result of syncing a single application.
 type syncResult struct {
-	Application string
-	Result      *models.SyncResult
-	Error       error
-	PlanOutput  string
-	PlanDiffs   []models.PlanDiffEntry
+	Application        string
+	Result             *models.SyncResult
+	Error              error
+	PlanOutput         string
+	PlanDiffs          []models.PlanDiffEntry
+	TargetRevRewritten bool // true if targetRevision was rewritten in the app spec during sync
 }
 
 // syncApplication triggers a sync for a single application.
@@ -304,11 +305,9 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 	repoURL := event.Repo.HTMLURL
 	fromPRRepo := appSourcesFromRepo(*app, repoURL)
 
-	// If the Application CR was modified in the PR, update the live app's spec
-	// before syncing. This handles cases where the PR modifies Helm values,
-	// chart versions, or other spec fields in the Application CR file.
-	// We also keep a reference to the parsed v1alpha1.Application for building
-	// multi-source revision options below.
+	// If the Application CR was modified in the PR, parse it so we can update
+	// the live app's spec before syncing. This handles cases where the PR
+	// modifies Helm values, chart versions, or other spec fields.
 	var parsed *v1alpha1.Application
 	if l.SourceFile != "" {
 		slog.Debug("updating application spec from PR head branch",
@@ -327,15 +326,6 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 			result.Error = fmt.Errorf("parsing application CR from head branch: %w", err)
 			return result
 		}
-
-		if err := e.argocd.UpdateApplicationSpec(ctx, l.Application, parsed.Spec); err != nil {
-			result.Error = fmt.Errorf("updating application spec: %w", err)
-			return result
-		}
-
-		slog.Debug("application spec updated from PR",
-			"app", l.Application,
-		)
 	}
 
 	opts := &argocd.SyncOptions{
@@ -344,10 +334,7 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 		Timeout: e.config.ArgoCD.SyncTimeout,
 	}
 
-	// Build revision options: use per-source revisions for multi-source apps,
-	// or a single revision for single-source apps.
 	if fromPRRepo {
-		// Get the raw v1alpha1.Application to inspect sources
 		var rawApp *v1alpha1.Application
 		if parsed != nil {
 			rawApp = parsed
@@ -359,21 +346,42 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 			}
 		}
 
-		revisions, positions := buildSyncRevisionOptions(rawApp, repoURL, event.PR.HeadSHA)
-		if len(revisions) > 0 {
-			opts.Revisions = revisions
-			opts.SourcePositions = positions
+		if len(rawApp.Spec.Sources) > 0 {
+			// Multi-source: rewrite targetRevisions in the spec and update,
+			// then sync without revision overrides to avoid ArgoCD bug
+			// with multi-source revision resolution.
+			rewriteTargetRevision(rawApp, repoURL, event.PR.HeadSHA)
+			result.TargetRevRewritten = true
+
+			if err := e.argocd.UpdateApplicationSpec(ctx, l.Application, rawApp.Spec); err != nil {
+				result.Error = fmt.Errorf("updating application spec for multi-source sync: %w", err)
+				return result
+			}
 		} else {
+			// Single-source: use revision override directly.
+			// Update the spec first if we parsed a SourceFile.
+			if parsed != nil {
+				if err := e.argocd.UpdateApplicationSpec(ctx, l.Application, parsed.Spec); err != nil {
+					result.Error = fmt.Errorf("updating application spec: %w", err)
+					return result
+				}
+			}
 			opts.Revision = event.PR.HeadSHA
+		}
+	} else if parsed != nil {
+		// App doesn't source from PR repo but SourceFile was modified —
+		// still update the spec.
+		if err := e.argocd.UpdateApplicationSpec(ctx, l.Application, parsed.Spec); err != nil {
+			result.Error = fmt.Errorf("updating application spec: %w", err)
+			return result
 		}
 	}
 
 	slog.Debug("triggering sync",
 		"app", l.Application,
 		"revision", opts.Revision,
-		"revisions", opts.Revisions,
-		"sourcePositions", opts.SourcePositions,
 		"from_pr_repo", fromPRRepo,
+		"target_rev_rewritten", result.TargetRevRewritten,
 	)
 
 	syncResult, err := e.argocd.SyncApplication(ctx, l.Application, opts)
@@ -495,62 +503,6 @@ func rewriteTargetRevision(app *v1alpha1.Application, repoURL, revision string) 
 			app.Spec.Sources[i].TargetRevision = revision
 		}
 	}
-}
-
-// buildSyncRevisionOptions returns per-source revisions and positions for
-// multi-source apps. Sources matching repoURL get the given revision; other
-// sources (e.g. Helm chart repos) keep their existing targetRevision.
-// All sources are included because ArgoCD requires complete revision lists
-// for multi-source sync requests.
-// Returns nil slices for single-source apps (caller should use opts.Revision).
-func buildSyncRevisionOptions(app *v1alpha1.Application, repoURL, revision string) (revisions []string, sourcePositions []int64) {
-	if len(app.Spec.Sources) == 0 {
-		return nil, nil
-	}
-	normalized := argocd.NormalizeRepoURL(repoURL)
-
-	// Check if any source matches the repo URL first.
-	hasMatch := false
-	for _, src := range app.Spec.Sources {
-		if argocd.NormalizeRepoURL(src.RepoURL) == normalized {
-			hasMatch = true
-			break
-		}
-	}
-	if !hasMatch {
-		return nil, nil
-	}
-
-	// Include ALL sources: matching sources get the PR revision, non-matching
-	// sources (e.g. Helm chart repos) keep their existing targetRevision.
-	// ArgoCD requires complete revision lists for multi-source sync requests.
-	for i, src := range app.Spec.Sources {
-		if argocd.NormalizeRepoURL(src.RepoURL) == normalized {
-			revisions = append(revisions, revision)
-		} else {
-			revisions = append(revisions, src.TargetRevision)
-		}
-		sourcePositions = append(sourcePositions, int64(i+1)) // 1-based
-	}
-	return revisions, sourcePositions
-}
-
-// convertV1alpha1App creates a minimal models.Application from a v1alpha1.Application for repo matching.
-func convertV1alpha1App(app *v1alpha1.Application) models.Application {
-	m := models.Application{
-		Name: app.Name,
-	}
-	if app.Spec.Source != nil {
-		m.RepoURL = app.Spec.Source.RepoURL
-	}
-	if len(app.Spec.Sources) > 0 {
-		for _, s := range app.Spec.Sources {
-			m.Sources = append(m.Sources, models.ApplicationSource{
-				RepoURL: s.RepoURL,
-			})
-		}
-	}
-	return m
 }
 
 // syncDeletedApplication releases the lock for a deleted app.
