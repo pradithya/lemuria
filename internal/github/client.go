@@ -32,6 +32,11 @@ type Client struct {
 	client     *github.Client
 	appID      int64
 	privateKey []byte
+
+	// installationClientFunc overrides how installation clients are created.
+	// If nil, the default GetInstallationClient logic is used.
+	// This exists to support testing without real GitHub App credentials.
+	installationClientFunc func(ctx context.Context, owner string) (*github.Client, error)
 }
 
 // NewClient creates a new GitHub client using GitHub App authentication.
@@ -69,6 +74,16 @@ func loadPrivateKey(pathOrKey string) ([]byte, error) {
 	return []byte(pathOrKey), nil
 }
 
+// getInstallationClient returns a client authenticated for a specific installation.
+// It delegates to installationClientFunc if set (used in tests), otherwise
+// performs the standard GitHub App installation lookup.
+func (c *Client) getInstallationClient(ctx context.Context, owner string) (*github.Client, error) {
+	if c.installationClientFunc != nil {
+		return c.installationClientFunc(ctx, owner)
+	}
+	return c.GetInstallationClient(ctx, owner)
+}
+
 // GetInstallationClient returns a client authenticated for a specific installation.
 func (c *Client) GetInstallationClient(ctx context.Context, owner string) (*github.Client, error) {
 	// List installations to find the one for this owner
@@ -100,7 +115,7 @@ func (c *Client) GetInstallationClient(ctx context.Context, owner string) (*gith
 
 // GetRepoConfig fetches the .lemuria.yaml configuration from a repository.
 func (c *Client) GetRepoConfig(ctx context.Context, owner, repo, ref string) ([]byte, error) {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +158,7 @@ func (c *Client) GetPR(ctx context.Context, owner, repo string, number int) (*mo
 // GetPRRaw fetches the raw GitHub PullRequest object.
 // Used by the webhook handler to enrich PR info with GitHub-specific fields.
 func (c *Client) GetPRRaw(ctx context.Context, owner, repo string, number int) (*github.PullRequest, error) {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +173,7 @@ func (c *Client) GetPRRaw(ctx context.Context, owner, repo string, number int) (
 
 // IsPRApproved checks if the PR has been approved.
 func (c *Client) IsPRApproved(ctx context.Context, owner, repo string, number int) (bool, error) {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return false, err
 	}
@@ -192,7 +207,7 @@ func (c *Client) IsPRApproved(ctx context.Context, owner, repo string, number in
 // MergePullRequest merges a pull request using the specified method.
 // Supported methods: "merge", "squash", "rebase".
 func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, number int, title, message, method string) error {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -217,7 +232,7 @@ func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, numbe
 
 // DeleteBranch deletes a branch from the repository.
 func (c *Client) DeleteBranch(ctx context.Context, owner, repo, branch string) error {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return err
 	}

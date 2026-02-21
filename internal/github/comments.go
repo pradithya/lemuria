@@ -46,7 +46,7 @@ const (
 
 // CreateComment posts a new comment on a PR.
 func (c *Client) CreateComment(ctx context.Context, owner, repo string, number int, body string) (*github.IssueComment, error) {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func (c *Client) CreateComment(ctx context.Context, owner, repo string, number i
 
 // editComment updates an existing comment (internal helper).
 func (c *Client) editComment(ctx context.Context, owner, repo string, commentID int64, body string) (*github.IssueComment, error) {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (c *Client) UpdateComment(ctx context.Context, owner, repo string, _ int, c
 
 // DeleteComment deletes a comment.
 func (c *Client) DeleteComment(ctx context.Context, owner, repo string, commentID int64) error {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -104,7 +104,7 @@ func (c *Client) DeleteComment(ctx context.Context, owner, repo string, commentI
 
 // FindLemuriComment finds an existing Lemuria comment on a PR.
 func (c *Client) FindLemuriComment(ctx context.Context, owner, repo string, number int, appName string) (*github.IssueComment, error) {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (c *Client) UpsertComment(ctx context.Context, owner, repo string, number i
 
 // AddReaction adds a reaction to a comment.
 func (c *Client) AddReaction(ctx context.Context, owner, repo string, commentID int64, reaction string) error {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -205,7 +205,7 @@ func (c *Client) MaxCommentSize() int {
 // InvalidatePlanComments marks all existing plan comments on a PR as stale
 // and minimizes (hides) them using GitHub's GraphQL API.
 func (c *Client) InvalidatePlanComments(ctx context.Context, owner, repo string, number int) error {
-	client, err := c.GetInstallationClient(ctx, owner)
+	client, err := c.getInstallationClient(ctx, owner)
 	if err != nil {
 		return err
 	}

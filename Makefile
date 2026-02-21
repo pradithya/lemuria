@@ -58,9 +58,26 @@ test: test-unit
 test-unit:
 	go test -v ./internal/... ./pkg/...
 
+# Run unit tests with coverage
+test-coverage:
+	go test -coverprofile=coverage_unit.out ./internal/... ./pkg/...
+	@go tool cover -func=coverage_unit.out | tail -1
+
 # Run e2e tests (requires setup first)
 test-e2e:
 	cd e2e && go test -v -timeout 10m -parallel 4 ./...
+
+# Run e2e tests with coverage for internal packages
+test-e2e-coverage:
+	cd e2e && go test -v -timeout 10m -parallel 4 -coverpkg=github.com/org/lemuria/internal/... -coverprofile=../coverage_e2e.out ./...
+
+# Merge unit + e2e coverage profiles
+test-coverage-all: test-coverage test-e2e-coverage
+	@head -1 coverage_unit.out > coverage_merged.out
+	@tail -n +2 coverage_unit.out >> coverage_merged.out
+	@tail -n +2 coverage_e2e.out >> coverage_merged.out
+	@echo "Combined coverage:"
+	@go tool cover -func=coverage_merged.out | tail -1
 
 # Setup e2e test infrastructure
 e2e-setup:
@@ -76,7 +93,7 @@ e2e: e2e-setup test-e2e
 # Clean build artifacts
 clean:
 	rm -rf bin/
-	rm -f coverage.out
+	rm -f coverage.out coverage_unit.out coverage_e2e.out coverage_merged.out
 
 # Build Docker image
 docker-build:

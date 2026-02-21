@@ -170,6 +170,122 @@ func TestConfigHasBasicAuth(t *testing.T) {
 	}
 }
 
+func TestConfigHasGitHub(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *Config
+		want   bool
+	}{
+		{
+			name:   "zero values",
+			config: &Config{},
+			want:   false,
+		},
+		{
+			name:   "only app_id set",
+			config: &Config{GitHub: GitHubConfig{AppID: 12345}},
+			want:   false,
+		},
+		{
+			name:   "only app_private_key set",
+			config: &Config{GitHub: GitHubConfig{AppPrivateKey: "some-key"}},
+			want:   false,
+		},
+		{
+			name:   "both app_id and app_private_key set",
+			config: &Config{GitHub: GitHubConfig{AppID: 12345, AppPrivateKey: "some-key"}},
+			want:   true,
+		},
+		{
+			name:   "webhook_secret set but not app fields",
+			config: &Config{GitHub: GitHubConfig{WebhookSecret: "secret"}},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.config.HasGitHub(); got != tt.want {
+				t.Errorf("HasGitHub() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigHasGitLab(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *Config
+		want   bool
+	}{
+		{
+			name:   "zero values",
+			config: &Config{},
+			want:   false,
+		},
+		{
+			name:   "token set",
+			config: &Config{GitLab: GitLabConfig{Token: "glpat-xxxx"}},
+			want:   true,
+		},
+		{
+			name:   "empty token",
+			config: &Config{GitLab: GitLabConfig{Token: ""}},
+			want:   false,
+		},
+		{
+			name:   "url and webhook set but no token",
+			config: &Config{GitLab: GitLabConfig{URL: "https://gitlab.com", WebhookSecret: "secret"}},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.config.HasGitLab(); got != tt.want {
+				t.Errorf("HasGitLab() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigHasGitLabOAuth(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *Config
+		want   bool
+	}{
+		{
+			name:   "nil gitlab oauth config",
+			config: &Config{},
+			want:   false,
+		},
+		{
+			name:   "empty client id",
+			config: &Config{Auth: AuthConfig{GitLab: &GitLabOAuthConfig{}}},
+			want:   false,
+		},
+		{
+			name:   "has client id",
+			config: &Config{Auth: AuthConfig{GitLab: &GitLabOAuthConfig{ClientID: "my-gitlab-id"}}},
+			want:   true,
+		},
+		{
+			name:   "client secret set but no client id",
+			config: &Config{Auth: AuthConfig{GitLab: &GitLabOAuthConfig{ClientSecret: "secret"}}},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.config.HasGitLabOAuth(); got != tt.want {
+				t.Errorf("HasGitLabOAuth() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLockTTL(t *testing.T) {
 	ttl := LockTTL()
 	expected := 7 * 24 * time.Hour
