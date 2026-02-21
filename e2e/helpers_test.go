@@ -29,11 +29,13 @@ import (
 
 // createTestApplication creates an ArgoCD application for testing.
 // It uses the argoproj/argocd-example-apps guestbook app as the source.
+// Each application deploys to its own unique namespace (derived from the app name)
+// to prevent resource tracking conflicts between parallel tests.
 func createTestApplication(ctx context.Context, t *testing.T, client *argocd.Client, name, namespace string) {
 	t.Helper()
 
 	if namespace == "" {
-		namespace = "e2e-test-apps"
+		namespace = name
 	}
 
 	app := &v1alpha1.Application{
@@ -52,6 +54,9 @@ func createTestApplication(ctx context.Context, t *testing.T, client *argocd.Cli
 				Server:    "https://kubernetes.default.svc",
 				Namespace: namespace,
 			},
+			SyncPolicy: &v1alpha1.SyncPolicy{
+				SyncOptions: v1alpha1.SyncOptions{"CreateNamespace=true"},
+			},
 		},
 	}
 
@@ -69,7 +74,7 @@ func createTestHelmChartApplication(ctx context.Context, t *testing.T, client *a
 	t.Helper()
 
 	if namespace == "" {
-		namespace = "e2e-test-apps"
+		namespace = name
 	}
 
 	app := &v1alpha1.Application{
@@ -87,6 +92,9 @@ func createTestHelmChartApplication(ctx context.Context, t *testing.T, client *a
 			Destination: v1alpha1.ApplicationDestination{
 				Server:    "https://kubernetes.default.svc",
 				Namespace: namespace,
+			},
+			SyncPolicy: &v1alpha1.SyncPolicy{
+				SyncOptions: v1alpha1.SyncOptions{"CreateNamespace=true"},
 			},
 		},
 	}
@@ -167,7 +175,7 @@ func createTestApplicationWithBadImage(ctx context.Context, t *testing.T, client
 	t.Helper()
 
 	if namespace == "" {
-		namespace = "e2e-test-apps"
+		namespace = name
 	}
 
 	app := &v1alpha1.Application{
@@ -191,6 +199,9 @@ func createTestApplicationWithBadImage(ctx context.Context, t *testing.T, client
 			Destination: v1alpha1.ApplicationDestination{
 				Server:    "https://kubernetes.default.svc",
 				Namespace: namespace,
+			},
+			SyncPolicy: &v1alpha1.SyncPolicy{
+				SyncOptions: v1alpha1.SyncOptions{"CreateNamespace=true"},
 			},
 		},
 	}
@@ -241,7 +252,10 @@ func createTestApplicationSet(ctx context.Context, t *testing.T, client *argocd.
 					},
 					Destination: v1alpha1.ApplicationDestination{
 						Server:    "https://kubernetes.default.svc",
-						Namespace: "e2e-test-apps",
+						Namespace: name + "-{{ .env }}",
+					},
+					SyncPolicy: &v1alpha1.SyncPolicy{
+						SyncOptions: v1alpha1.SyncOptions{"CreateNamespace=true"},
 					},
 				},
 			},

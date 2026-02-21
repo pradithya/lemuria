@@ -129,7 +129,7 @@ func TestE2EPlanDetectsModifiedExternalChartApp(t *testing.T) {
 	appName := uniqueAppName("e2e-helm")
 
 	// Create an app with an external Helm chart source (not a git repo)
-	createTestHelmChartApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestHelmChartApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 
 	// Wait for app to appear in ArgoCD
@@ -161,7 +161,7 @@ spec:
     targetRevision: "1.4.1"
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	// Head version (modified Helm values — added helm.values)
 	headYAML := fmt.Sprintf(`apiVersion: argoproj.io/v1alpha1
@@ -180,7 +180,7 @@ spec:
         createClusterRoles: false
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	mockGH.FileContents[crFilePath+"@main"] = []byte(baseYAML)
 	mockGH.FileContents[crFilePath+"@feature-branch"] = []byte(headYAML)
@@ -376,7 +376,7 @@ spec:
     path: guestbook
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
@@ -473,7 +473,7 @@ func TestE2EPlanDeletedStandaloneApp(t *testing.T) {
 	crFilePath := "apps/" + appName + ".yaml"
 
 	// Create the app in ArgoCD so it exists
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
 
@@ -494,7 +494,7 @@ spec:
     path: guestbook
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
@@ -600,7 +600,7 @@ func TestE2EPlanNewAppIdempotent(t *testing.T) {
 	// Create the app in ArgoCD FIRST — simulating a prior sync that already
 	// created this child app. The app now exists in ArgoCD, but the PR still
 	// shows it as a new file (FileStatusAdded).
-	createTestApplication(testCtx, t, argoClient, appName, "e2e-test-apps")
+	createTestApplication(testCtx, t, argoClient, appName, "")
 	defer deleteTestApplication(testCtx, t, argoClient, appName)
 	waitForAppReady(testCtx, t, argoClient, appName, 60*time.Second)
 
@@ -620,7 +620,7 @@ spec:
     path: guestbook
   destination:
     server: https://kubernetes.default.svc
-    namespace: e2e-test-apps`, appName)
+    namespace: %s`, appName, appName)
 
 	mockGH := NewMockVCSClient()
 	mockGH.RepoConfigErr = fmt.Errorf(".lemuria.yaml not found")
