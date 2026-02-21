@@ -187,6 +187,147 @@ func TestBuildTempAppSpec_WithLiveSpec(t *testing.T) {
 	}
 }
 
+func TestBuildTempAppSpec_HelmReleaseName(t *testing.T) {
+	tests := []struct {
+		name            string
+		original        *v1alpha1.Application
+		cfg             TempAppConfig
+		wantReleaseName string // expected ReleaseName on the chart source
+		sourceIndex     int    // which source to check (-1 for singular Source)
+	}{
+		{
+			name: "helm chart source gets ReleaseName set to original app name",
+			original: &v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "cert-manager"},
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://charts.jetstack.io",
+						Chart:          "cert-manager",
+						TargetRevision: "v1.14.0",
+					},
+				},
+			},
+			cfg: TempAppConfig{
+				OriginalAppName: "cert-manager",
+				PRNumber:        14,
+				PRRepo:          "https://github.com/org/repo",
+				Suffix:          "base",
+			},
+			wantReleaseName: "cert-manager",
+			sourceIndex:     -1,
+		},
+		{
+			name: "existing ReleaseName is preserved",
+			original: &v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://charts.example.com",
+						Chart:          "nginx",
+						TargetRevision: "1.0.0",
+						Helm: &v1alpha1.ApplicationSourceHelm{
+							ReleaseName: "custom-release",
+						},
+					},
+				},
+			},
+			cfg: TempAppConfig{
+				OriginalAppName: "my-app",
+				PRNumber:        5,
+				PRRepo:          "https://github.com/org/repo",
+				Suffix:          "head",
+			},
+			wantReleaseName: "custom-release",
+			sourceIndex:     -1,
+		},
+		{
+			name: "multi-source: helm chart source gets ReleaseName, git source unaffected",
+			original: &v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "grafana"},
+				Spec: v1alpha1.ApplicationSpec{
+					Sources: v1alpha1.ApplicationSources{
+						{
+							RepoURL:        "https://github.com/org/repo",
+							Path:           "apps/grafana",
+							TargetRevision: "main",
+						},
+						{
+							RepoURL:        "https://grafana.github.io/helm-charts",
+							Chart:          "grafana",
+							TargetRevision: "7.0.0",
+						},
+					},
+				},
+			},
+			cfg: TempAppConfig{
+				OriginalAppName: "grafana",
+				PRNumber:        14,
+				PRRepo:          "https://github.com/org/repo",
+				Suffix:          "head",
+			},
+			wantReleaseName: "grafana",
+			sourceIndex:     1,
+		},
+		{
+			name: "git-only source is unaffected",
+			original: &v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://github.com/org/repo",
+						Path:           "manifests",
+						TargetRevision: "main",
+					},
+				},
+			},
+			cfg: TempAppConfig{
+				OriginalAppName: "my-app",
+				PRNumber:        7,
+				PRRepo:          "https://github.com/org/repo",
+				Suffix:          "base",
+			},
+			wantReleaseName: "",
+			sourceIndex:     -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempName := generateTempAppName(tt.cfg.OriginalAppName, tt.cfg.PRNumber, tt.cfg.Suffix)
+			result := buildTempAppSpec(tt.original, tempName, tt.cfg)
+
+			var gotReleaseName string
+			if tt.sourceIndex == -1 {
+				// Check singular Source
+				if result.Spec.Source != nil && result.Spec.Source.Helm != nil {
+					gotReleaseName = result.Spec.Source.Helm.ReleaseName
+				}
+			} else {
+				src := result.Spec.Sources[tt.sourceIndex]
+				if src.Helm != nil {
+					gotReleaseName = src.Helm.ReleaseName
+				}
+			}
+
+			if gotReleaseName != tt.wantReleaseName {
+				t.Errorf("ReleaseName = %q, want %q", gotReleaseName, tt.wantReleaseName)
+			}
+
+			// For multi-source, verify git sources don't get Helm set
+			if tt.sourceIndex >= 0 {
+				for i, src := range result.Spec.Sources {
+					if i == tt.sourceIndex {
+						continue
+					}
+					if src.Chart == "" && src.Helm != nil && src.Helm.ReleaseName != "" {
+						t.Errorf("git source[%d] should not have ReleaseName set, got %q", i, src.Helm.ReleaseName)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestGenerateTempAppName(t *testing.T) {
 	tests := []struct {
 		name     string
