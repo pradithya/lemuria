@@ -108,17 +108,20 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 		"pr", event.PR.Number,
 	)
 
-	// On merge, revert targetRevision for new apps back to the base branch.
-	// During sync, new apps had their targetRevision rewritten to the PR branch
-	// so ArgoCD could validate against files that only existed there. Now that
-	// the PR is merged, the files exist on the base branch and we need to point
-	// the app back to it.
-	if event.IsPRMerged() {
-		for _, l := range locks {
-			if l.ChangeType == models.ApplicationNew {
-				e.revertTargetRevision(ctx, l, event)
-			}
+	// On merge or close, revert targetRevision for apps that may have had it
+	// rewritten during sync. This covers:
+	// - New apps: targetRevision was rewritten to the PR branch during sync
+	// - Existing multi-source apps: targetRevision was rewritten to the PR SHA
+	//   to work around an ArgoCD bug with multi-source revision resolution
+	// On merge, we revert to the base branch. On close without merge, we also
+	// revert to restore the original state. The rewriteTargetRevision function
+	// is idempotent — for apps whose targetRevision wasn't changed, this is a
+	// no-op since the revision already matches.
+	for _, l := range locks {
+		if l.ChangeType == models.ApplicationDeleted {
+			continue
 		}
+		e.revertTargetRevision(ctx, l, event)
 	}
 
 	for _, l := range locks {
@@ -138,8 +141,8 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 	return nil
 }
 
-// revertTargetRevision reverts the targetRevision of a new application back to
-// the base branch after a PR merge.
+// revertTargetRevision reverts the targetRevision of an application back to
+// the base branch after a PR merge or close.
 func (e *Executor) revertTargetRevision(ctx context.Context, l models.Lock, event *models.PREvent) {
 	app, err := e.argocd.GetApplicationRaw(ctx, l.Application)
 	if err != nil {

@@ -346,10 +346,11 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 			}
 		}
 
-		if len(rawApp.Spec.Sources) > 0 {
+		if len(rawApp.Spec.Sources) > 0 && !cmd.DryRun {
 			// Multi-source: rewrite targetRevisions in the spec and update,
 			// then sync without revision overrides to avoid ArgoCD bug
 			// with multi-source revision resolution.
+			// Skipped in dry-run mode to avoid mutating the live app spec.
 			rewriteTargetRevision(rawApp, repoURL, event.PR.HeadSHA)
 			result.TargetRevRewritten = true
 
@@ -357,10 +358,10 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 				result.Error = fmt.Errorf("updating application spec for multi-source sync: %w", err)
 				return result
 			}
-		} else {
+		} else if len(rawApp.Spec.Sources) == 0 {
 			// Single-source: use revision override directly.
 			// Update the spec first if we parsed a SourceFile.
-			if parsed != nil {
+			if parsed != nil && !cmd.DryRun {
 				if err := e.argocd.UpdateApplicationSpec(ctx, l.Application, parsed.Spec); err != nil {
 					result.Error = fmt.Errorf("updating application spec: %w", err)
 					return result
@@ -368,9 +369,9 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 			}
 			opts.Revision = event.PR.HeadSHA
 		}
-	} else if parsed != nil {
+	} else if parsed != nil && !cmd.DryRun {
 		// App doesn't source from PR repo but SourceFile was modified —
-		// still update the spec.
+		// still update the spec. Skipped in dry-run mode.
 		if err := e.argocd.UpdateApplicationSpec(ctx, l.Application, parsed.Spec); err != nil {
 			result.Error = fmt.Errorf("updating application spec: %w", err)
 			return result
