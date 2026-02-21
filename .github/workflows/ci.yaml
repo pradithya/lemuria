@@ -288,7 +288,7 @@ jobs:
           while IFS= read -r line; do
             [ -z "$line" ] && continue
             SHA=$(echo "$line" | cut -c1-12)
-            MSG=$(echo "$line" | cut -d' ' -f2-)
+            MSG=$(printf '%s\n' "$line" | cut -c42-)
 
             # Skip merge commits
             if echo "$MSG" | grep -qE '^Merge '; then
@@ -315,7 +315,7 @@ jobs:
   test-e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    needs: [lint-backend, lint-frontend, test-backend, test-frontend, secrets-scan, test-helm-chart, check-commits]
+    needs: [lint-backend, lint-frontend, test-backend, test-frontend, secrets-scan, test-helm-chart]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -603,9 +603,9 @@ jobs:
             [ -z "$line" ] && continue
             if echo "$line" | grep -qE '^[a-z]+(\([a-zA-Z0-9._-]+\))?!:' || echo "$line" | grep -q 'BREAKING CHANGE'; then
               BREAKING="${BREAKING}- ${line}\n"
-            elif echo "$line" | grep -qE '^feat(\(|:)'; then
+            elif echo "$line" | grep -qE '^feat(\([a-zA-Z0-9._-]+\))?:'; then
               FEATURES="${FEATURES}- ${line}\n"
-            elif echo "$line" | grep -qE '^fix(\(|:)'; then
+            elif echo "$line" | grep -qE '^fix(\([a-zA-Z0-9._-]+\))?:'; then
               FIXES="${FIXES}- ${line}\n"
             else
               OTHER="${OTHER}- ${line}\n"
@@ -627,7 +627,7 @@ jobs:
           fi
 
           echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
+          printf '%b' "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Determine version

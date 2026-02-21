@@ -51,12 +51,19 @@ jobs:
       - name: Determine next version
         id: next-version
         run: |
-          if [ -n "${{ inputs.override_version }}" ]; then
-            NEXT_VERSION="${{ inputs.override_version }}"
+          OVERRIDE_VERSION="${{ inputs.override_version }}"
+          if [ -n "$OVERRIDE_VERSION" ]; then
             # Strip leading 'v' if provided
-            NEXT_VERSION="${NEXT_VERSION#v}"
-            echo "version=${NEXT_VERSION}" >> $GITHUB_OUTPUT
-            echo "Using override version: v${NEXT_VERSION}"
+            OVERRIDE_VERSION="${OVERRIDE_VERSION#v}"
+
+            # Validate override version matches semver X.Y.Z
+            if ! echo "$OVERRIDE_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "Error: override_version '$OVERRIDE_VERSION' is not a valid semantic version (expected format: X.Y.Z, e.g. 1.2.3)."
+              exit 1
+            fi
+
+            echo "version=${OVERRIDE_VERSION}" >> $GITHUB_OUTPUT
+            echo "Using override version: v${OVERRIDE_VERSION}"
             exit 0
           fi
 
@@ -64,9 +71,24 @@ jobs:
           VERSION="${LATEST_TAG#v}"
 
           # Parse current version
+          # Strip any pre-release or build metadata (e.g., -rc1, +meta)
+          VERSION=${VERSION%%[-+]*}
+
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f2)
           PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          # Default missing components to 0 (e.g., handle v1 or v1.2)
+          [ -z "$MINOR" ] && MINOR=0
+          [ -z "$PATCH" ] && PATCH=0
+
+          # Validate numeric semver components; fall back if invalid
+          if ! echo "$MAJOR.$MINOR.$PATCH" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Warning: latest tag '${LATEST_TAG}' is not a valid semver (vX.Y.Z); defaulting to v0.0.0"
+            MAJOR=0
+            MINOR=0
+            PATCH=0
+          fi
 
           # Analyze commits since last tag
           BUMP="patch"
@@ -76,13 +98,13 @@ jobs:
             [ -z "$msg" ] && continue
 
             # Check for breaking changes
-            if echo "$msg" | grep -qE '^[a-z]+(\([a-zA-Z0-9._-]+\))?!:' || echo "$msg" | grep -q 'BREAKING CHANGE'; then
+            if echo "$msg" | grep -qE '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9._-]+\))?!: ' || echo "$msg" | grep -q 'BREAKING CHANGE'; then
               BUMP="major"
               break
             fi
 
             # Check for features
-            if echo "$msg" | grep -qE '^feat(\([a-zA-Z0-9._-]+\))?: '; then
+            if echo "$msg" | grep -qE '^feat(\([a-zA-Z0-9._-]+\))?: .+'; then
               BUMP="minor"
             fi
           done <<< "$COMMITS"
@@ -124,6 +146,10 @@ jobs:
         if: inputs.dry_run != true
         run: |
           TAG="v${{ steps.next-version.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists. Skipping tag creation and push."
+            exit 0
+          fi
           git tag -a "${TAG}" -m "Release ${TAG}"
           git push origin "${TAG}"
           echo "Created and pushed tag: ${TAG}"
