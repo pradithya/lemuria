@@ -181,56 +181,74 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		skipNoChanges = *repoConfigForSkip.SkipNoChanges
 	}
 
-	// Compute sync waves for apps-of-apps ordering (children first, then parents)
+	// Determine which apps to sync — only leaf apps are synced during
+	// `lemuria sync`. Parent apps that manage other locked apps are skipped
+	// because syncing them could reconcile child Application CRs and undo
+	// the child's PR-specific targetRevision override. Parents will reconcile
+	// naturally when the PR is merged and their auto-sync is restored.
 	slog.Debug("starting sync for applications",
 		"count", len(locks),
 		"skip_no_changes", skipNoChanges,
 	)
 	results := make([]syncResult, len(locks))
-	waves := e.computeSyncWaves(ctx, locks)
+	syncIndices, skippedParents := e.computeSyncTargets(ctx, locks)
 
-	// Sync each wave sequentially, with parallelism within each wave
-	for waveIdx, indices := range waves {
-		slog.Debug("starting sync wave", "wave", waveIdx, "count", len(indices))
-		g := new(errgroup.Group)
-		g.SetLimit(10)
-		for _, i := range indices {
-			l := locks[i]
-			// Skip applications with no detected changes if configured.
-			// A no-op plan stores PlanOutput="" with zero diffs, or
-			// PlanOutput="No changes detected" (from formatPlanSummary fallback).
-			if skipNoChanges && len(l.PlanDiffs) == 0 &&
-				(l.PlanOutput == "No changes detected" || l.PlanOutput == "") {
-				slog.Debug("skipping application with no changes",
-					"app", l.Application,
-				)
-				results[i] = syncResult{
-					Application: l.Application,
-					PlanOutput:  l.PlanOutput,
-					PlanDiffs:   l.PlanDiffs,
-					Result: &models.SyncResult{
-						Application:  l.Application,
-						Phase:        models.SyncPhaseSucceeded,
-						Message:      "Skipped — no changes detected",
-						HealthStatus: models.HealthStatusUnknown,
-					},
-				}
-				tracker.updateResult(ctx, i, results[i])
-				continue
-			}
-
-			idx, lock := i, l
-			g.Go(func() error {
-				slog.Debug("syncing application",
-					"app", lock.Application,
-				)
-				results[idx] = e.syncApplication(ctx, lock, cmd, event, headSourceContents)
-				tracker.updateResult(ctx, idx, results[idx])
-				return nil
-			})
+	// Mark skipped parent apps in results
+	for _, i := range skippedParents {
+		l := locks[i]
+		results[i] = syncResult{
+			Application: l.Application,
+			PlanOutput:  l.PlanOutput,
+			PlanDiffs:   l.PlanDiffs,
+			Result: &models.SyncResult{
+				Application:  l.Application,
+				Phase:        models.SyncPhaseSucceeded,
+				Message:      "Skipped — parent app will reconcile on PR merge",
+				HealthStatus: models.HealthStatusUnknown,
+			},
 		}
-		g.Wait() //nolint:errcheck
+		tracker.updateResult(ctx, i, results[i])
 	}
+
+	// Sync leaf apps in parallel (bounded concurrency)
+	g := new(errgroup.Group)
+	g.SetLimit(10)
+	for _, i := range syncIndices {
+		l := locks[i]
+		// Skip applications with no detected changes if configured.
+		// A no-op plan stores PlanOutput="" with zero diffs, or
+		// PlanOutput="No changes detected" (from formatPlanSummary fallback).
+		if skipNoChanges && len(l.PlanDiffs) == 0 &&
+			(l.PlanOutput == "No changes detected" || l.PlanOutput == "") {
+			slog.Debug("skipping application with no changes",
+				"app", l.Application,
+			)
+			results[i] = syncResult{
+				Application: l.Application,
+				PlanOutput:  l.PlanOutput,
+				PlanDiffs:   l.PlanDiffs,
+				Result: &models.SyncResult{
+					Application:  l.Application,
+					Phase:        models.SyncPhaseSucceeded,
+					Message:      "Skipped — no changes detected",
+					HealthStatus: models.HealthStatusUnknown,
+				},
+			}
+			tracker.updateResult(ctx, i, results[i])
+			continue
+		}
+
+		idx, lock := i, l
+		g.Go(func() error {
+			slog.Debug("syncing application",
+				"app", lock.Application,
+			)
+			results[idx] = e.syncApplication(ctx, lock, cmd, event, headSourceContents)
+			tracker.updateResult(ctx, idx, results[idx])
+			return nil
+		})
+	}
+	g.Wait() //nolint:errcheck
 
 	// Check if all syncs succeeded
 	allSucceeded := true
@@ -770,45 +788,52 @@ func IsProtectedBranch(branch string) bool {
 	return false
 }
 
-// computeSyncWaves groups lock indices into ordered waves based on parent-child
-// relationships. Wave 0 contains leaf apps (children), wave 1 contains their
-// parents, wave 2 grandparents, etc. Apps within the same wave can sync in parallel.
-// Locks with IsParentApp=true are excluded (they are locked only for auto-sync management).
-func (e *Executor) computeSyncWaves(ctx context.Context, locks []models.Lock) [][]int {
-	// Build set of syncable lock indices — exclude IsParentApp locks
+// computeSyncTargets returns the lock indices of leaf apps (apps that do not
+// manage other locked apps). Parent/grandparent apps in the locked set are
+// excluded from sync — they will reconcile naturally when the PR is merged
+// and their auto-sync is restored. This prevents parent apps from overwriting
+// child app targetRevision overrides during sync.
+//
+// Locks with IsParentApp=true are always excluded (they are locked only for
+// auto-sync management, not for syncing).
+//
+// If managed-resource detection fails for all apps, falls back to returning
+// all non-IsParentApp lock indices (same as pre-wave behavior).
+func (e *Executor) computeSyncTargets(ctx context.Context, locks []models.Lock) (syncIndices []int, skippedParents []int) {
+	// Build set of candidate lock indices — exclude IsParentApp locks
 	type appInfo struct {
 		lockIdx int
 		name    string
 	}
-	var syncable []appInfo
-	nameToIdx := make(map[string]int) // app name → index in syncable slice
+	var candidates []appInfo
+	nameToIdx := make(map[string]int) // app name → index in candidates slice
 	for i, l := range locks {
 		if l.IsParentApp {
 			continue
 		}
-		nameToIdx[l.Application] = len(syncable)
-		syncable = append(syncable, appInfo{lockIdx: i, name: l.Application})
+		nameToIdx[l.Application] = len(candidates)
+		candidates = append(candidates, appInfo{lockIdx: i, name: l.Application})
 	}
 
-	if len(syncable) == 0 {
-		return nil
+	if len(candidates) == 0 {
+		return nil, nil
 	}
 
-	// If only one app, skip the managed resources fetching
-	if len(syncable) == 1 {
-		return [][]int{{syncable[0].lockIdx}}
+	// If only one app, no parent-child detection needed
+	if len(candidates) == 1 {
+		return []int{candidates[0].lockIdx}, nil
 	}
 
-	// Fetch managed resources for all syncable apps concurrently
+	// Fetch managed resources for all candidate apps concurrently
 	type managedResult struct {
 		idx       int
 		resources []argocd.ManagedResource
 		err       error
 	}
-	results := make([]managedResult, len(syncable))
+	results := make([]managedResult, len(candidates))
 	g := new(errgroup.Group)
 	g.SetLimit(10)
-	for i, info := range syncable {
+	for i, info := range candidates {
 		idx, name := i, info.name
 		g.Go(func() error {
 			resources, err := e.argocd.GetManagedResources(ctx, name)
@@ -818,77 +843,50 @@ func (e *Executor) computeSyncWaves(ctx context.Context, locks []models.Lock) []
 	}
 	g.Wait() //nolint:errcheck
 
-	// Build directed edges: parent syncable-index → child syncable-indices
-	children := make(map[int][]int) // syncable idx → list of child syncable idxs
+	// Identify which candidates are parents of other candidates
+	isParent := make(map[int]bool) // candidates index → true if parent
 	for i, mr := range results {
 		if mr.err != nil {
-			slog.Warn("failed to get managed resources for sync wave detection",
-				"app", syncable[i].name, "error", mr.err)
+			slog.Warn("failed to get managed resources for parent detection",
+				"app", candidates[i].name, "error", mr.err)
 			continue
 		}
 		for _, r := range mr.resources {
 			if r.Kind == "Application" {
-				if childIdx, ok := nameToIdx[r.Name]; ok {
-					children[i] = append(children[i], childIdx)
+				if _, ok := nameToIdx[r.Name]; ok {
+					isParent[i] = true
+					break
 				}
 			}
 		}
 	}
 
-	// If no parent-child relationships detected, return single wave with all apps
-	if len(children) == 0 {
-		wave := make([]int, len(syncable))
-		for i, info := range syncable {
-			wave[i] = info.lockIdx
+	// If no parent-child relationships detected, return all candidates
+	if len(isParent) == 0 {
+		all := make([]int, len(candidates))
+		for i, info := range candidates {
+			all[i] = info.lockIdx
 		}
-		return [][]int{wave}
+		return all, nil
 	}
 
-	// Compute depth using iterative topological level assignment (Kahn's-like)
-	// Leaf nodes (no children in the set) get depth 0
-	// Parents get max(child depths) + 1
-	depth := make([]int, len(syncable))
-	// Initialize all depths to 0 (leaf)
-
-	// Iteratively compute depths: keep updating until stable
-	for iteration := 0; iteration < maxParentDepth; iteration++ {
-		changed := false
-		for parent, childIdxs := range children {
-			for _, child := range childIdxs {
-				newDepth := depth[child] + 1
-				if newDepth > depth[parent] {
-					if newDepth > maxParentDepth {
-						newDepth = maxParentDepth
-					}
-					depth[parent] = newDepth
-					changed = true
-				}
-			}
-		}
-		if !changed {
-			break
+	// Split into leaf apps (to sync) and parent apps (to skip)
+	for i, info := range candidates {
+		if isParent[i] {
+			skippedParents = append(skippedParents, info.lockIdx)
+			slog.Debug("skipping parent app from sync, will reconcile on PR merge",
+				"app", info.name)
+		} else {
+			syncIndices = append(syncIndices, info.lockIdx)
 		}
 	}
 
-	// Group by depth
-	maxDepth := 0
-	for _, d := range depth {
-		if d > maxDepth {
-			maxDepth = d
-		}
-	}
-
-	waves := make([][]int, maxDepth+1)
-	for i, info := range syncable {
-		waves[depth[i]] = append(waves[depth[i]], info.lockIdx)
-	}
-
-	slog.Debug("computed sync waves",
-		"total_apps", len(syncable),
-		"wave_count", len(waves),
+	slog.Debug("computed sync targets",
+		"sync_count", len(syncIndices),
+		"skipped_parents", len(skippedParents),
 	)
 
-	return waves
+	return syncIndices, skippedParents
 }
 
 // mergeResourceHealth merges per-resource health info into sync result resources.

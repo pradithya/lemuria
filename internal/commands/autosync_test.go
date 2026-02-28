@@ -544,10 +544,10 @@ func mustMarshal(t *testing.T, v any) []byte {
 	return data
 }
 
-// --- computeSyncWaves tests ---
+// --- computeSyncTargets tests ---
 
-func TestComputeSyncWaves_NoParentChild(t *testing.T) {
-	// All apps are independent — single wave with all apps
+func TestComputeSyncTargets_NoParentChild(t *testing.T) {
+	// All apps are independent — all should be synced, none skipped
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/managed-resources") {
 			resp := map[string]any{
@@ -572,18 +572,18 @@ func TestComputeSyncWaves_NoParentChild(t *testing.T) {
 		{Application: "app-c", PlanRevision: "abc"},
 	}
 
-	waves := e.computeSyncWaves(context.Background(), locks)
+	syncIndices, skippedParents := e.computeSyncTargets(context.Background(), locks)
 
-	if len(waves) != 1 {
-		t.Fatalf("expected 1 wave, got %d", len(waves))
+	if len(syncIndices) != 3 {
+		t.Errorf("expected 3 sync targets, got %d", len(syncIndices))
 	}
-	if len(waves[0]) != 3 {
-		t.Errorf("expected 3 apps in wave 0, got %d", len(waves[0]))
+	if len(skippedParents) != 0 {
+		t.Errorf("expected 0 skipped parents, got %d", len(skippedParents))
 	}
 }
 
-func TestComputeSyncWaves_SimpleParentChild(t *testing.T) {
-	// parent-app manages child-app → wave 0=[child], wave 1=[parent]
+func TestComputeSyncTargets_SimpleParentChild(t *testing.T) {
+	// parent-app manages child-app → only child synced, parent skipped
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/applications/parent-app/managed-resources":
@@ -616,24 +616,25 @@ func TestComputeSyncWaves_SimpleParentChild(t *testing.T) {
 		{Application: "child-app", PlanRevision: "abc"},
 	}
 
-	waves := e.computeSyncWaves(context.Background(), locks)
+	syncIndices, skippedParents := e.computeSyncTargets(context.Background(), locks)
 
-	if len(waves) != 2 {
-		t.Fatalf("expected 2 waves, got %d", len(waves))
+	if len(syncIndices) != 1 {
+		t.Fatalf("expected 1 sync target, got %d", len(syncIndices))
+	}
+	if locks[syncIndices[0]].Application != "child-app" {
+		t.Errorf("expected child-app to be synced, got %s", locks[syncIndices[0]].Application)
 	}
 
-	// Wave 0 should contain the child (lock index 1)
-	if len(waves[0]) != 1 || locks[waves[0][0]].Application != "child-app" {
-		t.Errorf("wave 0: expected [child-app], got indices %v", waves[0])
+	if len(skippedParents) != 1 {
+		t.Fatalf("expected 1 skipped parent, got %d", len(skippedParents))
 	}
-	// Wave 1 should contain the parent (lock index 0)
-	if len(waves[1]) != 1 || locks[waves[1][0]].Application != "parent-app" {
-		t.Errorf("wave 1: expected [parent-app], got indices %v", waves[1])
+	if locks[skippedParents[0]].Application != "parent-app" {
+		t.Errorf("expected parent-app to be skipped, got %s", locks[skippedParents[0]].Application)
 	}
 }
 
-func TestComputeSyncWaves_ThreeLevels(t *testing.T) {
-	// grandparent → parent → child → 3 waves
+func TestComputeSyncTargets_ThreeLevels(t *testing.T) {
+	// grandparent → parent → child → only child synced, parent and grandparent skipped
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/applications/grandparent/managed-resources":
@@ -673,24 +674,29 @@ func TestComputeSyncWaves_ThreeLevels(t *testing.T) {
 		{Application: "child", PlanRevision: "abc"},
 	}
 
-	waves := e.computeSyncWaves(context.Background(), locks)
+	syncIndices, skippedParents := e.computeSyncTargets(context.Background(), locks)
 
-	if len(waves) != 3 {
-		t.Fatalf("expected 3 waves, got %d", len(waves))
+	if len(syncIndices) != 1 {
+		t.Fatalf("expected 1 sync target, got %d", len(syncIndices))
 	}
-	if locks[waves[0][0]].Application != "child" {
-		t.Errorf("wave 0: expected child, got %s", locks[waves[0][0]].Application)
+	if locks[syncIndices[0]].Application != "child" {
+		t.Errorf("expected child to be synced, got %s", locks[syncIndices[0]].Application)
 	}
-	if locks[waves[1][0]].Application != "parent" {
-		t.Errorf("wave 1: expected parent, got %s", locks[waves[1][0]].Application)
+
+	if len(skippedParents) != 2 {
+		t.Fatalf("expected 2 skipped parents, got %d", len(skippedParents))
 	}
-	if locks[waves[2][0]].Application != "grandparent" {
-		t.Errorf("wave 2: expected grandparent, got %s", locks[waves[2][0]].Application)
+	skippedNames := make(map[string]bool)
+	for _, i := range skippedParents {
+		skippedNames[locks[i].Application] = true
+	}
+	if !skippedNames["parent"] || !skippedNames["grandparent"] {
+		t.Errorf("expected parent and grandparent to be skipped, got %v", skippedNames)
 	}
 }
 
-func TestComputeSyncWaves_DiamondPattern(t *testing.T) {
-	// parent manages both child1 and child2 → wave 0=[child1, child2], wave 1=[parent]
+func TestComputeSyncTargets_DiamondPattern(t *testing.T) {
+	// parent manages both child1 and child2 → children synced, parent skipped
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/applications/parent/managed-resources":
@@ -725,23 +731,22 @@ func TestComputeSyncWaves_DiamondPattern(t *testing.T) {
 		{Application: "child2", PlanRevision: "abc"},
 	}
 
-	waves := e.computeSyncWaves(context.Background(), locks)
+	syncIndices, skippedParents := e.computeSyncTargets(context.Background(), locks)
 
-	if len(waves) != 2 {
-		t.Fatalf("expected 2 waves, got %d", len(waves))
+	if len(syncIndices) != 2 {
+		t.Errorf("expected 2 sync targets, got %d", len(syncIndices))
 	}
-	if len(waves[0]) != 2 {
-		t.Errorf("wave 0: expected 2 children, got %d", len(waves[0]))
+	if len(skippedParents) != 1 {
+		t.Fatalf("expected 1 skipped parent, got %d", len(skippedParents))
 	}
-	if len(waves[1]) != 1 || locks[waves[1][0]].Application != "parent" {
-		t.Errorf("wave 1: expected [parent], got indices %v", waves[1])
+	if locks[skippedParents[0]].Application != "parent" {
+		t.Errorf("expected parent to be skipped, got %s", locks[skippedParents[0]].Application)
 	}
 }
 
-func TestComputeSyncWaves_ManagedResourceError(t *testing.T) {
-	// API error → falls back to single wave (all parallel)
+func TestComputeSyncTargets_ManagedResourceError(t *testing.T) {
+	// API error → falls back to syncing all apps (no parents detected)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Return error for all managed-resources requests
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer ts.Close()
@@ -754,19 +759,18 @@ func TestComputeSyncWaves_ManagedResourceError(t *testing.T) {
 		{Application: "app-b", PlanRevision: "abc"},
 	}
 
-	waves := e.computeSyncWaves(context.Background(), locks)
+	syncIndices, skippedParents := e.computeSyncTargets(context.Background(), locks)
 
-	// Should fall back to single wave since no relationships could be determined
-	if len(waves) != 1 {
-		t.Fatalf("expected 1 wave (fallback), got %d", len(waves))
+	if len(syncIndices) != 2 {
+		t.Errorf("expected 2 sync targets (fallback), got %d", len(syncIndices))
 	}
-	if len(waves[0]) != 2 {
-		t.Errorf("expected 2 apps in wave 0, got %d", len(waves[0]))
+	if len(skippedParents) != 0 {
+		t.Errorf("expected 0 skipped parents, got %d", len(skippedParents))
 	}
 }
 
-func TestComputeSyncWaves_ParentAppLocksExcluded(t *testing.T) {
-	// IsParentApp locks should be excluded from sync waves
+func TestComputeSyncTargets_ParentAppLocksExcluded(t *testing.T) {
+	// IsParentApp locks should be excluded entirely (not in sync or skipped)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/applications/child-app/managed-resources":
@@ -791,16 +795,60 @@ func TestComputeSyncWaves_ParentAppLocksExcluded(t *testing.T) {
 		{Application: "parent-app", IsParentApp: true},
 	}
 
-	waves := e.computeSyncWaves(context.Background(), locks)
+	syncIndices, skippedParents := e.computeSyncTargets(context.Background(), locks)
 
-	// Only child-app should be in waves, parent-app excluded
-	if len(waves) != 1 {
-		t.Fatalf("expected 1 wave, got %d", len(waves))
+	if len(syncIndices) != 1 {
+		t.Fatalf("expected 1 sync target, got %d", len(syncIndices))
 	}
-	if len(waves[0]) != 1 {
-		t.Fatalf("expected 1 app in wave 0, got %d", len(waves[0]))
+	if locks[syncIndices[0]].Application != "child-app" {
+		t.Errorf("expected child-app, got %s", locks[syncIndices[0]].Application)
 	}
-	if locks[waves[0][0]].Application != "child-app" {
-		t.Errorf("expected child-app in wave, got %s", locks[waves[0][0]].Application)
+	if len(skippedParents) != 0 {
+		t.Errorf("expected 0 skipped parents (IsParentApp excluded entirely), got %d", len(skippedParents))
+	}
+}
+
+func TestComputeSyncTargets_ParentManagesUnlockedChild(t *testing.T) {
+	// parent manages "other-app" which is NOT in the locks — parent should be synced
+	// because its child relationship is with an app outside the locked set
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/applications/parent/managed-resources":
+			resp := map[string]any{
+				"items": []map[string]any{
+					{"kind": "Application", "name": "other-app"},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case "/api/v1/applications/leaf/managed-resources":
+			resp := map[string]any{
+				"items": []map[string]any{
+					{"kind": "Deployment", "name": "deploy"},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(t, ts.URL)
+	e := &Executor{argocd: client}
+
+	locks := []models.Lock{
+		{Application: "parent", PlanRevision: "abc"},
+		{Application: "leaf", PlanRevision: "abc"},
+	}
+
+	syncIndices, skippedParents := e.computeSyncTargets(context.Background(), locks)
+
+	// Both should be synced — parent's child "other-app" is not in the lock set
+	if len(syncIndices) != 2 {
+		t.Errorf("expected 2 sync targets, got %d", len(syncIndices))
+	}
+	if len(skippedParents) != 0 {
+		t.Errorf("expected 0 skipped parents, got %d", len(skippedParents))
 	}
 }
