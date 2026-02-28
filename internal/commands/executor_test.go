@@ -15,7 +15,14 @@
 package commands
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
@@ -370,5 +377,375 @@ func TestIsProtectedBranch(t *testing.T) {
 				t.Errorf("IsProtectedBranch(%q) = %v, want %v", tt.branch, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIsScannedAppAffected(t *testing.T) {
+	exec := newTestExecutor(&mockVCS{}, &mockLock{}, nil)
+
+	tests := []struct {
+		name       string
+		app        models.Application
+		repoURL    string
+		files      []string
+		repoConfig *config.RepoConfig
+		want       bool
+	}{
+		{
+			name:    "app path matches changed file",
+			app:     models.Application{Name: "my-app", Path: "apps/my-app", RepoURL: "https://github.com/org/repo"},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"apps/my-app/deployment.yaml"},
+			want:    true,
+		},
+		{
+			name:    "app path does not match",
+			app:     models.Application{Name: "my-app", Path: "apps/my-app", RepoURL: "https://github.com/org/repo"},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"apps/other-app/deployment.yaml"},
+			want:    false,
+		},
+		{
+			name:    "different repo URL",
+			app:     models.Application{Name: "my-app", Path: "apps/my-app", RepoURL: "https://github.com/other-org/other-repo"},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"apps/my-app/deployment.yaml"},
+			want:    false,
+		},
+		{
+			name:    "repo config path mapping overrides",
+			app:     models.Application{Name: "my-app", Path: "apps/my-app", RepoURL: "https://github.com/org/repo"},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"custom/path/values.yaml"},
+			repoConfig: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "my-app", Paths: []string{"custom/path/**"}},
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := exec.isScannedAppAffected(tt.app, tt.repoURL, tt.files, tt.repoConfig)
+			if got != tt.want {
+				t.Errorf("isScannedAppAffected() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFindAffectedApplications_BasicFlow(t *testing.T) {
+	appYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/my-app
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+
+	vcs := &mockVCS{
+		changedFiles: []models.ChangedFile{
+			{Filename: "apps/my-app/deployment.yaml", Status: "modified"},
+		},
+		filesByPattern: map[string]map[string][]byte{
+			"feature-branch": {
+				"argocd/app.yaml": []byte(appYAML),
+			},
+			"main": {
+				"argocd/app.yaml": []byte(appYAML),
+			},
+		},
+	}
+
+	// ArgoCD mock: ListApplications for cross-repo (returns empty)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+		},
+	}
+
+	affected, err := exec.findAffectedApplications(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(affected) != 1 {
+		t.Fatalf("expected 1 affected app, got %d", len(affected))
+	}
+	if affected[0].Name != "my-app" {
+		t.Errorf("expected app name = 'my-app', got %q", affected[0].Name)
+	}
+	if affected[0].ChangeType != models.ApplicationExisting {
+		t.Errorf("expected ChangeType = %q, got %q", models.ApplicationExisting, affected[0].ChangeType)
+	}
+}
+
+func TestFindAffectedApplications_NewAndDeletedApps(t *testing.T) {
+	newAppYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: new-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/new-app
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+	deletedAppYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: deleted-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/deleted-app
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+
+	vcs := &mockVCS{
+		changedFiles: []models.ChangedFile{
+			{Filename: "argocd/new-app.yaml", Status: "added"},
+			{Filename: "argocd/deleted-app.yaml", Status: "removed"},
+		},
+		filesByPattern: map[string]map[string][]byte{
+			"feature-branch": {
+				"argocd/new-app.yaml": []byte(newAppYAML),
+			},
+			"main": {
+				"argocd/deleted-app.yaml": []byte(deletedAppYAML),
+			},
+		},
+	}
+
+	// ArgoCD mock: ListApplications returns the deleted app (so it passes verify)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := v1alpha1.ApplicationList{
+			Items: []v1alpha1.Application{
+				{ObjectMeta: metav1.ObjectMeta{Name: "deleted-app"}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+		},
+	}
+
+	affected, err := exec.findAffectedApplications(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have new-app and deleted-app
+	newFound := false
+	deletedFound := false
+	for _, app := range affected {
+		if app.Name == "new-app" && app.ChangeType == models.ApplicationNew {
+			newFound = true
+		}
+		if app.Name == "deleted-app" && app.ChangeType == models.ApplicationDeleted {
+			deletedFound = true
+		}
+	}
+	if !newFound {
+		t.Error("expected 'new-app' with ChangeType=New in affected apps")
+	}
+	if !deletedFound {
+		t.Error("expected 'deleted-app' with ChangeType=Deleted in affected apps")
+	}
+}
+
+func TestFindAffectedApplications_ModifiedAppCR(t *testing.T) {
+	headYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/my-app
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+	baseYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/my-app
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+
+	vcs := &mockVCS{
+		changedFiles: []models.ChangedFile{
+			{Filename: "argocd/app.yaml", Status: "modified"},
+		},
+		filesByPattern: map[string]map[string][]byte{
+			"feature-branch": {
+				"argocd/app.yaml": []byte(headYAML),
+			},
+			"main": {
+				"argocd/app.yaml": []byte(baseYAML),
+			},
+		},
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+		},
+	}
+
+	affected, err := exec.findAffectedApplications(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(affected) != 1 {
+		t.Fatalf("expected 1 affected app, got %d", len(affected))
+	}
+	if affected[0].Name != "my-app" {
+		t.Errorf("expected app name = 'my-app', got %q", affected[0].Name)
+	}
+	if affected[0].SourceFile != "argocd/app.yaml" {
+		t.Errorf("expected SourceFile = 'argocd/app.yaml', got %q", affected[0].SourceFile)
+	}
+}
+
+func TestFindAffectedApplications_UnchangedAppCRNotIncluded(t *testing.T) {
+	// An app CR that exists in both branches with identical content should NOT be
+	// included as affected if no source files changed.
+	appYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/my-app
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+
+	vcs := &mockVCS{
+		changedFiles: []models.ChangedFile{
+			{Filename: "docs/readme.md", Status: "modified"},
+		},
+		filesByPattern: map[string]map[string][]byte{
+			"feature-branch": {
+				"argocd/app.yaml": []byte(appYAML),
+			},
+			"main": {
+				"argocd/app.yaml": []byte(appYAML),
+			},
+		},
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+		},
+	}
+
+	affected, err := exec.findAffectedApplications(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(affected) != 0 {
+		t.Errorf("expected 0 affected apps (unchanged CR, unrelated file changes), got %d", len(affected))
+		for _, a := range affected {
+			t.Logf("  affected: %s (change_type=%s)", a.Name, a.ChangeType)
+		}
 	}
 }
