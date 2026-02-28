@@ -239,11 +239,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	// Step 1-2: Scan repo for all Application/ApplicationSet CRs
 	scanned, err := e.scanRepoForApplications(ctx, event, crPaths)
 	if err != nil {
-		slog.Warn("failed to scan repo for applications", "error", err)
-		scanned = &ScannedRepoApps{
-			HeadContents: map[string][]byte{},
-			BaseContents: map[string][]byte{},
-		}
+		return nil, fmt.Errorf("scanning repo for applications: %w", err)
 	}
 
 	// Step 3: Match scanned apps against changed files

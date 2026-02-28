@@ -17,6 +17,8 @@ package e2e
 import (
 	"context"
 	"fmt"
+	stdpath "path"
+	"strings"
 	"sync"
 
 	"github.com/org/lemuria/internal/models"
@@ -218,16 +220,50 @@ func (m *MockVCSClient) MergePullRequest(_ context.Context, owner, repo string, 
 	return nil
 }
 
-func (m *MockVCSClient) GetFilesByPattern(_ context.Context, _, _, ref string, _ []string, _ []string) (map[string][]byte, error) {
+func (m *MockVCSClient) GetFilesByPattern(_ context.Context, _, _, ref string, patterns []string, pathPrefixes []string) (map[string][]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Fallback: extract from FileContents keyed as "path@ref"
+	// Extract from FileContents keyed as "path@ref", applying pattern and prefix filtering
 	result := make(map[string][]byte)
 	suffix := "@" + ref
 	for key, content := range m.FileContents {
 		if len(key) > len(suffix) && key[len(key)-len(suffix):] == suffix {
-			path := key[:len(key)-len(suffix)]
-			result[path] = content
+			filePath := key[:len(key)-len(suffix)]
+
+			// Apply path prefix filter
+			if len(pathPrefixes) > 0 {
+				matched := false
+				for _, prefix := range pathPrefixes {
+					p := prefix
+					if !strings.HasSuffix(p, "/") {
+						p += "/"
+					}
+					if strings.HasPrefix(filePath, p) || filePath == strings.TrimSuffix(p, "/") {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+
+			// Apply filename pattern filter
+			if len(patterns) > 0 {
+				matched := false
+				base := stdpath.Base(filePath)
+				for _, pattern := range patterns {
+					if ok, _ := stdpath.Match(pattern, base); ok {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+
+			result[filePath] = content
 		}
 	}
 	return result, nil

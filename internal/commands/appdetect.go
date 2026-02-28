@@ -144,8 +144,13 @@ func detectApplicationChangesFromScan(scanned *ScannedRepoApps) *argocd.ParsedAp
 		baseByName[app.Name] = app
 	}
 
+	// Sort names for deterministic iteration order
+	headNames := sortedStringKeys(headByName)
+	baseNames := sortedStringKeys(baseByName)
+
 	// New apps: in head but not in base
-	for name, app := range headByName {
+	for _, name := range headNames {
+		app := headByName[name]
 		if _, exists := baseByName[name]; !exists {
 			slog.Debug("new application detected via scan",
 				"app", name,
@@ -157,7 +162,8 @@ func detectApplicationChangesFromScan(scanned *ScannedRepoApps) *argocd.ParsedAp
 	}
 
 	// Deleted apps: in base but not in head
-	for name, app := range baseByName {
+	for _, name := range baseNames {
+		app := baseByName[name]
 		if _, exists := headByName[name]; !exists {
 			slog.Debug("deleted application detected via scan",
 				"app", name,
@@ -169,7 +175,8 @@ func detectApplicationChangesFromScan(scanned *ScannedRepoApps) *argocd.ParsedAp
 	}
 
 	// Modified apps: in both head and base, but only if the CR content actually changed
-	for name, headApp := range headByName {
+	for _, name := range headNames {
+		headApp := headByName[name]
 		baseApp, exists := baseByName[name]
 		if !exists {
 			continue
@@ -232,8 +239,13 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 		baseByName[pas.AppSet.Name] = pas
 	}
 
+	// Sort names for deterministic iteration order
+	headAppSetNames := sortedParsedAppSetKeys(headByName)
+	baseAppSetNames := sortedParsedAppSetKeys(baseByName)
+
 	// AppSets in head but not in base → new
-	for name, headPAS := range headByName {
+	for _, name := range headAppSetNames {
+		headPAS := headByName[name]
 		if _, exists := baseByName[name]; !exists {
 			apps, err := e.argocd.GenerateApplications(ctx, headPAS.AppSet)
 			if err != nil {
@@ -256,7 +268,8 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 	}
 
 	// AppSets in base but not in head → deleted
-	for name, basePAS := range baseByName {
+	for _, name := range baseAppSetNames {
+		basePAS := baseByName[name]
 		if _, exists := headByName[name]; !exists {
 			apps, err := e.argocd.GetApplicationsByApplicationSet(ctx, name)
 			if err != nil {
@@ -279,7 +292,8 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 	}
 
 	// AppSets in both → compare generated apps
-	for name, headPAS := range headByName {
+	for _, name := range headAppSetNames {
+		headPAS := headByName[name]
 		basePAS, exists := baseByName[name]
 		if !exists {
 			continue
@@ -514,6 +528,26 @@ func (e *Executor) verifyDeletedAppsExist(ctx context.Context, parsed *argocd.Pa
 	parsed.Deleted = actuallyDeleted
 
 	return nil
+}
+
+// sortedStringKeys returns the keys of a map[string]models.Application sorted alphabetically.
+func sortedStringKeys(m map[string]models.Application) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// sortedParsedAppSetKeys returns the keys of a map[string]argocd.ParsedAppSet sorted alphabetically.
+func sortedParsedAppSetKeys(m map[string]argocd.ParsedAppSet) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // sortedKeys returns the keys of a map sorted alphabetically.

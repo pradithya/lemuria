@@ -20,7 +20,6 @@ import (
 	"io"
 	"log/slog"
 	"path"
-	"path/filepath"
 	"strings"
 )
 
@@ -138,7 +137,7 @@ func ExtractFilesByPattern(r io.Reader, patterns []string, pathPrefixes []string
 		}
 
 		// Check filename pattern filter
-		if len(patterns) > 0 && !matchesAnyPattern(filepath.Base(stripped), patterns) {
+		if len(patterns) > 0 && !matchesAnyPattern(path.Base(stripped), patterns) {
 			continue
 		}
 
@@ -167,9 +166,15 @@ func matchesAnyPrefix(filePath string, prefixes []string) bool {
 }
 
 // matchesAnyPattern checks if the filename matches any of the given glob patterns.
+// Uses path.Match (not filepath.Match) since tar archives always use forward slashes.
 func matchesAnyPattern(filename string, patterns []string) bool {
 	for _, pattern := range patterns {
-		if matched, _ := filepath.Match(pattern, filename); matched {
+		matched, err := path.Match(pattern, filename)
+		if err != nil {
+			slog.Warn("invalid glob pattern", "pattern", pattern, "error", err)
+			continue
+		}
+		if matched {
 			return true
 		}
 	}
