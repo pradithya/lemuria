@@ -683,6 +683,259 @@ spec:
 	}
 }
 
+func TestFindAffectedApplications_WithRepoConfig(t *testing.T) {
+	appYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/my-app
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+
+	vcs := &mockVCS{
+		changedFiles: []models.ChangedFile{
+			{Filename: "custom/values.yaml", Status: "modified"},
+		},
+		repoConfigData: []byte(`version: 1
+applications:
+  - name: my-app
+    paths:
+      - "custom/**"
+cr_paths:
+  - "argocd"
+`),
+		filesByPattern: map[string]map[string][]byte{
+			"feature-branch": {
+				"argocd/app.yaml": []byte(appYAML),
+			},
+			"main": {
+				"argocd/app.yaml": []byte(appYAML),
+			},
+		},
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+		},
+	}
+
+	affected, err := exec.findAffectedApplications(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(affected) != 1 {
+		t.Fatalf("expected 1 affected app via repo config paths, got %d", len(affected))
+	}
+	if affected[0].Name != "my-app" {
+		t.Errorf("expected app name = 'my-app', got %q", affected[0].Name)
+	}
+}
+
+func TestFindAffectedApplications_ModifiedAppAlreadyAffected(t *testing.T) {
+	// App is affected by path changes AND its CR was modified — should propagate SourceFile
+	headYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/my-app
+    targetRevision: HEAD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+	baseYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/my-app
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+
+	vcs := &mockVCS{
+		changedFiles: []models.ChangedFile{
+			{Filename: "apps/my-app/deployment.yaml", Status: "modified"},
+			{Filename: "argocd/app.yaml", Status: "modified"},
+		},
+		filesByPattern: map[string]map[string][]byte{
+			"feature-branch": {
+				"argocd/app.yaml": []byte(headYAML),
+			},
+			"main": {
+				"argocd/app.yaml": []byte(baseYAML),
+			},
+		},
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+		},
+	}
+
+	affected, err := exec.findAffectedApplications(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(affected) != 1 {
+		t.Fatalf("expected 1 affected app (deduplicated), got %d", len(affected))
+	}
+	if affected[0].Name != "my-app" {
+		t.Errorf("expected app name = 'my-app', got %q", affected[0].Name)
+	}
+	// SourceFile should be propagated from the modified app detection
+	if affected[0].SourceFile != "argocd/app.yaml" {
+		t.Errorf("expected SourceFile = 'argocd/app.yaml', got %q", affected[0].SourceFile)
+	}
+}
+
+func TestFindAffectedApplications_AppSetNewAndDeleted(t *testing.T) {
+	// A new ApplicationSet in head that doesn't exist in base
+	headAppSetYAML := `apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: new-appset
+spec:
+  generators:
+    - list:
+        elements:
+          - cluster: dev
+  template:
+    metadata:
+      name: '{{cluster}}-app'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/org/repo
+        path: apps
+        targetRevision: main
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: default
+`
+
+	vcs := &mockVCS{
+		changedFiles: []models.ChangedFile{
+			{Filename: "argocd/appset.yaml", Status: "added"},
+		},
+		filesByPattern: map[string]map[string][]byte{
+			"feature-branch": {
+				"argocd/appset.yaml": []byte(headAppSetYAML),
+			},
+			"main": {},
+		},
+	}
+
+	// ArgoCD: GenerateApplications returns generated apps, ListApplications returns empty
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/applicationsets/generate" {
+			resp := struct {
+				Applications []v1alpha1.Application `json:"applications"`
+			}{
+				Applications: []v1alpha1.Application{
+					{ObjectMeta: metav1.ObjectMeta{Name: "dev-app"}},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+			return
+		}
+		// ListApplications
+		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+		},
+	}
+
+	affected, err := exec.findAffectedApplications(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should detect the generated app from the new AppSet
+	found := false
+	for _, app := range affected {
+		if app.Name == "dev-app" {
+			found = true
+			if app.ChangeType != models.ApplicationNew {
+				t.Errorf("expected ChangeType = %q, got %q", models.ApplicationNew, app.ChangeType)
+			}
+			if !app.IsGeneratedApp {
+				t.Error("expected IsGeneratedApp = true")
+			}
+		}
+	}
+	if !found {
+		t.Error("expected 'dev-app' from new appset in affected list")
+	}
+}
+
 func TestFindAffectedApplications_UnchangedAppCRNotIncluded(t *testing.T) {
 	// An app CR that exists in both branches with identical content should NOT be
 	// included as affected if no source files changed.

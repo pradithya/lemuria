@@ -17,6 +17,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -474,6 +475,35 @@ func TestDetectApplicationSetChangesFromScan_NoChanges(t *testing.T) {
 	}
 }
 
+func TestDetectApplicationSetChangesFromScan_GenerateError(t *testing.T) {
+	// ArgoCD returns error for GenerateApplications
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+
+	appSet := v1alpha1.ApplicationSet{ObjectMeta: metav1.ObjectMeta{Name: "fail-appset"}}
+
+	scanned := &ScannedRepoApps{
+		HeadAppSets: []argocd.ParsedAppSet{
+			{AppSet: &appSet, SourceFile: "as.yaml"},
+		},
+		BaseAppSets: []argocd.ParsedAppSet{},
+	}
+
+	result, err := exec.detectApplicationSetChangesFromScan(context.Background(), scanned)
+	if err != nil {
+		t.Fatalf("unexpected error (should be logged, not returned): %v", err)
+	}
+	// Should have 0 new apps due to generate failure
+	if len(result.NewApps) != 0 {
+		t.Errorf("expected 0 new apps on generate error, got %d", len(result.NewApps))
+	}
+}
+
 func TestDetectCrossRepoAffectedApps(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/applications" {
@@ -554,6 +584,23 @@ func TestDetectCrossRepoAffectedApps(t *testing.T) {
 	}
 }
 
+func TestDetectCrossRepoAffectedApps_APIError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+
+	_, err := exec.detectCrossRepoAffectedApps(
+		context.Background(), "https://github.com/org/repo", []string{"file.yaml"}, nil,
+	)
+	if err == nil {
+		t.Fatal("expected error from API failure")
+	}
+}
+
 func TestDetectCrossRepoAffectedApps_NoApps(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
@@ -605,6 +652,42 @@ func TestVerifyNewAppsExist(t *testing.T) {
 	// verifyNewAppsExist only logs, doesn't modify parsed — check no crash
 	if len(parsed.New) != 2 {
 		t.Errorf("expected 2 new apps unchanged, got %d", len(parsed.New))
+	}
+}
+
+func TestVerifyNewAppsExist_APIError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+
+	parsed := &argocd.ParsedApplications{
+		New: []models.Application{{Name: "test-app"}},
+	}
+	err := exec.verifyNewAppsExist(context.Background(), parsed)
+	if err == nil {
+		t.Fatal("expected error from API failure")
+	}
+}
+
+func TestVerifyDeletedAppsExist_APIError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+
+	parsed := &argocd.ParsedApplications{
+		Deleted: []models.Application{{Name: "test-app"}},
+	}
+	err := exec.verifyDeletedAppsExist(context.Background(), parsed)
+	if err == nil {
+		t.Fatal("expected error from API failure")
 	}
 }
 
@@ -685,6 +768,53 @@ func TestVerifyDeletedAppsExist_NoneExist(t *testing.T) {
 	}
 	if len(parsed.Deleted) != 0 {
 		t.Errorf("expected 0 deleted apps after filtering, got %d", len(parsed.Deleted))
+	}
+}
+
+func TestScanRepoForApplications_VCSError(t *testing.T) {
+	vcs := &mockVCS{
+		filesByPatternErr: fmt.Errorf("archive download failed"),
+	}
+
+	exec := newTestExecutor(vcs, &mockLock{}, nil)
+	event := &models.PREvent{
+		Repo: models.RepoInfo{Owner: "org", Name: "repo"},
+		PR:   models.PRInfo{HeadRef: "head", BaseRef: "base"},
+	}
+
+	_, err := exec.scanRepoForApplications(context.Background(), event, nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestScanRepoForApplications_NonAppYAML(t *testing.T) {
+	// A valid YAML file that is not an Application/ApplicationSet CR
+	vcs := &mockVCS{
+		filesByPattern: map[string]map[string][]byte{
+			"head": {
+				"values.yaml": []byte("replicas: 3\nimage: nginx:latest\n"),
+			},
+			"base": {},
+		},
+	}
+
+	exec := newTestExecutor(vcs, &mockLock{}, nil)
+	event := &models.PREvent{
+		Repo: models.RepoInfo{Owner: "org", Name: "repo"},
+		PR:   models.PRInfo{HeadRef: "head", BaseRef: "base"},
+	}
+
+	// Should not error — just find no apps
+	scanned, err := exec.scanRepoForApplications(context.Background(), event, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(scanned.HeadApps) != 0 {
+		t.Errorf("expected 0 apps from non-app YAML, got %d", len(scanned.HeadApps))
+	}
+	if len(scanned.HeadAppSets) != 0 {
+		t.Errorf("expected 0 appsets from non-app YAML, got %d", len(scanned.HeadAppSets))
 	}
 }
 
