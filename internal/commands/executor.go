@@ -333,7 +333,11 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		}
 	}
 
-	// Process modified apps (Application CRs modified in the PR)
+	// Process modified apps (Application CRs whose content differs between head and base)
+	changedFileSet := make(map[string]bool, len(filePaths))
+	for _, f := range filePaths {
+		changedFileSet[f] = true
+	}
 	for _, modApp := range parsed.Modified {
 		if containsAppByName(affected, modApp.Name) {
 			// Already in affected list, just propagate SourceFile
@@ -343,9 +347,8 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 					break
 				}
 			}
-		} else {
-			// App CR exists in both branches but wasn't matched by path changes
-			// This means the CR itself was modified (e.g., changed Helm values)
+		} else if modApp.SourceFile != "" && changedFileSet[modApp.SourceFile] {
+			// App CR file is among the PR's changed files — add as affected
 			slog.Debug("adding modified application from scan",
 				"app", modApp.Name,
 				"source_file", modApp.SourceFile,
@@ -353,6 +356,11 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 			modApp.ChangeType = models.ApplicationExisting
 			affected = append(affected, modApp)
 			alreadyDetected[modApp.Name] = true
+		} else {
+			slog.Debug("skipping modified app — CR file not in PR changed files",
+				"app", modApp.Name,
+				"source_file", modApp.SourceFile,
+			)
 		}
 	}
 

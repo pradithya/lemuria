@@ -107,7 +107,7 @@ func ExtractFilesByPattern(r io.Reader, patterns []string, pathPrefixes []string
 	}
 	defer func() {
 		if cerr := gz.Close(); cerr != nil {
-			slog.Error("error closing gzip reader")
+			slog.Error("error closing gzip reader", "error", cerr)
 		}
 	}()
 

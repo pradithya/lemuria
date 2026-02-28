@@ -15,11 +15,11 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
-
-	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	"sort"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/models"
@@ -28,9 +28,9 @@ import (
 // ScannedRepoApps holds the result of scanning both branches for Application/ApplicationSet CRs.
 type ScannedRepoApps struct {
 	HeadApps     []models.Application
-	HeadAppSets  []v1alpha1.ApplicationSet
+	HeadAppSets  []argocd.ParsedAppSet
 	BaseApps     []models.Application
-	BaseAppSets  []v1alpha1.ApplicationSet
+	BaseAppSets  []argocd.ParsedAppSet
 	HeadContents map[string][]byte
 	BaseContents map[string][]byte
 }
@@ -69,8 +69,13 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 		BaseContents: baseContents,
 	}
 
+	// Sort file paths for deterministic iteration order
+	headPaths := sortedKeys(headContents)
+	basePaths := sortedKeys(baseContents)
+
 	// Parse Application CRs from head branch
-	for filePath, content := range headContents {
+	for _, filePath := range headPaths {
+		content := headContents[filePath]
 		apps, err := argocd.ParseApplicationsFromYAML(content, filePath)
 		if err != nil {
 			slog.Debug("failed to parse applications from head file", "file", filePath, "error", err)
@@ -83,11 +88,17 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 			slog.Debug("failed to parse applicationsets from head file", "file", filePath, "error", err)
 			continue
 		}
-		result.HeadAppSets = append(result.HeadAppSets, appSets...)
+		for _, as := range appSets {
+			result.HeadAppSets = append(result.HeadAppSets, argocd.ParsedAppSet{
+				AppSet:     as.DeepCopy(),
+				SourceFile: filePath,
+			})
+		}
 	}
 
 	// Parse Application CRs from base branch
-	for filePath, content := range baseContents {
+	for _, filePath := range basePaths {
+		content := baseContents[filePath]
 		apps, err := argocd.ParseApplicationsFromYAML(content, filePath)
 		if err != nil {
 			slog.Debug("failed to parse applications from base file", "file", filePath, "error", err)
@@ -100,7 +111,12 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 			slog.Debug("failed to parse applicationsets from base file", "file", filePath, "error", err)
 			continue
 		}
-		result.BaseAppSets = append(result.BaseAppSets, appSets...)
+		for _, as := range appSets {
+			result.BaseAppSets = append(result.BaseAppSets, argocd.ParsedAppSet{
+				AppSet:     as.DeepCopy(),
+				SourceFile: filePath,
+			})
+		}
 	}
 
 	slog.Debug("parsed application CRs from both branches",
@@ -152,9 +168,16 @@ func detectApplicationChangesFromScan(scanned *ScannedRepoApps) *argocd.ParsedAp
 		}
 	}
 
-	// Modified apps: in both head and base
+	// Modified apps: in both head and base, but only if the CR content actually changed
 	for name, headApp := range headByName {
-		if _, exists := baseByName[name]; exists {
+		baseApp, exists := baseByName[name]
+		if !exists {
+			continue
+		}
+		// Compare the raw CR file content between branches
+		headContent, headHasFile := scanned.HeadContents[headApp.SourceFile]
+		baseContent, baseHasFile := scanned.BaseContents[baseApp.SourceFile]
+		if !headHasFile || !baseHasFile || !bytes.Equal(headContent, baseContent) {
 			slog.Debug("modified application detected via scan",
 				"app", name,
 				"source_file", headApp.SourceFile,
@@ -199,20 +222,20 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 
 	result := &ParsedApplicationSetChanges{}
 
-	headByName := make(map[string]*v1alpha1.ApplicationSet)
-	for i := range scanned.HeadAppSets {
-		headByName[scanned.HeadAppSets[i].Name] = &scanned.HeadAppSets[i]
+	headByName := make(map[string]argocd.ParsedAppSet)
+	for _, pas := range scanned.HeadAppSets {
+		headByName[pas.AppSet.Name] = pas
 	}
 
-	baseByName := make(map[string]*v1alpha1.ApplicationSet)
-	for i := range scanned.BaseAppSets {
-		baseByName[scanned.BaseAppSets[i].Name] = &scanned.BaseAppSets[i]
+	baseByName := make(map[string]argocd.ParsedAppSet)
+	for _, pas := range scanned.BaseAppSets {
+		baseByName[pas.AppSet.Name] = pas
 	}
 
 	// AppSets in head but not in base → new
-	for name, headAS := range headByName {
+	for name, headPAS := range headByName {
 		if _, exists := baseByName[name]; !exists {
-			apps, err := e.argocd.GenerateApplications(ctx, headAS)
+			apps, err := e.argocd.GenerateApplications(ctx, headPAS.AppSet)
 			if err != nil {
 				slog.Warn("failed to generate apps for new appset",
 					"appset", name, "error", err)
@@ -221,17 +244,19 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 			for j := range apps {
 				apps[j].ChangeType = models.ApplicationNew
 				apps[j].ApplicationSetName = name
+				apps[j].SourceFile = headPAS.SourceFile
 			}
 			result.NewApps = append(result.NewApps, apps...)
 			slog.Debug("new applicationset detected",
 				"appset", name,
+				"source_file", headPAS.SourceFile,
 				"generated_apps", len(apps),
 			)
 		}
 	}
 
 	// AppSets in base but not in head → deleted
-	for name := range baseByName {
+	for name, basePAS := range baseByName {
 		if _, exists := headByName[name]; !exists {
 			apps, err := e.argocd.GetApplicationsByApplicationSet(ctx, name)
 			if err != nil {
@@ -242,30 +267,32 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 			for j := range apps {
 				apps[j].ChangeType = models.ApplicationDeleted
 				apps[j].ApplicationSetName = name
+				apps[j].SourceFile = basePAS.SourceFile
 			}
 			result.DeletedApps = append(result.DeletedApps, apps...)
 			slog.Debug("deleted applicationset detected",
 				"appset", name,
+				"source_file", basePAS.SourceFile,
 				"existing_apps", len(apps),
 			)
 		}
 	}
 
 	// AppSets in both → compare generated apps
-	for name, headAS := range headByName {
-		baseAS, exists := baseByName[name]
+	for name, headPAS := range headByName {
+		basePAS, exists := baseByName[name]
 		if !exists {
 			continue
 		}
 
-		headApps, err := e.argocd.GenerateApplications(ctx, headAS)
+		headApps, err := e.argocd.GenerateApplications(ctx, headPAS.AppSet)
 		if err != nil {
 			slog.Warn("failed to generate head apps for modified appset",
 				"appset", name, "error", err)
 			continue
 		}
 
-		baseApps, err := e.argocd.GenerateApplications(ctx, baseAS)
+		baseApps, err := e.argocd.GenerateApplications(ctx, basePAS.AppSet)
 		if err != nil {
 			slog.Warn("failed to generate base apps for modified appset",
 				"appset", name, "error", err)
@@ -283,13 +310,15 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 		}
 
 		mod := AppSetModification{
-			Name: name,
+			Name:       name,
+			SourceFile: headPAS.SourceFile,
 		}
 
 		for _, a := range headApps {
 			if !baseAppNames[a.Name] {
 				a.ChangeType = models.ApplicationNew
 				a.ApplicationSetName = name
+				a.SourceFile = headPAS.SourceFile
 				mod.NewApps = append(mod.NewApps, a)
 				result.NewApps = append(result.NewApps, a)
 			}
@@ -299,6 +328,7 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 			if !headAppNames[a.Name] {
 				a.ChangeType = models.ApplicationDeleted
 				a.ApplicationSetName = name
+				a.SourceFile = headPAS.SourceFile
 				mod.RemovedApps = append(mod.RemovedApps, a)
 				result.DeletedApps = append(result.DeletedApps, a)
 			}
@@ -308,6 +338,7 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 			result.Modified = append(result.Modified, mod)
 			slog.Debug("applicationset generator changed",
 				"appset", name,
+				"source_file", headPAS.SourceFile,
 				"new_apps", len(mod.NewApps),
 				"removed_apps", len(mod.RemovedApps),
 			)
@@ -483,4 +514,14 @@ func (e *Executor) verifyDeletedAppsExist(ctx context.Context, parsed *argocd.Pa
 	parsed.Deleted = actuallyDeleted
 
 	return nil
+}
+
+// sortedKeys returns the keys of a map sorted alphabetically.
+func sortedKeys(m map[string][]byte) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

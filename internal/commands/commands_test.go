@@ -1423,15 +1423,17 @@ func TestDetectApplicationChangesFromScan_AppAddedAndRemoved(t *testing.T) {
 }
 
 func TestDetectApplicationChangesFromScan_ModifiedApp(t *testing.T) {
+	headContent := []byte("apiVersion: v1\nkind: Application\nmetadata:\n  name: my-app\nspec:\n  source:\n    path: apps/my-app\n    targetRevision: HEAD\n")
+	baseContent := []byte("apiVersion: v1\nkind: Application\nmetadata:\n  name: my-app\nspec:\n  source:\n    path: apps/my-app\n    targetRevision: main\n")
 	scanned := &ScannedRepoApps{
 		HeadApps: []models.Application{
-			{Name: "my-app", Path: "apps/my-app"},
+			{Name: "my-app", Path: "apps/my-app", SourceFile: "argocd/app.yaml"},
 		},
 		BaseApps: []models.Application{
-			{Name: "my-app", Path: "apps/my-app"},
+			{Name: "my-app", Path: "apps/my-app", SourceFile: "argocd/app.yaml"},
 		},
-		HeadContents: map[string][]byte{},
-		BaseContents: map[string][]byte{},
+		HeadContents: map[string][]byte{"argocd/app.yaml": headContent},
+		BaseContents: map[string][]byte{"argocd/app.yaml": baseContent},
 	}
 	parsed := detectApplicationChangesFromScan(scanned)
 	if len(parsed.New) != 0 {
@@ -1445,6 +1447,30 @@ func TestDetectApplicationChangesFromScan_ModifiedApp(t *testing.T) {
 	}
 	if parsed.Modified[0].Name != "my-app" {
 		t.Errorf("modified app name = %q, want 'my-app'", parsed.Modified[0].Name)
+	}
+}
+
+func TestDetectApplicationChangesFromScan_UnchangedApp(t *testing.T) {
+	content := []byte("apiVersion: v1\nkind: Application\nmetadata:\n  name: my-app\n")
+	scanned := &ScannedRepoApps{
+		HeadApps: []models.Application{
+			{Name: "my-app", Path: "apps/my-app", SourceFile: "argocd/app.yaml"},
+		},
+		BaseApps: []models.Application{
+			{Name: "my-app", Path: "apps/my-app", SourceFile: "argocd/app.yaml"},
+		},
+		HeadContents: map[string][]byte{"argocd/app.yaml": content},
+		BaseContents: map[string][]byte{"argocd/app.yaml": content},
+	}
+	parsed := detectApplicationChangesFromScan(scanned)
+	if len(parsed.New) != 0 {
+		t.Errorf("expected 0 new apps, got %d", len(parsed.New))
+	}
+	if len(parsed.Deleted) != 0 {
+		t.Errorf("expected 0 deleted apps, got %d", len(parsed.Deleted))
+	}
+	if len(parsed.Modified) != 0 {
+		t.Errorf("expected 0 modified apps (content unchanged), got %d", len(parsed.Modified))
 	}
 }
 

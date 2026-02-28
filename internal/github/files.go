@@ -123,14 +123,18 @@ func (c *Client) GetFileContents(ctx context.Context, owner, repo string, paths 
 		return nil, fmt.Errorf("getting archive link: %w", err)
 	}
 
-	resp, err := http.Get(archiveURL.String())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating archive download request: %w", err)
+	}
+
+	resp, err := client.Client().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("downloading archive: %w", err)
 	}
 	defer func() {
-		err := resp.Body.Close()
-		if err != nil {
-			slog.Error("error closing response body", "error", err)
+		if cerr := resp.Body.Close(); cerr != nil {
+			slog.Error("error closing response body", "error", cerr)
 		}
 	}()
 
@@ -157,7 +161,12 @@ func (c *Client) GetFilesByPattern(ctx context.Context, owner, repo, ref string,
 		return nil, fmt.Errorf("getting archive link: %w", err)
 	}
 
-	resp, err := http.Get(archiveURL.String())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, archiveURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating archive download request: %w", err)
+	}
+
+	resp, err := client.Client().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("downloading archive: %w", err)
 	}
