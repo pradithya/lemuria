@@ -141,6 +141,39 @@ func (c *Client) GetFileContents(ctx context.Context, owner, repo string, paths 
 	return vcs.ExtractFilesFromTarGz(resp.Body, paths)
 }
 
+// GetFilesByPattern retrieves all files matching the given filename patterns
+// (e.g. "*.yaml") and optionally limited to specific path prefixes, by
+// downloading a tarball archive and extracting matching entries in-memory.
+func (c *Client) GetFilesByPattern(ctx context.Context, owner, repo, ref string, patterns []string, pathPrefixes []string) (map[string][]byte, error) {
+	client, err := c.getInstallationClient(ctx, owner)
+	if err != nil {
+		return nil, err
+	}
+
+	archiveURL, _, err := client.Repositories.GetArchiveLink(ctx, owner, repo, github.Tarball, &github.RepositoryContentGetOptions{
+		Ref: ref,
+	}, 3)
+	if err != nil {
+		return nil, fmt.Errorf("getting archive link: %w", err)
+	}
+
+	resp, err := http.Get(archiveURL.String())
+	if err != nil {
+		return nil, fmt.Errorf("downloading archive: %w", err)
+	}
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			slog.Error("error closing response body", "error", cerr)
+		}
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("downloading archive: unexpected status %d", resp.StatusCode)
+	}
+
+	return vcs.ExtractFilesByPattern(resp.Body, patterns, pathPrefixes)
+}
+
 // IsYAMLFile checks if a filename has a YAML extension.
 // Deprecated: Use vcs.IsYAMLFile instead.
 func IsYAMLFile(filename string) bool {

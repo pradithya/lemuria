@@ -155,6 +155,7 @@ type RepoConfig struct {
 	RequireApproval  *bool                `koanf:"require_approval"`
 	AutoMerge        *bool                `koanf:"auto_merge"`
 	SkipNoChanges    *bool                `koanf:"skip_no_changes"`
+	CRPaths          []string             `koanf:"cr_paths"` // paths to scan for Application/ApplicationSet CRs
 	Applications     []ApplicationMapping `koanf:"applications"`
 	SyncRequirements []SyncRequirement    `koanf:"sync_requirements"`
 }

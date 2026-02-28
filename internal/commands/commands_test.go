@@ -40,6 +40,8 @@ type mockVCS struct {
 	repoConfigErr      error
 	fileContents       map[string][]byte
 	fileContentsErr    error
+	filesByPattern     map[string]map[string][]byte // key: ref → path → content
+	filesByPatternErr  error
 	pr                 *models.PullRequestDetail
 	prErr              error
 	prApproved         bool
@@ -176,6 +178,19 @@ func (m *mockVCS) MergePullRequest(_ context.Context, owner, repo string, number
 func (m *mockVCS) DeleteBranch(_ context.Context, owner, repo, branch string) error {
 	m.deletedBranches = append(m.deletedBranches, branch)
 	return m.deleteBranchErr
+}
+
+func (m *mockVCS) GetFilesByPattern(_ context.Context, _, _, ref string, _ []string, _ []string) (map[string][]byte, error) {
+	if m.filesByPatternErr != nil {
+		return nil, m.filesByPatternErr
+	}
+	if m.filesByPattern == nil {
+		return map[string][]byte{}, nil
+	}
+	if refContents, ok := m.filesByPattern[ref]; ok {
+		return refContents, nil
+	}
+	return map[string][]byte{}, nil
 }
 
 func (m *mockVCS) MaxCommentSize() int {
@@ -1324,112 +1339,112 @@ func TestSetToSlice(t *testing.T) {
 // Tests: detectModifiedAppsFromContent
 // ---------------------------------------------------------------------------
 
-func TestDetectModifiedAppsFromContent_BothNil(t *testing.T) {
-	newApps, deletedApps, err := detectModifiedAppsFromContent(nil, nil, "test.yaml")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestDetectApplicationChangesFromScan_EmptyScan(t *testing.T) {
+	scanned := &ScannedRepoApps{
+		HeadContents: map[string][]byte{},
+		BaseContents: map[string][]byte{},
 	}
-	if len(newApps) != 0 {
-		t.Errorf("expected 0 new apps, got %d", len(newApps))
+	parsed := detectApplicationChangesFromScan(scanned)
+	if len(parsed.New) != 0 {
+		t.Errorf("expected 0 new apps, got %d", len(parsed.New))
 	}
-	if len(deletedApps) != 0 {
-		t.Errorf("expected 0 deleted apps, got %d", len(deletedApps))
+	if len(parsed.Deleted) != 0 {
+		t.Errorf("expected 0 deleted apps, got %d", len(parsed.Deleted))
 	}
-}
-
-func TestDetectModifiedAppsFromContent_NonAppHeadContent(t *testing.T) {
-	// Content that parses as valid YAML but isn't an Application CR
-	headContent := []byte("key: value\nfoo: bar\n")
-	newApps, deletedApps, err := detectModifiedAppsFromContent(nil, headContent, "test.yaml")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// No Application CRs found, so no new or deleted apps
-	if len(newApps) != 0 {
-		t.Errorf("expected 0 new apps, got %d", len(newApps))
-	}
-	if len(deletedApps) != 0 {
-		t.Errorf("expected 0 deleted apps, got %d", len(deletedApps))
+	if len(parsed.Modified) != 0 {
+		t.Errorf("expected 0 modified apps, got %d", len(parsed.Modified))
 	}
 }
 
-func TestDetectModifiedAppsFromContent_NonAppBaseContent(t *testing.T) {
-	// Base content that parses but isn't an Application CR (treated as empty list)
-	validHead := `apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: my-app
-spec:
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: default
-  project: default
-  source:
-    repoURL: https://github.com/org/repo
-    path: apps/my-app
-    targetRevision: main
-`
-	newApps, deletedApps, err := detectModifiedAppsFromContent(
-		[]byte("key: value\n"), []byte(validHead), "test.yaml",
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestDetectApplicationChangesFromScan_NewApp(t *testing.T) {
+	scanned := &ScannedRepoApps{
+		HeadApps: []models.Application{
+			{Name: "my-app", Path: "apps/my-app"},
+		},
+		HeadContents: map[string][]byte{},
+		BaseContents: map[string][]byte{},
 	}
-	// Since base has no Application CRs, all head apps are new
-	if len(newApps) != 1 {
-		t.Errorf("expected 1 new app, got %d", len(newApps))
+	parsed := detectApplicationChangesFromScan(scanned)
+	if len(parsed.New) != 1 {
+		t.Fatalf("expected 1 new app, got %d", len(parsed.New))
 	}
-	if len(deletedApps) != 0 {
-		t.Errorf("expected 0 deleted apps, got %d", len(deletedApps))
+	if parsed.New[0].Name != "my-app" {
+		t.Errorf("new app name = %q, want 'my-app'", parsed.New[0].Name)
+	}
+	if parsed.New[0].ChangeType != models.ApplicationNew {
+		t.Errorf("change type = %q, want %q", parsed.New[0].ChangeType, models.ApplicationNew)
 	}
 }
 
-func TestDetectModifiedAppsFromContent_AppAddedAndRemoved(t *testing.T) {
-	baseContent := `apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: old-app
-spec:
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: default
-  project: default
-  source:
-    repoURL: https://github.com/org/repo
-    path: apps/old-app
-    targetRevision: main
-`
-	headContent := `apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: new-app
-spec:
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: default
-  project: default
-  source:
-    repoURL: https://github.com/org/repo
-    path: apps/new-app
-    targetRevision: main
-`
-	newApps, deletedApps, err := detectModifiedAppsFromContent(
-		[]byte(baseContent), []byte(headContent), "test.yaml",
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestDetectApplicationChangesFromScan_DeletedApp(t *testing.T) {
+	scanned := &ScannedRepoApps{
+		BaseApps: []models.Application{
+			{Name: "old-app", Path: "apps/old-app"},
+		},
+		HeadContents: map[string][]byte{},
+		BaseContents: map[string][]byte{},
 	}
-	if len(newApps) != 1 {
-		t.Fatalf("expected 1 new app, got %d", len(newApps))
+	parsed := detectApplicationChangesFromScan(scanned)
+	if len(parsed.Deleted) != 1 {
+		t.Fatalf("expected 1 deleted app, got %d", len(parsed.Deleted))
 	}
-	if newApps[0].Name != "new-app" {
-		t.Errorf("new app name = %q, want 'new-app'", newApps[0].Name)
+	if parsed.Deleted[0].Name != "old-app" {
+		t.Errorf("deleted app name = %q, want 'old-app'", parsed.Deleted[0].Name)
 	}
-	if len(deletedApps) != 1 {
-		t.Fatalf("expected 1 deleted app, got %d", len(deletedApps))
+	if parsed.Deleted[0].ChangeType != models.ApplicationDeleted {
+		t.Errorf("change type = %q, want %q", parsed.Deleted[0].ChangeType, models.ApplicationDeleted)
 	}
-	if deletedApps[0].Name != "old-app" {
-		t.Errorf("deleted app name = %q, want 'old-app'", deletedApps[0].Name)
+}
+
+func TestDetectApplicationChangesFromScan_AppAddedAndRemoved(t *testing.T) {
+	scanned := &ScannedRepoApps{
+		HeadApps: []models.Application{
+			{Name: "new-app", Path: "apps/new-app"},
+		},
+		BaseApps: []models.Application{
+			{Name: "old-app", Path: "apps/old-app"},
+		},
+		HeadContents: map[string][]byte{},
+		BaseContents: map[string][]byte{},
+	}
+	parsed := detectApplicationChangesFromScan(scanned)
+	if len(parsed.New) != 1 {
+		t.Fatalf("expected 1 new app, got %d", len(parsed.New))
+	}
+	if parsed.New[0].Name != "new-app" {
+		t.Errorf("new app name = %q, want 'new-app'", parsed.New[0].Name)
+	}
+	if len(parsed.Deleted) != 1 {
+		t.Fatalf("expected 1 deleted app, got %d", len(parsed.Deleted))
+	}
+	if parsed.Deleted[0].Name != "old-app" {
+		t.Errorf("deleted app name = %q, want 'old-app'", parsed.Deleted[0].Name)
+	}
+}
+
+func TestDetectApplicationChangesFromScan_ModifiedApp(t *testing.T) {
+	scanned := &ScannedRepoApps{
+		HeadApps: []models.Application{
+			{Name: "my-app", Path: "apps/my-app"},
+		},
+		BaseApps: []models.Application{
+			{Name: "my-app", Path: "apps/my-app"},
+		},
+		HeadContents: map[string][]byte{},
+		BaseContents: map[string][]byte{},
+	}
+	parsed := detectApplicationChangesFromScan(scanned)
+	if len(parsed.New) != 0 {
+		t.Errorf("expected 0 new apps, got %d", len(parsed.New))
+	}
+	if len(parsed.Deleted) != 0 {
+		t.Errorf("expected 0 deleted apps, got %d", len(parsed.Deleted))
+	}
+	if len(parsed.Modified) != 1 {
+		t.Fatalf("expected 1 modified app, got %d", len(parsed.Modified))
+	}
+	if parsed.Modified[0].Name != "my-app" {
+		t.Errorf("modified app name = %q, want 'my-app'", parsed.Modified[0].Name)
 	}
 }
 

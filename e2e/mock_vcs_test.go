@@ -218,6 +218,21 @@ func (m *MockVCSClient) MergePullRequest(_ context.Context, owner, repo string, 
 	return nil
 }
 
+func (m *MockVCSClient) GetFilesByPattern(_ context.Context, _, _, ref string, _ []string, _ []string) (map[string][]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Fallback: extract from FileContents keyed as "path@ref"
+	result := make(map[string][]byte)
+	suffix := "@" + ref
+	for key, content := range m.FileContents {
+		if len(key) > len(suffix) && key[len(key)-len(suffix):] == suffix {
+			path := key[:len(key)-len(suffix)]
+			result[path] = content
+		}
+	}
+	return result, nil
+}
+
 func (m *MockVCSClient) MaxCommentSize() int {
 	return 0 // no limit in tests
 }
