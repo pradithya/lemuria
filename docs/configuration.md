@@ -39,6 +39,7 @@ version: 1
 autoplan: true
 require_approval: true
 auto_merge: true
+skip_no_changes: true
 
 # Application to path mappings
 applications:
@@ -119,7 +120,7 @@ Settings are applied in this order (later overrides earlier):
 
 1. **Built-in defaults** (`config.DefaultConfig()`)
 2. **Server configuration** (`lemuria.yaml` - can be multiple files merged in order)
-3. **Repository configuration** (`.lemuria.yaml` - `autoplan`, `require_approval`, `auto_merge`)
+3. **Repository configuration** (`.lemuria.yaml` - `autoplan`, `require_approval`, `auto_merge`, `skip_no_changes`)
 4. **Sync requirements** (per-application `require_approval`, `allowed_users`)
 
 For approval requirements specifically, the resolution order is:
@@ -130,6 +131,10 @@ For approval requirements specifically, the resolution order is:
 For auto-merge, the resolution order is:
 1. Repository `.lemuria.yaml` top-level `auto_merge`
 2. Server `defaults.auto_merge`
+
+For skip-no-changes, the resolution order is:
+1. Repository `.lemuria.yaml` top-level `skip_no_changes`
+2. Server `defaults.skip_no_changes`
 
 ---
 
@@ -325,6 +330,7 @@ defaults:
   delete_source_branch: false
   auto_merge: false
   merge_method: "squash"
+  skip_no_changes: false
   allowed_repos:
     - "myorg/repo1"
     - "myorg/infra-*"
@@ -338,6 +344,7 @@ defaults:
 | `delete_source_branch` | bool | `false` | Delete branch after auto-merge |
 | `auto_merge` | bool | `false` | Auto-merge PR after successful sync |
 | `merge_method` | string | `squash` | Merge method: `squash`, `merge`, `rebase` |
+| `skip_no_changes` | bool | `false` | Skip syncing applications with no detected changes |
 | `allowed_repos` | []string | `[]` | Repository allowlist (empty = all repos allowed) |
 
 ### Repository Allowlist Patterns
@@ -444,6 +451,37 @@ auth:
       provider: "github"
       role: "admin"
 ```
+
+---
+
+## Skip No-Changes Configuration
+
+When `skip_no_changes: true`, Lemuria skips syncing applications where the plan detected no changes (plan output is "No changes detected" with no diffs). Skipped applications appear as succeeded in the sync results with the message "Skipped — no changes detected".
+
+This is useful for PRs affecting many applications where only a subset have actual changes — it avoids unnecessary sync operations and reduces overall sync time.
+
+**Server default:**
+
+```yaml
+defaults:
+  skip_no_changes: true
+```
+
+**Per-repository override** (`.lemuria.yaml`):
+
+```yaml
+skip_no_changes: true    # Override server default for this repo
+```
+
+The repo-level `skip_no_changes` setting takes precedence over the server default.
+
+---
+
+## Parallel Sync
+
+When syncing multiple applications, Lemuria syncs all applications concurrently rather than sequentially. This significantly reduces total sync time for PRs affecting many applications.
+
+Each application's sync operates independently (separate ArgoCD API calls, separate lock entries), and results are tracked per-application in the progress comment. The ArgoCD server is the natural concurrency bottleneck.
 
 ---
 
