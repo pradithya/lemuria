@@ -23,6 +23,7 @@ import (
 	"time"
 
 	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
@@ -193,16 +194,20 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		skipNoChanges = *repoConfigForSkip.SkipNoChanges
 	}
 
-	// Sync each application in parallel
+	// Sync each application in parallel (bounded concurrency)
 	slog.Debug("starting sync for applications",
 		"count", len(locks),
 		"skip_no_changes", skipNoChanges,
 	)
 	results := make([]syncResult, len(locks))
-	var wg sync.WaitGroup
+	g := new(errgroup.Group)
+	g.SetLimit(10)
 	for i, l := range locks {
-		// Skip applications with no detected changes if configured
-		if skipNoChanges && l.PlanOutput == "No changes detected" && len(l.PlanDiffs) == 0 {
+		// Skip applications with no detected changes if configured.
+		// A no-op plan stores PlanOutput="" with zero diffs, or
+		// PlanOutput="No changes detected" (from formatPlanSummary fallback).
+		if skipNoChanges && len(l.PlanDiffs) == 0 &&
+			(l.PlanOutput == "No changes detected" || l.PlanOutput == "") {
 			slog.Debug("skipping application with no changes",
 				"app", l.Application,
 			)
@@ -214,24 +219,24 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 					Application:  l.Application,
 					Phase:        models.SyncPhaseSucceeded,
 					Message:      "Skipped — no changes detected",
-					HealthStatus: models.HealthStatusHealthy,
+					HealthStatus: models.HealthStatusUnknown,
 				},
 			}
 			tracker.updateResult(ctx, i, results[i])
 			continue
 		}
 
-		wg.Add(1)
-		go func(idx int, lock models.Lock) {
-			defer wg.Done()
+		idx, lock := i, l
+		g.Go(func() error {
 			slog.Debug("syncing application",
 				"app", lock.Application,
 			)
 			results[idx] = e.syncApplication(ctx, lock, cmd, event, headSourceContents)
 			tracker.updateResult(ctx, idx, results[idx])
-		}(i, l)
+			return nil
+		})
 	}
-	wg.Wait()
+	g.Wait() //nolint:errcheck
 
 	// Check if all syncs succeeded
 	allSucceeded := true

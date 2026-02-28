@@ -46,7 +46,6 @@ func TestLockAcquireRelease(t *testing.T) {
 	}
 	if lock == nil {
 		t.Fatal("Expected lock to exist")
-		return
 	}
 
 	if lock.PRNumber != 123 {
@@ -248,7 +247,6 @@ func TestStorePlanWithDiffs(t *testing.T) {
 	}
 	if lock == nil {
 		t.Fatal("Expected lock to exist")
-		return
 	}
 	if lock.PlanRevision != revision {
 		t.Errorf("Expected PlanRevision %q, got %q", revision, lock.PlanRevision)

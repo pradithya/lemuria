@@ -460,11 +460,11 @@ When `skip_no_changes: true`, Lemuria skips syncing applications where the plan 
 
 This is useful for PRs affecting many applications where only a subset have actual changes — it avoids unnecessary sync operations and reduces overall sync time.
 
-**Server default:**
+**Server default** (disabled by default):
 
 ```yaml
 defaults:
-  skip_no_changes: true
+  skip_no_changes: false
 ```
 
 **Per-repository override** (`.lemuria.yaml`):

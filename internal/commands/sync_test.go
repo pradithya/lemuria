@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1145,8 +1146,14 @@ func TestSyncApplicationMultiSource(t *testing.T) {
 }
 
 func TestExecuteSyncParallel(t *testing.T) {
-	// Verify that multiple applications are synced concurrently by checking
-	// that all sync calls happen (via the fake server) and results are correct.
+	// Prove that sync executes concurrently: each fake sync blocks until all
+	// 3 goroutines have started. If execution were sequential, the test would
+	// deadlock (barrier never reached).
+	const numApps = 3
+	var started sync.WaitGroup
+	started.Add(numApps)
+	barrier := make(chan struct{})
+
 	app := v1alpha1.Application{
 		Spec: v1alpha1.ApplicationSpec{
 			Source: &v1alpha1.ApplicationSource{
@@ -1156,8 +1163,23 @@ func TestExecuteSyncParallel(t *testing.T) {
 			},
 		},
 	}
+
+	// Create a blocking fake server: sync endpoint waits for all goroutines
 	fake := newFakeArgoServer(app)
 	defer fake.close()
+
+	origHandler := fake.server.Config.Handler
+	blockingMux := http.NewServeMux()
+	blockingMux.HandleFunc("POST /api/v1/applications/", func(w http.ResponseWriter, r *http.Request) {
+		started.Done() // signal this goroutine has started
+		<-barrier      // wait for all to start
+		origHandler.ServeHTTP(w, r)
+	})
+	// Proxy all other requests to original handler
+	blockingMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		origHandler.ServeHTTP(w, r)
+	})
+	fake.server.Config.Handler = blockingMux
 
 	lockMgr := &mockLockManagerForSyncWithList{
 		locks: []models.Lock{
@@ -1190,6 +1212,12 @@ func TestExecuteSyncParallel(t *testing.T) {
 		},
 		Comment: &models.Comment{ID: 100},
 	}
+
+	// Release the barrier once all goroutines have started
+	go func() {
+		started.Wait()
+		close(barrier)
+	}()
 
 	err := exec.executeSync(context.Background(), &Command{Name: CommandSync}, event)
 	if err != nil {
@@ -1382,6 +1410,67 @@ func TestExecuteSyncSkipNoChangesRepoConfigOverride(t *testing.T) {
 	syncCalls := int(fake.syncCallCount.Load())
 	if syncCalls != 1 {
 		t.Errorf("expected 1 sync call (repo config skip_no_changes=true), got %d", syncCalls)
+	}
+}
+
+func TestExecuteSyncSkipNoChangesEmptyOutput(t *testing.T) {
+	// When diff succeeds with zero diffs, planApplication stores PlanOutput=""
+	// and PlanDiffs=nil. Verify that skip_no_changes handles this case.
+	app := v1alpha1.Application{
+		Spec: v1alpha1.ApplicationSpec{
+			Source: &v1alpha1.ApplicationSource{
+				RepoURL:        "https://github.com/org/repo",
+				Path:           "manifests",
+				TargetRevision: "main",
+			},
+		},
+	}
+	fake := newFakeArgoServer(app)
+	defer fake.close()
+
+	lockMgr := &mockLockManagerForSyncWithList{
+		locks: []models.Lock{
+			{Application: "app-changed", PlanRevision: "abc123", PlanOutput: "some diff", PlanDiffs: []models.PlanDiffEntry{{Diff: "some diff"}}},
+			{Application: "app-no-changes-empty", PlanRevision: "abc123", PlanOutput: "", PlanDiffs: nil},
+		},
+	}
+
+	mock := &mockVCSForSync{prMergeable: true, prApproved: true}
+	exec := &Executor{
+		vcs:    mock,
+		argocd: fake.client(),
+		lock:   lockMgr,
+		config: &config.Config{
+			ArgoCD:   config.ArgoCDConfig{SyncTimeout: 30 * time.Second},
+			Defaults: config.DefaultsConfig{SkipNoChanges: true},
+		},
+		renderer: diff.NewRenderer(),
+	}
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner:    "org",
+			Name:     "repo",
+			FullName: "org/repo",
+			HTMLURL:  "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadSHA: "abc123",
+			HeadRef: "feature-branch",
+		},
+		Comment: &models.Comment{ID: 100},
+	}
+
+	err := exec.executeSync(context.Background(), &Command{Name: CommandSync}, event)
+	if err != nil {
+		t.Fatalf("executeSync() unexpected error: %v", err)
+	}
+
+	// Only the app with changes should be synced; the empty-output app should be skipped
+	syncCalls := int(fake.syncCallCount.Load())
+	if syncCalls != 1 {
+		t.Errorf("expected 1 sync call (skipping empty-output no-changes app), got %d", syncCalls)
 	}
 }
 
