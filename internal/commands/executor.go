@@ -210,7 +210,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		return nil, fmt.Errorf("getting changed files: %w", err)
 	}
 
-	filePaths := vcs.GetFilePaths(files)
+	filePaths := vcs.GetAllFilePaths(files)
 	slog.Debug("retrieved changed files",
 		"count", len(filePaths),
 		"files", filePaths,

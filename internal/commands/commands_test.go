@@ -1341,8 +1341,8 @@ func TestSetToSlice(t *testing.T) {
 
 func TestDetectApplicationChangesFromScan_EmptyScan(t *testing.T) {
 	scanned := &ScannedRepoApps{
-		HeadContents: map[string][]byte{},
-		BaseContents: map[string][]byte{},
+		HeadAppContent: map[string][]byte{},
+		BaseAppContent: map[string][]byte{},
 	}
 	parsed := detectApplicationChangesFromScan(scanned)
 	if len(parsed.New) != 0 {
@@ -1361,8 +1361,8 @@ func TestDetectApplicationChangesFromScan_NewApp(t *testing.T) {
 		HeadApps: []models.Application{
 			{Name: "my-app", Path: "apps/my-app"},
 		},
-		HeadContents: map[string][]byte{},
-		BaseContents: map[string][]byte{},
+		HeadAppContent: map[string][]byte{},
+		BaseAppContent: map[string][]byte{},
 	}
 	parsed := detectApplicationChangesFromScan(scanned)
 	if len(parsed.New) != 1 {
@@ -1381,8 +1381,8 @@ func TestDetectApplicationChangesFromScan_DeletedApp(t *testing.T) {
 		BaseApps: []models.Application{
 			{Name: "old-app", Path: "apps/old-app"},
 		},
-		HeadContents: map[string][]byte{},
-		BaseContents: map[string][]byte{},
+		HeadAppContent: map[string][]byte{},
+		BaseAppContent: map[string][]byte{},
 	}
 	parsed := detectApplicationChangesFromScan(scanned)
 	if len(parsed.Deleted) != 1 {
@@ -1404,8 +1404,8 @@ func TestDetectApplicationChangesFromScan_AppAddedAndRemoved(t *testing.T) {
 		BaseApps: []models.Application{
 			{Name: "old-app", Path: "apps/old-app"},
 		},
-		HeadContents: map[string][]byte{},
-		BaseContents: map[string][]byte{},
+		HeadAppContent: map[string][]byte{},
+		BaseAppContent: map[string][]byte{},
 	}
 	parsed := detectApplicationChangesFromScan(scanned)
 	if len(parsed.New) != 1 {
@@ -1432,8 +1432,8 @@ func TestDetectApplicationChangesFromScan_ModifiedApp(t *testing.T) {
 		BaseApps: []models.Application{
 			{Name: "my-app", Path: "apps/my-app", SourceFile: "argocd/app.yaml"},
 		},
-		HeadContents: map[string][]byte{"argocd/app.yaml": headContent},
-		BaseContents: map[string][]byte{"argocd/app.yaml": baseContent},
+		HeadAppContent: map[string][]byte{"my-app": headContent},
+		BaseAppContent: map[string][]byte{"my-app": baseContent},
 	}
 	parsed := detectApplicationChangesFromScan(scanned)
 	if len(parsed.New) != 0 {
@@ -1459,8 +1459,8 @@ func TestDetectApplicationChangesFromScan_UnchangedApp(t *testing.T) {
 		BaseApps: []models.Application{
 			{Name: "my-app", Path: "apps/my-app", SourceFile: "argocd/app.yaml"},
 		},
-		HeadContents: map[string][]byte{"argocd/app.yaml": content},
-		BaseContents: map[string][]byte{"argocd/app.yaml": content},
+		HeadAppContent: map[string][]byte{"my-app": content},
+		BaseAppContent: map[string][]byte{"my-app": content},
 	}
 	parsed := detectApplicationChangesFromScan(scanned)
 	if len(parsed.New) != 0 {
@@ -1471,6 +1471,46 @@ func TestDetectApplicationChangesFromScan_UnchangedApp(t *testing.T) {
 	}
 	if len(parsed.Modified) != 0 {
 		t.Errorf("expected 0 modified apps (content unchanged), got %d", len(parsed.Modified))
+	}
+}
+
+func TestDetectApplicationChangesFromScan_MultiAppFilePartialChange(t *testing.T) {
+	// Two apps share the same source file. Only app-a has different content
+	// between head and base; app-b is identical. We expect only app-a to
+	// appear in Modified.
+	sharedContent := []byte("apiVersion: v1\nkind: Application\nmetadata:\n  name: app-b\nspec:\n  source:\n    path: apps/b\n")
+	scanned := &ScannedRepoApps{
+		HeadApps: []models.Application{
+			{Name: "app-a", Path: "apps/a", SourceFile: "argocd/multi.yaml"},
+			{Name: "app-b", Path: "apps/b", SourceFile: "argocd/multi.yaml"},
+		},
+		BaseApps: []models.Application{
+			{Name: "app-a", Path: "apps/a", SourceFile: "argocd/multi.yaml"},
+			{Name: "app-b", Path: "apps/b", SourceFile: "argocd/multi.yaml"},
+		},
+		HeadAppContent: map[string][]byte{
+			"app-a": []byte("apiVersion: v1\nkind: Application\nmetadata:\n  name: app-a\nspec:\n  source:\n    path: apps/a\n    targetRevision: HEAD\n"),
+			"app-b": sharedContent,
+		},
+		BaseAppContent: map[string][]byte{
+			"app-a": []byte("apiVersion: v1\nkind: Application\nmetadata:\n  name: app-a\nspec:\n  source:\n    path: apps/a\n    targetRevision: main\n"),
+			"app-b": sharedContent,
+		},
+	}
+
+	parsed := detectApplicationChangesFromScan(scanned)
+
+	if len(parsed.New) != 0 {
+		t.Errorf("expected 0 new apps, got %d", len(parsed.New))
+	}
+	if len(parsed.Deleted) != 0 {
+		t.Errorf("expected 0 deleted apps, got %d", len(parsed.Deleted))
+	}
+	if len(parsed.Modified) != 1 {
+		t.Fatalf("expected 1 modified app, got %d", len(parsed.Modified))
+	}
+	if parsed.Modified[0].Name != "app-a" {
+		t.Errorf("modified app name = %q, want 'app-a'", parsed.Modified[0].Name)
 	}
 }
 

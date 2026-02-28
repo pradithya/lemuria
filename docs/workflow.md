@@ -220,7 +220,7 @@ Lemuria uses a **repo-scan-first** approach to detect affected applications:
 3. **Change detection**: Compares head vs base branch applications by name to detect:
    - **New apps**: Application CRs in head but not in base
    - **Deleted apps**: Application CRs in base but not in head
-   - **Modified apps**: Application CRs present in both branches
+   - **Modified apps**: Application CRs whose names exist in both branches and whose manifest content differs between head and base (or whose CR cannot be retrieved in one of the branches, in which case Lemuria conservatively treats them as modified)
 
 4. **ApplicationSet expansion**: For ApplicationSet CRs that changed between branches, uses the ArgoCD Generate API to preview which apps would be added or removed.
 

@@ -27,12 +27,14 @@ import (
 
 // ScannedRepoApps holds the result of scanning both branches for Application/ApplicationSet CRs.
 type ScannedRepoApps struct {
-	HeadApps     []models.Application
-	HeadAppSets  []argocd.ParsedAppSet
-	BaseApps     []models.Application
-	BaseAppSets  []argocd.ParsedAppSet
-	HeadContents map[string][]byte
-	BaseContents map[string][]byte
+	HeadApps    []models.Application
+	HeadAppSets []argocd.ParsedAppSet
+	BaseApps    []models.Application
+	BaseAppSets []argocd.ParsedAppSet
+	// HeadAppContent and BaseAppContent hold per-app serialized YAML keyed by app name,
+	// enabling per-application comparison even when multiple apps share a single YAML file.
+	HeadAppContent map[string][]byte
+	BaseAppContent map[string][]byte
 }
 
 // scanRepoForApplications fetches all YAML files from both head and base branches,
@@ -45,7 +47,8 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 		"cr_paths", crPaths,
 	)
 
-	patterns := []string{"*.yaml", "*.yml"}
+	// Include uppercase variants for case-insensitive matching, consistent with vcs.IsYAMLFile
+	patterns := []string{"*.yaml", "*.yml", "*.YAML", "*.YML", "*.Yaml", "*.Yml"}
 
 	// Fetch all YAML files from head branch
 	headContents, err := e.vcs.GetFilesByPattern(ctx, event.Repo.Owner, event.Repo.Name, event.PR.HeadRef, patterns, crPaths)
@@ -65,8 +68,8 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 	)
 
 	result := &ScannedRepoApps{
-		HeadContents: headContents,
-		BaseContents: baseContents,
+		HeadAppContent: make(map[string][]byte),
+		BaseAppContent: make(map[string][]byte),
 	}
 
 	// Sort file paths for deterministic iteration order
@@ -82,6 +85,16 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 			continue
 		}
 		result.HeadApps = append(result.HeadApps, apps...)
+
+		// Extract per-app serialized content for fine-grained comparison
+		appContent, err := argocd.ParseApplicationContentFromYAML(content)
+		if err != nil {
+			slog.Debug("failed to extract per-app content from head file", "file", filePath, "error", err)
+		} else {
+			for name, data := range appContent {
+				result.HeadAppContent[name] = data
+			}
+		}
 
 		appSets, err := argocd.ParseApplicationSetsFromYAML(content, filePath)
 		if err != nil {
@@ -105,6 +118,16 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 			continue
 		}
 		result.BaseApps = append(result.BaseApps, apps...)
+
+		// Extract per-app serialized content for fine-grained comparison
+		appContent, err := argocd.ParseApplicationContentFromYAML(content)
+		if err != nil {
+			slog.Debug("failed to extract per-app content from base file", "file", filePath, "error", err)
+		} else {
+			for name, data := range appContent {
+				result.BaseAppContent[name] = data
+			}
+		}
 
 		appSets, err := argocd.ParseApplicationSetsFromYAML(content, filePath)
 		if err != nil {
@@ -174,17 +197,17 @@ func detectApplicationChangesFromScan(scanned *ScannedRepoApps) *argocd.ParsedAp
 		}
 	}
 
-	// Modified apps: in both head and base, but only if the CR content actually changed
+	// Modified apps: in both head and base, but only if the per-app CR content actually changed.
+	// Uses per-app serialized YAML (not whole-file bytes) so that changes to one app in a
+	// multi-app file don't falsely mark other apps in the same file as modified.
 	for _, name := range headNames {
 		headApp := headByName[name]
-		baseApp, exists := baseByName[name]
-		if !exists {
+		if _, exists := baseByName[name]; !exists {
 			continue
 		}
-		// Compare the raw CR file content between branches
-		headContent, headHasFile := scanned.HeadContents[headApp.SourceFile]
-		baseContent, baseHasFile := scanned.BaseContents[baseApp.SourceFile]
-		if !headHasFile || !baseHasFile || !bytes.Equal(headContent, baseContent) {
+		headContent, headHas := scanned.HeadAppContent[name]
+		baseContent, baseHas := scanned.BaseAppContent[name]
+		if !headHas || !baseHas || !bytes.Equal(headContent, baseContent) {
 			slog.Debug("modified application detected via scan",
 				"app", name,
 				"source_file", headApp.SourceFile,

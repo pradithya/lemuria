@@ -275,9 +275,9 @@ func TestDetectApplicationSetChangesFromScan_NewAppSet(t *testing.T) {
 		HeadAppSets: []argocd.ParsedAppSet{
 			{AppSet: &appSet, SourceFile: "argocd/appset.yaml"},
 		},
-		BaseAppSets:  []argocd.ParsedAppSet{},
-		HeadContents: map[string][]byte{},
-		BaseContents: map[string][]byte{},
+		BaseAppSets:    []argocd.ParsedAppSet{},
+		HeadAppContent: map[string][]byte{},
+		BaseAppContent: map[string][]byte{},
 	}
 
 	result, err := exec.detectApplicationSetChangesFromScan(context.Background(), scanned)
@@ -335,8 +335,8 @@ func TestDetectApplicationSetChangesFromScan_DeletedAppSet(t *testing.T) {
 		BaseAppSets: []argocd.ParsedAppSet{
 			{AppSet: &appSet, SourceFile: "argocd/old-appset.yaml"},
 		},
-		HeadContents: map[string][]byte{},
-		BaseContents: map[string][]byte{},
+		HeadAppContent: map[string][]byte{},
+		BaseAppContent: map[string][]byte{},
 	}
 
 	result, err := exec.detectApplicationSetChangesFromScan(context.Background(), scanned)
@@ -398,8 +398,8 @@ func TestDetectApplicationSetChangesFromScan_ModifiedAppSet(t *testing.T) {
 		BaseAppSets: []argocd.ParsedAppSet{
 			{AppSet: &baseAppSet, SourceFile: "argocd/appset.yaml"},
 		},
-		HeadContents: map[string][]byte{},
-		BaseContents: map[string][]byte{},
+		HeadAppContent: map[string][]byte{},
+		BaseAppContent: map[string][]byte{},
 	}
 
 	result, err := exec.detectApplicationSetChangesFromScan(context.Background(), scanned)

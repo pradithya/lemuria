@@ -67,6 +67,46 @@ func ParseApplicationsFromYAML(content []byte, sourceFile string) ([]models.Appl
 	return apps, nil
 }
 
+// ParseApplicationContentFromYAML parses YAML content and returns the
+// serialized per-application YAML bytes keyed by app name. This enables
+// per-app comparison even when multiple Application CRs share a single file.
+func ParseApplicationContentFromYAML(content []byte) (map[string][]byte, error) {
+	result := make(map[string][]byte)
+
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+
+	for {
+		var rawDoc any
+		err := decoder.Decode(&rawDoc)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			continue
+		}
+
+		yamlBytes, err := yaml.Marshal(rawDoc)
+		if err != nil {
+			continue
+		}
+
+		var app v1alpha1.Application
+		if err := sigsyaml.Unmarshal(yamlBytes, &app); err != nil {
+			continue
+		}
+
+		if !strings.HasPrefix(app.APIVersion, "argoproj.io/") || app.Kind != "Application" {
+			continue
+		}
+
+		if app.Name != "" {
+			result[app.Name] = yamlBytes
+		}
+	}
+
+	return result, nil
+}
+
 // ParseRawApplicationFromYAML parses YAML content and returns the typed
 // v1alpha1.Application for the Application CR matching appName.
 // Handles multi-document YAML files.
