@@ -376,7 +376,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		slog.Debug("application has auto-sync enabled",
 			"app", app.Name,
 		)
-		result.Warning = "Auto-sync is enabled. Disable auto-sync before using Lemuria to prevent conflicts."
+		result.Warning = "Auto-sync is enabled. It will be temporarily disabled during sync and restored when the PR is merged or closed."
 	}
 
 	// Try to acquire lock

@@ -265,6 +265,27 @@ func (m *mockLock) GetPlan(_ context.Context, application string, prNumber int) 
 
 func (m *mockLock) Ping(_ context.Context) error { return nil }
 func (m *mockLock) Close() error                 { return nil }
+func (m *mockLock) UpdateLock(_ context.Context, _ *models.Lock) error {
+	return nil
+}
+func (m *mockLock) StoreAppSetAutoSync(_ context.Context, _, _ string, _ int, _ []byte) error {
+	return nil
+}
+func (m *mockLock) GetAppSetAutoSync(_ context.Context, _, _ string, _ int) ([]byte, error) {
+	return nil, nil
+}
+func (m *mockLock) DeleteAppSetAutoSync(_ context.Context, _, _ string, _ int) error {
+	return nil
+}
+func (m *mockLock) StoreParentAutoSync(_ context.Context, _, _ string, _ int, _ []byte) error {
+	return nil
+}
+func (m *mockLock) ListParentAutoSync(_ context.Context, _ string, _ int) (map[string][]byte, error) {
+	return nil, nil
+}
+func (m *mockLock) DeleteParentAutoSync(_ context.Context, _, _ string, _ int) error {
+	return nil
+}
 
 // ---------------------------------------------------------------------------
 // Helper functions

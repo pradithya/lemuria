@@ -16,6 +16,7 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -48,11 +49,12 @@ func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *mod
 			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Rollback\n\n"+
 				"Application `%s` not found: %s", cmd.Application, err.Error()))
 		}
-		// Check if auto-sync is enabled
-		if app.HasAutoSync() {
-			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Rollback\n\n"+
-				"❌ Application `%s` has auto-sync enabled.\n\n"+
-				"Disable auto-sync before using Lemuria to prevent conflicts.", cmd.Application))
+		// Disable auto-sync if enabled (will be restored on PR merge/close)
+		if app.HasAutoSync() && !cmd.DryRun {
+			if err := e.disableAutoSyncForRollback(ctx, cmd.Application, event); err != nil {
+				return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Rollback\n\n"+
+					"Failed to disable auto-sync for `%s`: %s", cmd.Application, err.Error()))
+			}
 		}
 		return e.performRollback(ctx, cmd, event, app)
 	}
@@ -68,6 +70,13 @@ func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *mod
 			"No applications are locked by this PR. Nothing to rollback.")
 	}
 
+	// Disable auto-sync on locked apps before rollback (skip for dry-run)
+	if !cmd.DryRun {
+		if err := e.disableAutoSyncForLocks(ctx, locks, event); err != nil {
+			return e.postError(ctx, event, fmt.Errorf("disabling auto-sync for rollback: %w", err))
+		}
+	}
+
 	// Rollback each application
 	var results []rollbackResult
 	for _, l := range locks {
@@ -79,14 +88,6 @@ func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *mod
 			})
 			continue
 		}
-		// Check if auto-sync is enabled
-		if app.HasAutoSync() {
-			results = append(results, rollbackResult{
-				Application: l.Application,
-				Error:       fmt.Errorf("auto-sync is enabled - disable auto-sync before using Lemuria"),
-			})
-			continue
-		}
 		result := e.rollbackApplication(ctx, cmd, event, app)
 		results = append(results, result)
 	}
@@ -94,6 +95,46 @@ func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *mod
 	// Render and post results
 	output := e.renderRollbackResults(results, cmd.DryRun)
 	return e.postComment(ctx, event, "", output)
+}
+
+// disableAutoSyncForRollback disables auto-sync on a single application and its
+// parent apps for rollback. It stores the original policy in the lock if one exists.
+func (e *Executor) disableAutoSyncForRollback(ctx context.Context, appName string, event *models.PREvent) error {
+	state, err := disableAutoSync(ctx, e.argocd, appName)
+	if err != nil {
+		return err
+	}
+	if state == nil {
+		return nil
+	}
+
+	policyJSON, err := json.Marshal(state.OriginalPolicy)
+	if err != nil {
+		return fmt.Errorf("marshaling sync policy: %w", err)
+	}
+
+	// Update lock if one exists
+	currentLock, _ := e.lock.Get(ctx, appName)
+	if currentLock != nil {
+		currentLock.AutoSyncDisabled = true
+		currentLock.OriginalSyncPolicy = policyJSON
+		currentLock.ApplicationSetName = state.ApplicationSetName
+		if err := e.lock.UpdateLock(ctx, currentLock); err != nil {
+			slog.Warn("failed to store auto-sync state in lock",
+				"app", appName, "error", err)
+		}
+	}
+
+	// Disable auto-sync on parent apps
+	visited := map[string]bool{appName: true}
+	if err := disableParentAutoSync(ctx, e.argocd, e.lock, appName,
+		event.Repo.FullName, event.Repo.HTMLURL, string(event.Provider),
+		event.PR.Number, event.Sender.Login, visited, 0); err != nil {
+		slog.Warn("failed to disable parent auto-sync for rollback",
+			"app", appName, "error", err)
+	}
+
+	return nil
 }
 
 // rollbackResult holds the result of rolling back a single application.

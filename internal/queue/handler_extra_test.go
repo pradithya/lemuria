@@ -208,6 +208,34 @@ func (m *mockLockManager) Close() error {
 	return nil
 }
 
+func (m *mockLockManager) UpdateLock(_ context.Context, _ *models.Lock) error {
+	return nil
+}
+
+func (m *mockLockManager) StoreAppSetAutoSync(_ context.Context, _, _ string, _ int, _ []byte) error {
+	return nil
+}
+
+func (m *mockLockManager) GetAppSetAutoSync(_ context.Context, _, _ string, _ int) ([]byte, error) {
+	return nil, nil
+}
+
+func (m *mockLockManager) DeleteAppSetAutoSync(_ context.Context, _, _ string, _ int) error {
+	return nil
+}
+
+func (m *mockLockManager) StoreParentAutoSync(_ context.Context, _, _ string, _ int, _ []byte) error {
+	return nil
+}
+
+func (m *mockLockManager) ListParentAutoSync(_ context.Context, _ string, _ int) (map[string][]byte, error) {
+	return nil, nil
+}
+
+func (m *mockLockManager) DeleteParentAutoSync(_ context.Context, _, _ string, _ int) error {
+	return nil
+}
+
 // Compile-time interface checks
 var _ vcs.Client = (*mockVCSClient)(nil)
 

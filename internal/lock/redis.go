@@ -35,6 +35,14 @@ const (
 	planKeyPrefix = "lemuria:plan:"
 	// prLocksKeyPrefix is the prefix for PR-to-locks index.
 	prLocksKeyPrefix = "lemuria:pr-locks:"
+	// appSetAutoSyncKeyPrefix is the prefix for ApplicationSet auto-sync policy storage.
+	appSetAutoSyncKeyPrefix = "lemuria:appset-autosync:"
+	// prAppSetsKeyPrefix is the prefix for PR-to-ApplicationSets index.
+	prAppSetsKeyPrefix = "lemuria:pr-appsets:"
+	// parentAutoSyncKeyPrefix is the prefix for parent app auto-sync policy storage.
+	parentAutoSyncKeyPrefix = "lemuria:parent-autosync:"
+	// prParentsKeyPrefix is the prefix for PR-to-parent-apps index.
+	prParentsKeyPrefix = "lemuria:pr-parents:"
 	// lockTTL is the default TTL for locks (7 days).
 	lockTTL = 7 * 24 * time.Hour
 )
@@ -273,6 +281,117 @@ func (m *RedisManager) StorePlan(ctx context.Context, application string, prNumb
 func (m *RedisManager) GetPlan(ctx context.Context, application string, prNumber int) (string, error) {
 	key := planKeyPrefix + application + ":" + strconv.Itoa(prNumber)
 	return m.client.Get(ctx, key).Result()
+}
+
+// UpdateLock updates an existing lock's fields.
+func (m *RedisManager) UpdateLock(ctx context.Context, lock *models.Lock) error {
+	return m.setLock(ctx, lock)
+}
+
+// StoreAppSetAutoSync stores the original ApplicationSet auto-sync policy.
+func (m *RedisManager) StoreAppSetAutoSync(ctx context.Context, appSetName, repo string, prNumber int, originalPolicy []byte) error {
+	key := m.appSetAutoSyncKey(appSetName, repo, prNumber)
+	if err := m.client.Set(ctx, key, originalPolicy, lockTTL).Err(); err != nil {
+		return fmt.Errorf("storing appset auto-sync policy: %w", err)
+	}
+
+	// Add to PR index for lookup during UnlockAll
+	indexKey := m.prAppSetsKey(repo, prNumber)
+	if err := m.client.SAdd(ctx, indexKey, appSetName).Err(); err != nil {
+		return fmt.Errorf("updating PR appsets index: %w", err)
+	}
+	m.client.Expire(ctx, indexKey, lockTTL)
+
+	return nil
+}
+
+// GetAppSetAutoSync retrieves the stored original ApplicationSet auto-sync policy.
+func (m *RedisManager) GetAppSetAutoSync(ctx context.Context, appSetName, repo string, prNumber int) ([]byte, error) {
+	key := m.appSetAutoSyncKey(appSetName, repo, prNumber)
+	data, err := m.client.Get(ctx, key).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getting appset auto-sync policy: %w", err)
+	}
+	return data, nil
+}
+
+// DeleteAppSetAutoSync removes the stored ApplicationSet auto-sync policy.
+func (m *RedisManager) DeleteAppSetAutoSync(ctx context.Context, appSetName, repo string, prNumber int) error {
+	key := m.appSetAutoSyncKey(appSetName, repo, prNumber)
+	m.client.Del(ctx, key)
+
+	indexKey := m.prAppSetsKey(repo, prNumber)
+	m.client.SRem(ctx, indexKey, appSetName)
+
+	return nil
+}
+
+// StoreParentAutoSync stores the original parent app auto-sync policy.
+func (m *RedisManager) StoreParentAutoSync(ctx context.Context, parentAppName, repo string, prNumber int, originalPolicy []byte) error {
+	key := m.parentAutoSyncKey(parentAppName, repo, prNumber)
+	if err := m.client.Set(ctx, key, originalPolicy, lockTTL).Err(); err != nil {
+		return fmt.Errorf("storing parent auto-sync policy: %w", err)
+	}
+
+	// Add to PR index for lookup during UnlockAll
+	indexKey := m.prParentsKey(repo, prNumber)
+	if err := m.client.SAdd(ctx, indexKey, parentAppName).Err(); err != nil {
+		return fmt.Errorf("updating PR parents index: %w", err)
+	}
+	m.client.Expire(ctx, indexKey, lockTTL)
+
+	return nil
+}
+
+// ListParentAutoSync returns all stored parent auto-sync policies for a PR.
+func (m *RedisManager) ListParentAutoSync(ctx context.Context, repo string, prNumber int) (map[string][]byte, error) {
+	indexKey := m.prParentsKey(repo, prNumber)
+	names, err := m.client.SMembers(ctx, indexKey).Result()
+	if err != nil {
+		return nil, fmt.Errorf("listing parent auto-sync policies: %w", err)
+	}
+
+	result := make(map[string][]byte, len(names))
+	for _, name := range names {
+		key := m.parentAutoSyncKey(name, repo, prNumber)
+		data, err := m.client.Get(ctx, key).Bytes()
+		if err != nil {
+			continue
+		}
+		result[name] = data
+	}
+
+	return result, nil
+}
+
+// DeleteParentAutoSync removes the stored parent app auto-sync policy.
+func (m *RedisManager) DeleteParentAutoSync(ctx context.Context, parentAppName, repo string, prNumber int) error {
+	key := m.parentAutoSyncKey(parentAppName, repo, prNumber)
+	m.client.Del(ctx, key)
+
+	indexKey := m.prParentsKey(repo, prNumber)
+	m.client.SRem(ctx, indexKey, parentAppName)
+
+	return nil
+}
+
+func (m *RedisManager) appSetAutoSyncKey(appSetName, repo string, prNumber int) string {
+	return appSetAutoSyncKeyPrefix + appSetName + ":" + repo + ":" + strconv.Itoa(prNumber)
+}
+
+func (m *RedisManager) prAppSetsKey(repo string, prNumber int) string {
+	return prAppSetsKeyPrefix + repo + ":" + strconv.Itoa(prNumber)
+}
+
+func (m *RedisManager) parentAutoSyncKey(parentAppName, repo string, prNumber int) string {
+	return parentAutoSyncKeyPrefix + parentAppName + ":" + repo + ":" + strconv.Itoa(prNumber)
+}
+
+func (m *RedisManager) prParentsKey(repo string, prNumber int) string {
+	return prParentsKeyPrefix + repo + ":" + strconv.Itoa(prNumber)
 }
 
 // Ping checks the connection to Redis.

@@ -88,6 +88,23 @@ func (c *Client) GenerateApplications(ctx context.Context, appSet *v1alpha1.Appl
 	return apps, nil
 }
 
+// GetApplicationSetRaw returns the raw v1alpha1.ApplicationSet from ArgoCD.
+func (c *Client) GetApplicationSetRaw(ctx context.Context, name string) (*v1alpha1.ApplicationSet, error) {
+	var resp v1alpha1.ApplicationSet
+	if err := c.get(ctx, "/api/v1/applicationsets/"+url.PathEscape(name), nil, &resp); err != nil {
+		return nil, fmt.Errorf("getting applicationset %s: %w", name, err)
+	}
+	return &resp, nil
+}
+
+// UpdateApplicationSet updates an existing ApplicationSet in ArgoCD via PUT.
+func (c *Client) UpdateApplicationSet(ctx context.Context, name string, appSet *v1alpha1.ApplicationSet) error {
+	if err := c.put(ctx, "/api/v1/applicationsets/"+url.PathEscape(name), nil, appSet, nil); err != nil {
+		return fmt.Errorf("updating applicationset %s: %w", name, err)
+	}
+	return nil
+}
+
 // GetApplicationsByApplicationSet returns all applications created by an ApplicationSet.
 func (c *Client) GetApplicationsByApplicationSet(ctx context.Context, name string) ([]models.Application, error) {
 	// First try label selector (some versions of Argo CD add the label)

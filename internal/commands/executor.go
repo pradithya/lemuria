@@ -108,6 +108,11 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 		"pr", event.PR.Number,
 	)
 
+	// Restore auto-sync for all apps (children, parents, ApplicationSet templates).
+	// Done before reverting targetRevision so that apps have the correct sync
+	// policy when ArgoCD detects the targetRevision change.
+	restoreAllAutoSync(ctx, e.argocd, e.lock, locks, event.Repo.FullName, event.PR.Number)
+
 	// On merge or close, revert targetRevision for apps that may have had it
 	// rewritten during sync. This covers:
 	// - New apps: targetRevision was rewritten to the PR branch during sync
@@ -117,8 +122,9 @@ func (e *Executor) UnlockAll(ctx context.Context, event *models.PREvent) error {
 	// revert to restore the original state. The rewriteTargetRevision function
 	// is idempotent — for apps whose targetRevision wasn't changed, this is a
 	// no-op since the revision already matches.
+	// Skip parent app locks — they don't have targetRevision changes.
 	for _, l := range locks {
-		if l.ChangeType == models.ApplicationDeleted {
+		if l.ChangeType == models.ApplicationDeleted || l.IsParentApp {
 			continue
 		}
 		e.revertTargetRevision(ctx, l, event)

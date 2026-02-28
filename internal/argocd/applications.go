@@ -250,6 +250,42 @@ func (c *Client) UpdateApplicationSpec(ctx context.Context, name string, spec v1
 	return nil
 }
 
+// GetManagedResources returns the managed resources for an application from ArgoCD.
+func (c *Client) GetManagedResources(ctx context.Context, name string) ([]ManagedResource, error) {
+	return c.getManagedResources(ctx, name)
+}
+
+// FindParentApps finds applications that manage the given app's Application CR
+// via their managed-resources (apps-of-apps pattern). Only returns parents that
+// have auto-sync enabled, since those are the ones that could interfere.
+func (c *Client) FindParentApps(ctx context.Context, childAppName string) ([]models.Application, error) {
+	allApps, err := c.ListApplications(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing applications for parent detection: %w", err)
+	}
+
+	var parents []models.Application
+	for _, app := range allApps {
+		if !app.HasAutoSync() {
+			continue
+		}
+
+		managed, err := c.GetManagedResources(ctx, app.Name)
+		if err != nil {
+			continue
+		}
+
+		for _, r := range managed {
+			if r.Kind == "Application" && r.Name == childAppName {
+				parents = append(parents, app)
+				break
+			}
+		}
+	}
+
+	return parents, nil
+}
+
 // GetApplicationHistory returns the deployment history for an application.
 func (c *Client) GetApplicationHistory(ctx context.Context, name string) ([]v1alpha1.RevisionHistory, error) {
 	var resp v1alpha1.Application
