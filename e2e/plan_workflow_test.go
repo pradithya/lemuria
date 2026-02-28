@@ -77,6 +77,7 @@ func TestE2EPlanCommand(t *testing.T) {
 	}
 	if lock == nil {
 		t.Fatal("Expected lock to be acquired after plan")
+		return
 	}
 	if lock.PRNumber != 100 {
 		t.Errorf("Expected lock PR number 100, got %d", lock.PRNumber)
@@ -232,6 +233,7 @@ spec:
 	}
 	if lock == nil {
 		t.Fatal("Expected lock to be acquired for the detected app")
+		return
 	}
 	if lock.PRNumber != 1100 {
 		t.Errorf("Expected lock PR number 1100, got %d", lock.PRNumber)
@@ -281,6 +283,7 @@ func TestE2EPlanRevisionPersistedOnLock(t *testing.T) {
 	}
 	if lock == nil {
 		t.Fatal("Expected lock to be acquired after plan")
+		return
 	}
 	if lock.PlanRevision != headSHA {
 		t.Errorf("Get: expected PlanRevision %q, got %q", headSHA, lock.PlanRevision)
@@ -448,6 +451,7 @@ spec:
 	}
 	if lock == nil {
 		t.Fatal("Expected lock to be acquired for new app after plan")
+		return
 	}
 	if lock.PRNumber != prNumber {
 		t.Errorf("Expected lock PR number %d, got %d", prNumber, lock.PRNumber)
@@ -569,6 +573,7 @@ spec:
 	}
 	if lock == nil {
 		t.Fatal("Expected lock to be acquired for deleted app after plan")
+		return
 	}
 	if lock.PRNumber != prNumber {
 		t.Errorf("Expected lock PR number %d, got %d", prNumber, lock.PRNumber)
@@ -677,6 +682,7 @@ spec:
 	}
 	if lock == nil {
 		t.Fatal("Expected lock to be acquired for idempotent new app plan")
+		return
 	}
 	if lock.PRNumber != prNumber {
 		t.Errorf("Expected lock PR number %d, got %d", prNumber, lock.PRNumber)
@@ -712,6 +718,7 @@ spec:
 	}
 	if lock2 == nil {
 		t.Fatal("Expected lock to still exist after second plan")
+		return
 	}
 	if lock2.PlanRevision != headSHA2 {
 		t.Errorf("Expected lock PlanRevision %q after second plan, got %q", headSHA2, lock2.PlanRevision)
@@ -770,6 +777,7 @@ func TestE2EPlanCommandGitLab(t *testing.T) {
 	}
 	if lock == nil {
 		t.Fatal("Expected lock to be acquired after plan")
+		return
 	}
 	if lock.PRNumber != 100 {
 		t.Errorf("Expected lock PR number 100, got %d", lock.PRNumber)
