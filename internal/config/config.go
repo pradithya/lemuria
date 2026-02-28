@@ -82,6 +82,7 @@ type DefaultsConfig struct {
 	AllowedRepos       []string `koanf:"allowed_repos"`
 	AutoMerge          bool     `koanf:"auto_merge"`
 	MergeMethod        string   `koanf:"merge_method"`
+	SkipNoChanges      bool     `koanf:"skip_no_changes"`
 }
 
 // AuthConfig holds authentication settings.
@@ -153,6 +154,7 @@ type RepoConfig struct {
 	Autoplan         *bool                `koanf:"autoplan"`
 	RequireApproval  *bool                `koanf:"require_approval"`
 	AutoMerge        *bool                `koanf:"auto_merge"`
+	SkipNoChanges    *bool                `koanf:"skip_no_changes"`
 	Applications     []ApplicationMapping `koanf:"applications"`
 	SyncRequirements []SyncRequirement    `koanf:"sync_requirements"`
 }

@@ -186,18 +186,52 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		headSourceContents = map[string][]byte{}
 	}
 
-	// Sync each application
+	// Resolve skip_no_changes setting: repo config (.lemuria.yaml) > server defaults
+	skipNoChanges := e.config.Defaults.SkipNoChanges
+	repoConfigForSkip := e.getRepoConfig(ctx, event)
+	if repoConfigForSkip != nil && repoConfigForSkip.SkipNoChanges != nil {
+		skipNoChanges = *repoConfigForSkip.SkipNoChanges
+	}
+
+	// Sync each application in parallel
 	slog.Debug("starting sync for applications",
 		"count", len(locks),
+		"skip_no_changes", skipNoChanges,
 	)
 	results := make([]syncResult, len(locks))
+	var wg sync.WaitGroup
 	for i, l := range locks {
-		slog.Debug("syncing application",
-			"app", l.Application,
-		)
-		results[i] = e.syncApplication(ctx, l, cmd, event, headSourceContents)
-		tracker.updateResult(ctx, i, results[i])
+		// Skip applications with no detected changes if configured
+		if skipNoChanges && l.PlanOutput == "No changes detected" && len(l.PlanDiffs) == 0 {
+			slog.Debug("skipping application with no changes",
+				"app", l.Application,
+			)
+			results[i] = syncResult{
+				Application: l.Application,
+				PlanOutput:  l.PlanOutput,
+				PlanDiffs:   l.PlanDiffs,
+				Result: &models.SyncResult{
+					Application:  l.Application,
+					Phase:        models.SyncPhaseSucceeded,
+					Message:      "Skipped — no changes detected",
+					HealthStatus: models.HealthStatusHealthy,
+				},
+			}
+			tracker.updateResult(ctx, i, results[i])
+			continue
+		}
+
+		wg.Add(1)
+		go func(idx int, lock models.Lock) {
+			defer wg.Done()
+			slog.Debug("syncing application",
+				"app", lock.Application,
+			)
+			results[idx] = e.syncApplication(ctx, lock, cmd, event, headSourceContents)
+			tracker.updateResult(ctx, idx, results[idx])
+		}(i, l)
 	}
+	wg.Wait()
 
 	// Check if all syncs succeeded
 	allSucceeded := true
