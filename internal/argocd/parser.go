@@ -70,7 +70,8 @@ func ParseApplicationsFromYAML(content []byte, sourceFile string) ([]models.Appl
 // ParseApplicationContentFromYAML parses YAML content and returns the
 // serialized per-application YAML bytes keyed by app name. This enables
 // per-app comparison even when multiple Application CRs share a single file.
-func ParseApplicationContentFromYAML(content []byte) (map[string][]byte, error) {
+// Non-Application documents and invalid YAML are silently skipped.
+func ParseApplicationContentFromYAML(content []byte) map[string][]byte {
 	result := make(map[string][]byte)
 
 	decoder := yaml.NewDecoder(bytes.NewReader(content))
@@ -104,7 +105,7 @@ func ParseApplicationContentFromYAML(content []byte) (map[string][]byte, error) 
 		}
 	}
 
-	return result, nil
+	return result
 }
 
 // ParseRawApplicationFromYAML parses YAML content and returns the typed

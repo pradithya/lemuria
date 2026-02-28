@@ -47,8 +47,8 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 		"cr_paths", crPaths,
 	)
 
-	// Include uppercase variants for case-insensitive matching, consistent with vcs.IsYAMLFile
-	patterns := []string{"*.yaml", "*.yml", "*.YAML", "*.YML", "*.Yaml", "*.Yml"}
+	// Pattern matching in ExtractFilesByPattern is case-insensitive
+	patterns := []string{"*.yaml", "*.yml"}
 
 	// Fetch all YAML files from head branch
 	headContents, err := e.vcs.GetFilesByPattern(ctx, event.Repo.Owner, event.Repo.Name, event.PR.HeadRef, patterns, crPaths)
@@ -87,19 +87,18 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 		result.HeadApps = append(result.HeadApps, apps...)
 
 		// Extract per-app serialized content for fine-grained comparison
-		appContent, err := argocd.ParseApplicationContentFromYAML(content)
-		if err != nil {
-			slog.Debug("failed to extract per-app content from head file", "file", filePath, "error", err)
-		} else {
-			for name, data := range appContent {
-				result.HeadAppContent[name] = data
+		appContent := argocd.ParseApplicationContentFromYAML(content)
+		for name, data := range appContent {
+			if _, exists := result.HeadAppContent[name]; exists {
+				slog.Warn("duplicate application name in head branch, later definition wins",
+					"app", name, "file", filePath)
 			}
+			result.HeadAppContent[name] = data
 		}
 
 		appSets, err := argocd.ParseApplicationSetsFromYAML(content, filePath)
 		if err != nil {
 			slog.Debug("failed to parse applicationsets from head file", "file", filePath, "error", err)
-			continue
 		}
 		for _, as := range appSets {
 			result.HeadAppSets = append(result.HeadAppSets, argocd.ParsedAppSet{
@@ -120,19 +119,18 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 		result.BaseApps = append(result.BaseApps, apps...)
 
 		// Extract per-app serialized content for fine-grained comparison
-		appContent, err := argocd.ParseApplicationContentFromYAML(content)
-		if err != nil {
-			slog.Debug("failed to extract per-app content from base file", "file", filePath, "error", err)
-		} else {
-			for name, data := range appContent {
-				result.BaseAppContent[name] = data
+		appContent := argocd.ParseApplicationContentFromYAML(content)
+		for name, data := range appContent {
+			if _, exists := result.BaseAppContent[name]; exists {
+				slog.Warn("duplicate application name in base branch, later definition wins",
+					"app", name, "file", filePath)
 			}
+			result.BaseAppContent[name] = data
 		}
 
 		appSets, err := argocd.ParseApplicationSetsFromYAML(content, filePath)
 		if err != nil {
 			slog.Debug("failed to parse applicationsets from base file", "file", filePath, "error", err)
-			continue
 		}
 		for _, as := range appSets {
 			result.BaseAppSets = append(result.BaseAppSets, argocd.ParsedAppSet{
@@ -391,20 +389,16 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 	return result, nil
 }
 
-// detectCrossRepoAffectedApps queries ArgoCD API for apps that reference this repo
-// but whose Application CRs live in a different repo (cross-repo apps).
-func (e *Executor) detectCrossRepoAffectedApps(ctx context.Context, repoURL string, filePaths []string, alreadyDetected map[string]bool) ([]models.Application, error) {
+// detectCrossRepoAffectedApps checks the given existing apps for cross-repo references
+// to this repo (apps whose CRs live in a different repo but whose source points here).
+func detectCrossRepoAffectedApps(repoURL string, filePaths []string, alreadyDetected map[string]bool, existingApps []models.Application) []models.Application {
 	slog.Debug("detecting cross-repo affected applications",
 		"repo_url", repoURL,
 		"changed_files", len(filePaths),
 		"already_detected", len(alreadyDetected),
 	)
 
-	existingApps, err := e.argocd.ListApplications(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing applications for cross-repo detection: %w", err)
-	}
-
+	normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
 	var affected []models.Application
 	for _, app := range existingApps {
 		// Skip apps already detected via repo scan
@@ -415,7 +409,7 @@ func (e *Executor) detectCrossRepoAffectedApps(ctx context.Context, repoURL stri
 		// Check if app references this repo
 		repoMatch := false
 		for _, appRepo := range app.GetRepoURLs() {
-			if argocd.NormalizeRepoURL(appRepo) == argocd.NormalizeRepoURL(repoURL) {
+			if argocd.NormalizeRepoURL(appRepo) == normalizedRepoURL {
 				repoMatch = true
 				break
 			}
@@ -445,7 +439,7 @@ func (e *Executor) detectCrossRepoAffectedApps(ctx context.Context, repoURL stri
 		"affected_count", len(affected),
 	)
 
-	return affected, nil
+	return affected
 }
 
 // containsAppByName checks if an app with the given name exists in the slice.
@@ -472,25 +466,15 @@ func setToSlice(s map[string]struct{}) []string {
 // diff path (DiffNewApp) handles idempotency — it works correctly whether
 // the app already exists or not. Reclassifying to "existing" would cause
 // failures when the base branch doesn't contain the app's source files.
-func (e *Executor) verifyNewAppsExist(ctx context.Context, parsed *argocd.ParsedApplications) error {
+func verifyNewAppsExist(parsed *argocd.ParsedApplications, existingByName map[string]bool) {
 	if len(parsed.New) == 0 {
 		slog.Debug("no new applications to verify")
-		return nil
+		return
 	}
 
 	slog.Debug("verifying new applications against ArgoCD",
 		"new_apps_count", len(parsed.New),
 	)
-
-	existingApps, err := e.argocd.ListApplications(ctx)
-	if err != nil {
-		return fmt.Errorf("listing existing applications: %w", err)
-	}
-
-	existingByName := make(map[string]bool)
-	for _, app := range existingApps {
-		existingByName[app.Name] = true
-	}
 
 	for _, app := range parsed.New {
 		if existingByName[app.Name] {
@@ -503,30 +487,18 @@ func (e *Executor) verifyNewAppsExist(ctx context.Context, parsed *argocd.Parsed
 			)
 		}
 	}
-
-	return nil
 }
 
-// verifyDeletedAppsExist checks which "deleted" apps actually exist in ArgoCD.
-func (e *Executor) verifyDeletedAppsExist(ctx context.Context, parsed *argocd.ParsedApplications) error {
+// verifyDeletedAppsExist filters out "deleted" apps that don't actually exist in ArgoCD.
+func verifyDeletedAppsExist(parsed *argocd.ParsedApplications, existingByName map[string]bool) {
 	if len(parsed.Deleted) == 0 {
 		slog.Debug("no deleted applications to verify")
-		return nil
+		return
 	}
 
 	slog.Debug("verifying deleted applications exist in ArgoCD",
 		"deleted_apps_count", len(parsed.Deleted),
 	)
-
-	existingApps, err := e.argocd.ListApplications(ctx)
-	if err != nil {
-		return fmt.Errorf("listing existing applications: %w", err)
-	}
-
-	existingByName := make(map[string]bool)
-	for _, app := range existingApps {
-		existingByName[app.Name] = true
-	}
 
 	// Only keep deleted apps that actually exist
 	var actuallyDeleted []models.Application
@@ -549,8 +521,6 @@ func (e *Executor) verifyDeletedAppsExist(ctx context.Context, parsed *argocd.Pa
 	)
 
 	parsed.Deleted = actuallyDeleted
-
-	return nil
 }
 
 // sortedStringKeys returns the keys of a map[string]models.Application sorted alphabetically.

@@ -779,10 +779,7 @@ spec:
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ParseApplicationContentFromYAML([]byte(tt.content))
-			if err != nil {
-				t.Fatalf("ParseApplicationContentFromYAML() error = %v", err)
-			}
+			result := ParseApplicationContentFromYAML([]byte(tt.content))
 
 			if tt.wantEmpty {
 				if len(result) != 0 {

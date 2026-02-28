@@ -84,7 +84,7 @@ Maps Argo CD applications to repository paths. Lemuria uses this to determine wh
 
 ```yaml
 applications:
-  - name: my-app              # Argo CD application name (supports wildcards)
+  - name: my-app              # Argo CD application name (supports glob wildcards and /regex/)
     paths:                    # Paths that affect this app
       - "apps/my-app/**"
       - "base/**"
@@ -118,11 +118,11 @@ This is useful for large repositories where Application CRs are stored in a spec
 
 ### Sync Requirements Section
 
-Override approval requirements per application. Supports exact names and wildcard patterns.
+Override approval requirements per application. Supports exact names, glob wildcard patterns (e.g. `my-app-*`, `*-prod`), and regex patterns delimited by `/` (e.g. `/my-app-.+/`).
 
 ```yaml
 sync_requirements:
-  - name: production          # Application name (supports wildcards)
+  - name: production          # Application name (supports glob wildcards and /regex/)
     require_approval: true    # Require PR approval
     allowed_users:            # Users allowed to sync
       - "admin"

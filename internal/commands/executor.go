@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/org/lemuria/internal/argocd"
@@ -248,7 +249,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	alreadyDetected := make(map[string]bool)
 
 	for _, app := range scanned.HeadApps {
-		if e.isScannedAppAffected(app, repoURL, filePaths, repoConfig) {
+		if e.isAppAffected(app, repoURL, filePaths, repoConfig) {
 			slog.Debug("scanned application affected",
 				"app", app.Name,
 				"source_file", app.SourceFile,
@@ -289,7 +290,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 				continue
 			}
 			for _, app := range expandedApps {
-				if !containsAppByName(affected, app.Name) {
+				if !alreadyDetected[app.Name] {
 					app.ChangeType = models.ApplicationExisting
 					affected = append(affected, app)
 					alreadyDetected[app.Name] = true
@@ -307,15 +308,21 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		"deleted_count", len(parsed.Deleted),
 	)
 
-	// Verify new apps don't already exist in ArgoCD
-	if err := e.verifyNewAppsExist(ctx, parsed); err != nil {
-		slog.Warn("failed to verify new apps", "error", err)
+	// Fetch all existing apps once for verification and cross-repo detection
+	existingApps, listErr := e.argocd.ListApplications(ctx)
+	if listErr != nil {
+		slog.Warn("failed to list existing applications", "error", listErr)
+	}
+	existingByName := make(map[string]bool)
+	for _, app := range existingApps {
+		existingByName[app.Name] = true
 	}
 
+	// Verify new apps don't already exist in ArgoCD
+	verifyNewAppsExist(parsed, existingByName)
+
 	// Verify deleted apps actually exist in ArgoCD
-	if err := e.verifyDeletedAppsExist(ctx, parsed); err != nil {
-		slog.Warn("failed to verify deleted apps", "error", err)
-	}
+	verifyDeletedAppsExist(parsed, existingByName)
 
 	// Add new applications
 	for _, app := range parsed.New {
@@ -323,7 +330,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 			"app", app.Name,
 			"source_file", app.SourceFile,
 		)
-		if !containsAppByName(affected, app.Name) {
+		if !alreadyDetected[app.Name] {
 			affected = append(affected, app)
 			alreadyDetected[app.Name] = true
 		}
@@ -335,7 +342,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		changedFileSet[f] = true
 	}
 	for _, modApp := range parsed.Modified {
-		if containsAppByName(affected, modApp.Name) {
+		if alreadyDetected[modApp.Name] {
 			// Already in affected list, just propagate SourceFile
 			for i := range affected {
 				if affected[i].Name == modApp.Name && affected[i].SourceFile == "" {
@@ -372,7 +379,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		)
 
 		for _, app := range appSetChanges.NewApps {
-			if !containsAppByName(affected, app.Name) && !containsAppByName(parsed.New, app.Name) {
+			if !alreadyDetected[app.Name] {
 				app.IsGeneratedApp = true
 				parsed.New = append(parsed.New, app)
 				affected = append(affected, app)
@@ -394,7 +401,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 			"app", app.Name,
 			"source_file", app.SourceFile,
 		)
-		if !containsAppByName(affected, app.Name) {
+		if !alreadyDetected[app.Name] {
 			affected = append(affected, app)
 			alreadyDetected[app.Name] = true
 		} else {
@@ -410,10 +417,8 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	}
 
 	// Step 5: Fallback — ArgoCD API for cross-repo apps
-	crossRepoApps, crossErr := e.detectCrossRepoAffectedApps(ctx, repoURL, filePaths, alreadyDetected)
-	if crossErr != nil {
-		slog.Warn("failed to detect cross-repo affected apps", "error", crossErr)
-	} else {
+	if listErr == nil {
+		crossRepoApps := detectCrossRepoAffectedApps(repoURL, filePaths, alreadyDetected, existingApps)
 		affected = append(affected, crossRepoApps...)
 	}
 
@@ -431,12 +436,6 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	return affected, nil
 }
 
-// isScannedAppAffected checks if a scanned application is affected by the changed files.
-// It delegates to isAppAffected for the actual path matching logic.
-func (e *Executor) isScannedAppAffected(app models.Application, repoURL string, files []string, repoConfig *config.RepoConfig) bool {
-	return e.isAppAffected(app, repoURL, files, repoConfig)
-}
-
 // isAppAffected checks if an application is affected by the changed files.
 func (e *Executor) isAppAffected(app models.Application, repoURL string, files []string, repoConfig *config.RepoConfig) bool {
 	// First, check if there's an explicit path mapping in .lemuria.yaml
@@ -450,7 +449,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 		hasExactMapping := false
 		for _, mapping := range repoConfig.Applications {
 			nameMatches := matchAppName(mapping.Name, app.Name)
-			isWildcard := strings.ContainsRune(mapping.Name, '*')
+			isWildcard := isPatternMatch(mapping.Name)
 			slog.Debug("checking repo config mapping",
 				"app", app.Name,
 				"mapping_name", mapping.Name,
@@ -486,7 +485,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 		// Only check wildcard mappings if no exact mapping was found for this app
 		if !hasExactMapping {
 			for _, mapping := range repoConfig.Applications {
-				if !strings.ContainsRune(mapping.Name, '*') {
+				if !isPatternMatch(mapping.Name) {
 					continue
 				}
 				if !matchAppName(mapping.Name, app.Name) {
@@ -514,18 +513,10 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 
 	// Check if app references this repo
 	appRepos := app.GetRepoURLs()
+	normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
 	repoMatch := false
 	for _, appRepo := range appRepos {
-		normalizedAppRepo := argocd.NormalizeRepoURL(appRepo)
-		normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
-		slog.Debug("comparing repo URLs",
-			"app", app.Name,
-			"app_repo", appRepo,
-			"normalized_app_repo", normalizedAppRepo,
-			"target_repo", repoURL,
-			"normalized_target_repo", normalizedRepoURL,
-		)
-		if normalizedAppRepo == normalizedRepoURL {
+		if argocd.NormalizeRepoURL(appRepo) == normalizedRepoURL {
 			repoMatch = true
 			break
 		}
@@ -571,19 +562,49 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 	return false
 }
 
-// matchAppName checks if an app name matches a pattern (supports wildcards).
+// matchAppName checks if an app name matches a pattern.
+// Supports exact match and regex patterns (delimited by /.../).
+// For backward compatibility, simple glob-style trailing '*' is converted to regex.
 func matchAppName(pattern, name string) bool {
 	if pattern == name {
 		return true
 	}
 
-	// Simple wildcard matching
-	if len(pattern) > 0 && pattern[len(pattern)-1] == '*' {
-		prefix := pattern[:len(pattern)-1]
-		return len(name) >= len(prefix) && name[:len(prefix)] == prefix
+	// Regex pattern: /pattern/
+	if len(pattern) >= 2 && pattern[0] == '/' && pattern[len(pattern)-1] == '/' {
+		re, err := regexp.Compile(pattern[1 : len(pattern)-1])
+		if err != nil {
+			slog.Warn("invalid regex pattern in app name matching",
+				"pattern", pattern, "error", err)
+			return false
+		}
+		return re.MatchString(name)
+	}
+
+	// Backward-compatible glob: convert * to regex
+	if strings.ContainsRune(pattern, '*') {
+		// Escape regex metacharacters except *, then replace * with .*
+		escaped := regexp.QuoteMeta(strings.ReplaceAll(pattern, "*", "\x00"))
+		regexStr := "^" + strings.ReplaceAll(escaped, "\x00", ".*") + "$"
+		re, err := regexp.Compile(regexStr)
+		if err != nil {
+			slog.Warn("invalid glob pattern in app name matching",
+				"pattern", pattern, "error", err)
+			return false
+		}
+		return re.MatchString(name)
 	}
 
 	return false
+}
+
+// isPatternMatch returns true if the pattern contains wildcards or is a regex,
+// i.e. it's not an exact name match.
+func isPatternMatch(pattern string) bool {
+	if len(pattern) >= 2 && pattern[0] == '/' && pattern[len(pattern)-1] == '/' {
+		return true
+	}
+	return strings.ContainsRune(pattern, '*')
 }
 
 // pathContains checks if a file path is within the given directory.
@@ -591,7 +612,13 @@ func pathContains(dir, file string) bool {
 	if dir == "" || dir == "." {
 		return true
 	}
-	return len(file) > len(dir) && file[:len(dir)] == dir
+	// Ensure directory separator after the prefix to avoid false positives
+	// e.g. dir="apps/my-app" should not match file="apps/my-app-other/deploy.yaml"
+	d := dir
+	if !strings.HasSuffix(d, "/") {
+		d += "/"
+	}
+	return strings.HasPrefix(file, d)
 }
 
 // filesToChangedFiles converts string paths to ChangedFile structs.

@@ -38,11 +38,21 @@ func TestMatchAppName(t *testing.T) {
 	}{
 		{"exact match", "my-app", "my-app", true},
 		{"exact mismatch", "my-app", "other-app", false},
-		{"wildcard match", "my-app-*", "my-app-staging", true},
-		{"wildcard match prefix only", "prod-*", "prod-api", true},
+		{"wildcard trailing", "my-app-*", "my-app-staging", true},
+		{"wildcard prefix only", "prod-*", "prod-api", true},
 		{"wildcard mismatch", "prod-*", "dev-api", false},
 		{"wildcard empty suffix", "prod-*", "prod-", true},
 		{"star only matches all", "*", "anything", true},
+		{"wildcard leading", "*-prod", "my-app-prod", true},
+		{"wildcard leading mismatch", "*-prod", "my-app-dev", false},
+		{"wildcard mid-string", "my-*-app", "my-cool-app", true},
+		{"wildcard mid-string mismatch", "my-*-app", "my-cool-svc", false},
+		{"regex match", "/^app-[0-9]+$/", "app-123", true},
+		{"regex mismatch", "/^app-[0-9]+$/", "app-abc", false},
+		{"regex partial", "/prod/", "my-prod-app", true},
+		{"regex suffix", "/-prod$/", "my-app-prod", true},
+		{"regex suffix mismatch", "/-prod$/", "my-app-dev", false},
+		{"invalid regex returns false", "/[invalid/", "anything", false},
 	}
 
 	for _, tt := range tests {
@@ -66,6 +76,9 @@ func TestPathContains(t *testing.T) {
 		{"empty directory matches all", "", "any/file.yaml", true},
 		{"dot directory matches all", ".", "any/file.yaml", true},
 		{"exact path not contained", "apps/my-app", "apps/my-app", false},
+		{"prefix collision rejected", "apps/my-app", "apps/my-app-other/deployment.yaml", false},
+		{"nested file matches", "apps/my-app", "apps/my-app/sub/dir/file.yaml", true},
+		{"trailing slash in dir", "apps/my-app/", "apps/my-app/deployment.yaml", true},
 	}
 
 	for _, tt := range tests {
@@ -380,7 +393,7 @@ func TestIsProtectedBranch(t *testing.T) {
 	}
 }
 
-func TestIsScannedAppAffected(t *testing.T) {
+func TestIsAppAffected(t *testing.T) {
 	exec := newTestExecutor(&mockVCS{}, &mockLock{}, nil)
 
 	tests := []struct {
@@ -428,9 +441,9 @@ func TestIsScannedAppAffected(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := exec.isScannedAppAffected(tt.app, tt.repoURL, tt.files, tt.repoConfig)
+			got := exec.isAppAffected(tt.app, tt.repoURL, tt.files, tt.repoConfig)
 			if got != tt.want {
-				t.Errorf("isScannedAppAffected() = %v, want %v", got, tt.want)
+				t.Errorf("isAppAffected() = %v, want %v", got, tt.want)
 			}
 		})
 	}

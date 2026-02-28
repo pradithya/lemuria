@@ -505,73 +505,24 @@ func TestDetectApplicationSetChangesFromScan_GenerateError(t *testing.T) {
 }
 
 func TestDetectCrossRepoAffectedApps(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/applications" {
-			resp := v1alpha1.ApplicationList{
-				Items: []v1alpha1.Application{
-					{
-						ObjectMeta: metav1.ObjectMeta{Name: "cross-repo-app"},
-						Spec: v1alpha1.ApplicationSpec{
-							Source: &v1alpha1.ApplicationSource{
-								RepoURL: "https://github.com/org/repo.git",
-								Path:    "deploy/app",
-							},
-						},
-					},
-					{
-						ObjectMeta: metav1.ObjectMeta{Name: "already-detected"},
-						Spec: v1alpha1.ApplicationSpec{
-							Source: &v1alpha1.ApplicationSource{
-								RepoURL: "https://github.com/org/repo.git",
-								Path:    "deploy/other",
-							},
-						},
-					},
-					{
-						ObjectMeta: metav1.ObjectMeta{Name: "different-repo"},
-						Spec: v1alpha1.ApplicationSpec{
-							Source: &v1alpha1.ApplicationSource{
-								RepoURL: "https://github.com/other-org/other-repo.git",
-								Path:    "deploy",
-							},
-						},
-					},
-					{
-						ObjectMeta: metav1.ObjectMeta{Name: "no-path-match"},
-						Spec: v1alpha1.ApplicationSpec{
-							Source: &v1alpha1.ApplicationSource{
-								RepoURL: "https://github.com/org/repo.git",
-								Path:    "unrelated/dir",
-							},
-						},
-					},
-				},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer ts.Close()
-
-	argoClient := newTestArgoClient(ts)
-	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+	existingApps := []models.Application{
+		{Name: "cross-repo-app", RepoURL: "https://github.com/org/repo.git", Path: "deploy/app"},
+		{Name: "already-detected", RepoURL: "https://github.com/org/repo.git", Path: "deploy/other"},
+		{Name: "different-repo", RepoURL: "https://github.com/other-org/other-repo.git", Path: "deploy"},
+		{Name: "no-path-match", RepoURL: "https://github.com/org/repo.git", Path: "unrelated/dir"},
+	}
 
 	alreadyDetected := map[string]bool{
 		"already-detected": true,
 	}
 	filePaths := []string{"deploy/app/values.yaml", "deploy/app/templates/deployment.yaml"}
 
-	affected, err := exec.detectCrossRepoAffectedApps(
-		context.Background(),
+	affected := detectCrossRepoAffectedApps(
 		"https://github.com/org/repo",
 		filePaths,
 		alreadyDetected,
+		existingApps,
 	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 
 	if len(affected) != 1 {
 		t.Fatalf("expected 1 affected app, got %d", len(affected))
@@ -584,59 +535,28 @@ func TestDetectCrossRepoAffectedApps(t *testing.T) {
 	}
 }
 
-func TestDetectCrossRepoAffectedApps_APIError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer ts.Close()
-
-	argoClient := newTestArgoClient(ts)
-	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
-
-	_, err := exec.detectCrossRepoAffectedApps(
-		context.Background(), "https://github.com/org/repo", []string{"file.yaml"}, nil,
+func TestDetectCrossRepoAffectedApps_EmptyExistingApps(t *testing.T) {
+	affected := detectCrossRepoAffectedApps(
+		"https://github.com/org/repo", []string{"file.yaml"}, nil, nil,
 	)
-	if err == nil {
-		t.Fatal("expected error from API failure")
+	if len(affected) != 0 {
+		t.Errorf("expected 0 affected apps with nil existingApps, got %d", len(affected))
 	}
 }
 
 func TestDetectCrossRepoAffectedApps_NoApps(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer ts.Close()
-
-	argoClient := newTestArgoClient(ts)
-	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
-
-	affected, err := exec.detectCrossRepoAffectedApps(
-		context.Background(), "https://github.com/org/repo", []string{"file.yaml"}, nil,
+	affected := detectCrossRepoAffectedApps(
+		"https://github.com/org/repo", []string{"file.yaml"}, nil, []models.Application{},
 	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
 	if len(affected) != 0 {
 		t.Errorf("expected 0 affected apps, got %d", len(affected))
 	}
 }
 
 func TestVerifyNewAppsExist(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := v1alpha1.ApplicationList{
-			Items: []v1alpha1.Application{
-				{ObjectMeta: metav1.ObjectMeta{Name: "existing-new-app"}},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer ts.Close()
-
-	argoClient := newTestArgoClient(ts)
-	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+	existingByName := map[string]bool{
+		"existing-new-app": true,
+	}
 
 	parsed := &argocd.ParsedApplications{
 		New: []models.Application{
@@ -645,75 +565,22 @@ func TestVerifyNewAppsExist(t *testing.T) {
 		},
 	}
 
-	err := exec.verifyNewAppsExist(context.Background(), parsed)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	verifyNewAppsExist(parsed, existingByName)
 	// verifyNewAppsExist only logs, doesn't modify parsed — check no crash
 	if len(parsed.New) != 2 {
 		t.Errorf("expected 2 new apps unchanged, got %d", len(parsed.New))
 	}
 }
 
-func TestVerifyNewAppsExist_APIError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer ts.Close()
-
-	argoClient := newTestArgoClient(ts)
-	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
-
-	parsed := &argocd.ParsedApplications{
-		New: []models.Application{{Name: "test-app"}},
-	}
-	err := exec.verifyNewAppsExist(context.Background(), parsed)
-	if err == nil {
-		t.Fatal("expected error from API failure")
-	}
-}
-
-func TestVerifyDeletedAppsExist_APIError(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer ts.Close()
-
-	argoClient := newTestArgoClient(ts)
-	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
-
-	parsed := &argocd.ParsedApplications{
-		Deleted: []models.Application{{Name: "test-app"}},
-	}
-	err := exec.verifyDeletedAppsExist(context.Background(), parsed)
-	if err == nil {
-		t.Fatal("expected error from API failure")
-	}
-}
-
 func TestVerifyNewAppsExist_EmptyList(t *testing.T) {
-	exec := newTestExecutor(&mockVCS{}, &mockLock{}, nil)
 	parsed := &argocd.ParsedApplications{New: nil}
-	err := exec.verifyNewAppsExist(context.Background(), parsed)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	verifyNewAppsExist(parsed, nil)
 }
 
 func TestVerifyDeletedAppsExist(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := v1alpha1.ApplicationList{
-			Items: []v1alpha1.Application{
-				{ObjectMeta: metav1.ObjectMeta{Name: "real-deleted-app"}},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer ts.Close()
-
-	argoClient := newTestArgoClient(ts)
-	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+	existingByName := map[string]bool{
+		"real-deleted-app": true,
+	}
 
 	parsed := &argocd.ParsedApplications{
 		Deleted: []models.Application{
@@ -722,10 +589,7 @@ func TestVerifyDeletedAppsExist(t *testing.T) {
 		},
 	}
 
-	err := exec.verifyDeletedAppsExist(context.Background(), parsed)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	verifyDeletedAppsExist(parsed, existingByName)
 	// Should filter out phantom-deleted-app
 	if len(parsed.Deleted) != 1 {
 		t.Fatalf("expected 1 deleted app (filtered), got %d", len(parsed.Deleted))
@@ -736,24 +600,12 @@ func TestVerifyDeletedAppsExist(t *testing.T) {
 }
 
 func TestVerifyDeletedAppsExist_EmptyList(t *testing.T) {
-	exec := newTestExecutor(&mockVCS{}, &mockLock{}, nil)
 	parsed := &argocd.ParsedApplications{Deleted: nil}
-	err := exec.verifyDeletedAppsExist(context.Background(), parsed)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	verifyDeletedAppsExist(parsed, nil)
 }
 
 func TestVerifyDeletedAppsExist_NoneExist(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer ts.Close()
-
-	argoClient := newTestArgoClient(ts)
-	exec := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+	existingByName := map[string]bool{}
 
 	parsed := &argocd.ParsedApplications{
 		Deleted: []models.Application{
@@ -762,10 +614,7 @@ func TestVerifyDeletedAppsExist_NoneExist(t *testing.T) {
 		},
 	}
 
-	err := exec.verifyDeletedAppsExist(context.Background(), parsed)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	verifyDeletedAppsExist(parsed, existingByName)
 	if len(parsed.Deleted) != 0 {
 		t.Errorf("expected 0 deleted apps after filtering, got %d", len(parsed.Deleted))
 	}

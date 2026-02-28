@@ -17,10 +17,18 @@ package vcs
 import (
 	"archive/tar"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"log/slog"
 	"path"
 	"strings"
+)
+
+const (
+	// maxFileSize is the maximum size of a single file extracted from an archive (10MB).
+	maxFileSize = 10 << 20
+	// maxTotalSize is the maximum total size of all extracted files (100MB).
+	maxTotalSize = 100 << 20
 )
 
 // ExtractFilesFromTarGz reads a gzipped tar stream and extracts the contents
@@ -77,9 +85,12 @@ func ExtractFilesFromTarGz(r io.Reader, paths []string) (map[string][]byte, erro
 			continue
 		}
 
-		data, err := io.ReadAll(tr)
+		data, err := io.ReadAll(io.LimitReader(tr, maxFileSize+1))
 		if err != nil {
 			return result, err
+		}
+		if int64(len(data)) > maxFileSize {
+			return result, fmt.Errorf("file %s exceeds maximum size of %d bytes", stripped, maxFileSize)
 		}
 		result[stripped] = data
 
@@ -112,6 +123,7 @@ func ExtractFilesByPattern(r io.Reader, patterns []string, pathPrefixes []string
 
 	tr := tar.NewReader(gz)
 	result := make(map[string][]byte)
+	var totalSize int64
 
 	for {
 		hdr, err := tr.Next()
@@ -141,9 +153,17 @@ func ExtractFilesByPattern(r io.Reader, patterns []string, pathPrefixes []string
 			continue
 		}
 
-		data, err := io.ReadAll(tr)
+		data, err := io.ReadAll(io.LimitReader(tr, maxFileSize+1))
 		if err != nil {
 			return result, err
+		}
+		if int64(len(data)) > maxFileSize {
+			slog.Warn("skipping file that exceeds size limit", "file", stripped, "max_bytes", maxFileSize)
+			continue
+		}
+		totalSize += int64(len(data))
+		if totalSize > maxTotalSize {
+			return result, fmt.Errorf("total extracted size exceeds maximum of %d bytes", maxTotalSize)
 		}
 		result[stripped] = data
 	}
@@ -167,9 +187,11 @@ func matchesAnyPrefix(filePath string, prefixes []string) bool {
 
 // matchesAnyPattern checks if the filename matches any of the given glob patterns.
 // Uses path.Match (not filepath.Match) since tar archives always use forward slashes.
+// Matching is case-insensitive (both filename and pattern are lowercased).
 func matchesAnyPattern(filename string, patterns []string) bool {
+	lowerFilename := strings.ToLower(filename)
 	for _, pattern := range patterns {
-		matched, err := path.Match(pattern, filename)
+		matched, err := path.Match(strings.ToLower(pattern), lowerFilename)
 		if err != nil {
 			slog.Warn("invalid glob pattern", "pattern", pattern, "error", err)
 			continue
