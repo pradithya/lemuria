@@ -37,6 +37,7 @@ func TestDefaultConfig(t *testing.T) {
 		{"delete source branch disabled", cfg.Defaults.DeleteSourceBranch, false},
 		{"auto merge disabled", cfg.Defaults.AutoMerge, false},
 		{"merge method", cfg.Defaults.MergeMethod, "squash"},
+		{"skip no changes disabled", cfg.Defaults.SkipNoChanges, false},
 		{"auth disabled", cfg.Auth.Enabled, false},
 		{"session TTL", cfg.Auth.SessionTTL, 24 * time.Hour},
 		{"cookie secure", cfg.Auth.CookieSecure, true},
@@ -419,6 +420,41 @@ autoplan: false
 				}
 				if cfg.Autoplan == nil || *cfg.Autoplan {
 					t.Error("Autoplan should be false")
+				}
+			},
+		},
+		{
+			name: "skip_no_changes config",
+			data: `
+version: 1
+skip_no_changes: true
+`,
+			check: func(t *testing.T, cfg *RepoConfig) {
+				if cfg.SkipNoChanges == nil || !*cfg.SkipNoChanges {
+					t.Error("SkipNoChanges should be true")
+				}
+			},
+		},
+		{
+			name: "skip_no_changes false",
+			data: `
+version: 1
+skip_no_changes: false
+`,
+			check: func(t *testing.T, cfg *RepoConfig) {
+				if cfg.SkipNoChanges == nil || *cfg.SkipNoChanges {
+					t.Error("SkipNoChanges should be false")
+				}
+			},
+		},
+		{
+			name: "skip_no_changes not set",
+			data: `
+version: 1
+`,
+			check: func(t *testing.T, cfg *RepoConfig) {
+				if cfg.SkipNoChanges != nil {
+					t.Error("SkipNoChanges should be nil when not set")
 				}
 			},
 		},

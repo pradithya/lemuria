@@ -127,6 +127,10 @@ Sync requires all of the following:
 
 ### Sync Behavior
 
+All locked applications are synced **in parallel**, significantly reducing total sync time for PRs affecting multiple applications.
+
+If `skip_no_changes: true` (server default or per-repo override), applications where the plan detected no changes are skipped automatically. Skipped applications appear as succeeded with "Skipped — no changes detected".
+
 For applications sourcing from the PR repository:
 - Syncs to the PR's HEAD commit SHA (not the app's configured targetRevision)
 - This enables "deploy before merge" workflow

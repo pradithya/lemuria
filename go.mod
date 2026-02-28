@@ -3,11 +3,13 @@ module github.com/org/lemuria
 go 1.25.5
 
 require (
+	github.com/alicebob/miniredis/v2 v2.36.1
 	github.com/argoproj/argo-cd/v3 v3.3.0
 	github.com/argoproj/gitops-engine v0.7.1-0.20250908182407-97ad5b59a627
 	github.com/bradleyfalzon/ghinstallation/v2 v2.17.0
 	github.com/coreos/go-oidc/v3 v3.14.1
 	github.com/go-chi/chi/v5 v5.0.11
+	github.com/go-jose/go-jose/v4 v4.1.3
 	github.com/google/go-github/v60 v60.0.0
 	github.com/hibiken/asynq v0.26.0
 	github.com/knadh/koanf/parsers/yaml v1.1.0
@@ -22,6 +24,7 @@ require (
 	github.com/urfave/cli/v3 v3.6.2
 	gitlab.com/gitlab-org/api/client-go v1.28.1
 	golang.org/x/oauth2 v0.34.0
+	golang.org/x/sync v0.19.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/apiextensions-apiserver v0.34.0
 	k8s.io/apimachinery v0.34.0
@@ -41,7 +44,6 @@ require (
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
-	github.com/alicebob/miniredis/v2 v2.36.1 // indirect
 	github.com/argoproj/pkg v0.13.6 // indirect
 	github.com/argoproj/pkg/v2 v2.0.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -82,7 +84,6 @@ require (
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.6.2 // indirect
 	github.com/go-git/go-git/v5 v5.14.0 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -182,7 +183,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect

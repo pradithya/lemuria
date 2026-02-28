@@ -44,7 +44,6 @@ func TestLockAcquireRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get lock: %v", err)
 	}
-
 	if lock == nil {
 		t.Fatal("Expected lock to exist")
 	}

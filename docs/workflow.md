@@ -95,12 +95,13 @@ Developer comments `lemuria sync`:
    - Plan is not stale (stored revision matches current PR HEAD SHA)
    - PR is mergeable (no conflicts)
    - Auto-sync is disabled on each application
-5. For each locked application:
+5. If `skip_no_changes: true`, filters out applications where the plan detected no changes
+6. Syncs all remaining applications **in parallel**:
    - If the Application CR was modified in the PR, updates the live app's spec first
    - Syncs to PR HEAD commit SHA (for apps sourcing from PR repo)
    - Or syncs using the app's configured revision (for external source apps)
-6. Releases locks on successful sync
-7. Posts sync results as PR comment
+7. Releases locks on successful sync
+8. Posts sync results as PR comment
 
 ### Phase 5: Merge
 
@@ -258,7 +259,7 @@ PR changes `base/configmap.yaml`:
 To apply: comment `lemuria sync`
 ```
 
-`lemuria sync` deploys both applications.
+`lemuria sync` deploys both applications in parallel.
 
 ---
 
