@@ -499,7 +499,7 @@ func TestIsAppAffected(t *testing.T) {
 			want:    true,
 		},
 		{
-			name: "multi-source helm valueFile with $ref is skipped",
+			name: "multi-source helm $ref with no matching ref source does not match",
 			app: models.Application{
 				Name: "helm-app",
 				Sources: []models.ApplicationSource{

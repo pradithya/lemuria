@@ -606,12 +606,12 @@ func isPatternMatch(pattern string) bool {
 
 // resolveValueFilePath resolves a Helm valueFile path relative to a source path,
 // following ArgoCD's resolution rules:
-//   - Absolute paths (starting with /) are repo-root-relative (leading / stripped)
+//   - Absolute paths (starting with /) are repo-root-relative (leading / stripped, then cleaned)
 //   - Relative paths are resolved relative to the source path
 //   - Paths with .. are resolved via path.Join (e.g., "../common/values.yaml" with sourcePath="charts/app" → "charts/common/values.yaml")
 func resolveValueFilePath(sourcePath, valueFile string) string {
 	if strings.HasPrefix(valueFile, "/") {
-		return strings.TrimPrefix(valueFile, "/")
+		return path.Clean(strings.TrimPrefix(valueFile, "/"))
 	}
 	if sourcePath == "" || sourcePath == "." {
 		return path.Clean(valueFile)
@@ -620,12 +620,13 @@ func resolveValueFilePath(sourcePath, valueFile string) string {
 }
 
 // fileMatchesAppSources checks if a changed file matches any of an application's source paths
-// or Helm valueFile paths. For multi-source apps, it checks each source whose RepoURL matches.
-// For single-source apps, it falls back to the existing pathContains check on app.Path.
+// or Helm valueFile paths. For multi-source apps, it checks each source whose RepoURL matches
+// the target repo for direct path and non-$ref valueFile matches. For single-source apps, it
+// falls back to the existing pathContains check on app.Path.
 //
 // For $ref valueFile references (e.g., "$values/apps/harbor/values.yaml"), it resolves
-// the reference by finding the source with a matching Ref name and checking if that
-// source's RepoURL matches the target repo.
+// the reference by finding the source with a matching Ref name and checking if that source
+// (which may have a different RepoURL) supplies the referenced valueFile in the target repo.
 func fileMatchesAppSources(app models.Application, repoURL, file string) bool {
 	normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
 
@@ -708,7 +709,8 @@ func resolveRefValueFile(valueFile string, refSources map[string]models.Applicat
 		return false
 	}
 
-	return refPath == file
+	// Normalize both paths so dot segments or extra slashes still compare equal
+	return path.Clean(refPath) == path.Clean(file)
 }
 
 // pathContains checks if a file path is within the given directory.
