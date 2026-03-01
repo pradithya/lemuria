@@ -124,6 +124,27 @@ func (m *mockLockManagerForSync) GetPlan(context.Context, string, int) (string, 
 }
 func (m *mockLockManagerForSync) Ping(context.Context) error { return nil }
 func (m *mockLockManagerForSync) Close() error               { return nil }
+func (m *mockLockManagerForSync) UpdateLock(_ context.Context, _ *models.Lock) error {
+	return nil
+}
+func (m *mockLockManagerForSync) StoreAppSetAutoSync(_ context.Context, _, _ string, _ int, _ []byte) error {
+	return nil
+}
+func (m *mockLockManagerForSync) GetAppSetAutoSync(_ context.Context, _, _ string, _ int) ([]byte, error) {
+	return nil, nil
+}
+func (m *mockLockManagerForSync) DeleteAppSetAutoSync(_ context.Context, _, _ string, _ int) error {
+	return nil
+}
+func (m *mockLockManagerForSync) StoreParentAutoSync(_ context.Context, _, _ string, _ int, _ []byte) error {
+	return nil
+}
+func (m *mockLockManagerForSync) ListParentAutoSync(_ context.Context, _ string, _ int) (map[string][]byte, error) {
+	return nil, nil
+}
+func (m *mockLockManagerForSync) DeleteParentAutoSync(_ context.Context, _, _ string, _ int) error {
+	return nil
+}
 
 func newSyncTestExecutor(vcsClient vcs.Client, cfg *config.Config) *Executor {
 	return &Executor{

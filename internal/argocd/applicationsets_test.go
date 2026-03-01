@@ -677,3 +677,131 @@ func TestGetApplicationsByApplicationSet(t *testing.T) {
 		})
 	}
 }
+
+func TestGetApplicationSetRaw(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		appSet  *v1alpha1.ApplicationSet
+		wantErr bool
+	}{
+		{
+			name:   "successful get",
+			status: http.StatusOK,
+			appSet: &v1alpha1.ApplicationSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-appset"},
+				Spec: v1alpha1.ApplicationSetSpec{
+					Template: v1alpha1.ApplicationSetTemplate{
+						Spec: v1alpha1.ApplicationSpec{
+							Project: "default",
+							SyncPolicy: &v1alpha1.SyncPolicy{
+								Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:    "not found",
+			status:  http.StatusNotFound,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Errorf("method = %q, want GET", r.Method)
+				}
+				if r.URL.Path != "/api/v1/applicationsets/test-appset" {
+					t.Errorf("path = %q, want /api/v1/applicationsets/test-appset", r.URL.Path)
+				}
+				if tt.wantErr {
+					http.Error(w, `{"message":"not found"}`, tt.status)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(tt.appSet)
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			result, err := client.GetApplicationSetRaw(context.Background(), "test-appset")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("GetApplicationSetRaw() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if result.Name != "test-appset" {
+				t.Errorf("Name = %q, want %q", result.Name, "test-appset")
+			}
+			if result.Spec.Template.Spec.SyncPolicy == nil || result.Spec.Template.Spec.SyncPolicy.Automated == nil {
+				t.Fatal("expected SyncPolicy.Automated to be set")
+			}
+			if !result.Spec.Template.Spec.SyncPolicy.Automated.Prune {
+				t.Error("expected Prune to be true")
+			}
+		})
+	}
+}
+
+func TestUpdateApplicationSet(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  int
+		wantErr bool
+	}{
+		{
+			name:   "successful update",
+			status: http.StatusOK,
+		},
+		{
+			name:    "API error",
+			status:  http.StatusBadRequest,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPut {
+					t.Errorf("method = %q, want PUT", r.Method)
+				}
+				if r.URL.Path != "/api/v1/applicationsets/test-appset" {
+					t.Errorf("path = %q, want /api/v1/applicationsets/test-appset", r.URL.Path)
+				}
+				var appSet v1alpha1.ApplicationSet
+				if err := json.NewDecoder(r.Body).Decode(&appSet); err != nil {
+					t.Errorf("failed to decode body: %v", err)
+				}
+				if appSet.Name != "test-appset" {
+					t.Errorf("appSet.Name = %q, want test-appset", appSet.Name)
+				}
+				if tt.wantErr {
+					http.Error(w, `{"message":"error"}`, tt.status)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]any{})
+			}))
+			defer ts.Close()
+
+			client := newTestClient(ts)
+			appSet := &v1alpha1.ApplicationSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-appset"},
+				Spec: v1alpha1.ApplicationSetSpec{
+					Template: v1alpha1.ApplicationSetTemplate{
+						Spec: v1alpha1.ApplicationSpec{Project: "default"},
+					},
+				},
+			}
+			err := client.UpdateApplicationSet(context.Background(), "test-appset", appSet)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("UpdateApplicationSet() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}

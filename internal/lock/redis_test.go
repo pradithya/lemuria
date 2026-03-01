@@ -1249,3 +1249,150 @@ func TestStorePlanOverwrite(t *testing.T) {
 		t.Errorf("PlanDiffs length = %d, want 1", len(lock.PlanDiffs))
 	}
 }
+
+func TestUpdateLock(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	ctx := context.Background()
+
+	// First acquire a lock
+	_, err := mgr.Lock(ctx, models.LockRequest{
+		Application: "test-app",
+		PRNumber:    1,
+		Repo:        "org/repo",
+		User:        "user1",
+	})
+	if err != nil {
+		t.Fatalf("Lock failed: %v", err)
+	}
+
+	// Get and update the lock
+	lock, err := mgr.Get(ctx, "test-app")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	lock.AutoSyncDisabled = true
+	lock.OriginalSyncPolicy = []byte(`{"prune":true}`)
+	lock.IsParentApp = true
+
+	if err := mgr.UpdateLock(ctx, lock); err != nil {
+		t.Fatalf("UpdateLock failed: %v", err)
+	}
+
+	// Verify the update persisted
+	updated, err := mgr.Get(ctx, "test-app")
+	if err != nil {
+		t.Fatalf("Get after update failed: %v", err)
+	}
+	if !updated.AutoSyncDisabled {
+		t.Error("expected AutoSyncDisabled to be true")
+	}
+	if string(updated.OriginalSyncPolicy) != `{"prune":true}` {
+		t.Errorf("OriginalSyncPolicy = %s, want {\"prune\":true}", updated.OriginalSyncPolicy)
+	}
+	if !updated.IsParentApp {
+		t.Error("expected IsParentApp to be true")
+	}
+}
+
+func TestAppSetAutoSync(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	ctx := context.Background()
+
+	policy := []byte(`{"prune":true,"selfHeal":true}`)
+
+	// Store
+	err := mgr.StoreAppSetAutoSync(ctx, "my-appset", "org/repo", 42, policy)
+	if err != nil {
+		t.Fatalf("StoreAppSetAutoSync failed: %v", err)
+	}
+
+	// Get
+	got, err := mgr.GetAppSetAutoSync(ctx, "my-appset", "org/repo", 42)
+	if err != nil {
+		t.Fatalf("GetAppSetAutoSync failed: %v", err)
+	}
+	if string(got) != string(policy) {
+		t.Errorf("GetAppSetAutoSync = %s, want %s", got, policy)
+	}
+
+	// Get non-existent returns nil
+	got, err = mgr.GetAppSetAutoSync(ctx, "other-appset", "org/repo", 42)
+	if err != nil {
+		t.Fatalf("GetAppSetAutoSync for missing key failed: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil for missing key, got %s", got)
+	}
+
+	// Delete
+	err = mgr.DeleteAppSetAutoSync(ctx, "my-appset", "org/repo", 42)
+	if err != nil {
+		t.Fatalf("DeleteAppSetAutoSync failed: %v", err)
+	}
+
+	// Verify deletion
+	got, err = mgr.GetAppSetAutoSync(ctx, "my-appset", "org/repo", 42)
+	if err != nil {
+		t.Fatalf("GetAppSetAutoSync after delete failed: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil after delete, got %s", got)
+	}
+}
+
+func TestParentAutoSync(t *testing.T) {
+	mgr, _ := newTestManager(t)
+	ctx := context.Background()
+
+	policy1 := []byte(`{"prune":true}`)
+	policy2 := []byte(`{"selfHeal":true}`)
+
+	// Store two parent policies
+	if err := mgr.StoreParentAutoSync(ctx, "parent-1", "org/repo", 10, policy1); err != nil {
+		t.Fatalf("StoreParentAutoSync failed: %v", err)
+	}
+	if err := mgr.StoreParentAutoSync(ctx, "parent-2", "org/repo", 10, policy2); err != nil {
+		t.Fatalf("StoreParentAutoSync failed: %v", err)
+	}
+
+	// List
+	result, err := mgr.ListParentAutoSync(ctx, "org/repo", 10)
+	if err != nil {
+		t.Fatalf("ListParentAutoSync failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 parents, got %d", len(result))
+	}
+	if string(result["parent-1"]) != string(policy1) {
+		t.Errorf("parent-1 policy = %s, want %s", result["parent-1"], policy1)
+	}
+	if string(result["parent-2"]) != string(policy2) {
+		t.Errorf("parent-2 policy = %s, want %s", result["parent-2"], policy2)
+	}
+
+	// List for different PR returns empty
+	result, err = mgr.ListParentAutoSync(ctx, "org/repo", 99)
+	if err != nil {
+		t.Fatalf("ListParentAutoSync for other PR failed: %v", err)
+	}
+	if len(result) != 0 {
+		t.Errorf("expected 0 parents for other PR, got %d", len(result))
+	}
+
+	// Delete one parent
+	if err := mgr.DeleteParentAutoSync(ctx, "parent-1", "org/repo", 10); err != nil {
+		t.Fatalf("DeleteParentAutoSync failed: %v", err)
+	}
+
+	// Verify only parent-2 remains
+	result, err = mgr.ListParentAutoSync(ctx, "org/repo", 10)
+	if err != nil {
+		t.Fatalf("ListParentAutoSync after delete failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 parent after delete, got %d", len(result))
+	}
+	if _, ok := result["parent-2"]; !ok {
+		t.Error("expected parent-2 to remain")
+	}
+}

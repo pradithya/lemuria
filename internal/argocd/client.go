@@ -182,6 +182,13 @@ func (c *Client) delete(ctx context.Context, path string, query url.Values) erro
 	return nil
 }
 
+// IsNotFound returns true if the error indicates a 404 Not Found response.
+// The error format is controlled by our own get/put/delete helpers which use
+// fmt.Errorf("API error (status %d): ..."), so the string match is stable.
+func IsNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "API error (status 404)")
+}
+
 // Version returns the Argo CD server version.
 func (c *Client) Version(ctx context.Context) (string, error) {
 	var resp struct {

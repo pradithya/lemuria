@@ -250,6 +250,66 @@ func (c *Client) UpdateApplicationSpec(ctx context.Context, name string, spec v1
 	return nil
 }
 
+// GetManagedResources returns the managed resources for an application from ArgoCD.
+func (c *Client) GetManagedResources(ctx context.Context, name string) ([]ManagedResource, error) {
+	return c.getManagedResources(ctx, name)
+}
+
+// ParentMap maps child application names to their parent applications.
+// It is precomputed once and reused across multiple parent lookups to avoid
+// repeated ListApplications + GetManagedResources API calls.
+type ParentMap map[string][]models.Application
+
+// BuildParentMap lists all applications, fetches managed resources for auto-sync
+// enabled apps, and builds a map from child app name to parent apps. This should
+// be called once per sync/rollback operation and the result passed to
+// FindParentApps as a non-nil ParentMap for efficient lookups.
+func (c *Client) BuildParentMap(ctx context.Context) (ParentMap, error) {
+	allApps, err := c.ListApplications(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing applications for parent detection: %w", err)
+	}
+
+	pm := make(ParentMap)
+	for _, app := range allApps {
+		if !app.HasAutoSync() {
+			continue
+		}
+
+		managed, err := c.GetManagedResources(ctx, app.Name)
+		if err != nil {
+			slog.Warn("failed to get managed resources for parent detection, skipping app",
+				"app", app.Name, "error", err)
+			continue
+		}
+
+		for _, r := range managed {
+			if r.Kind == "Application" {
+				pm[r.Name] = append(pm[r.Name], app)
+			}
+		}
+	}
+
+	return pm, nil
+}
+
+// FindParentApps finds applications that manage the given app's Application CR
+// via their managed-resources (apps-of-apps pattern). Only returns parents that
+// have auto-sync enabled, since those are the ones that could interfere.
+// If parentMap is non-nil, it is used for lookups instead of making API calls.
+func (c *Client) FindParentApps(ctx context.Context, childAppName string, parentMap ParentMap) ([]models.Application, error) {
+	if parentMap != nil {
+		return parentMap[childAppName], nil
+	}
+
+	// Fallback: build on-the-fly (used when called without precomputation)
+	pm, err := c.BuildParentMap(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return pm[childAppName], nil
+}
+
 // GetApplicationHistory returns the deployment history for an application.
 func (c *Client) GetApplicationHistory(ctx context.Context, name string) ([]v1alpha1.RevisionHistory, error) {
 	var resp v1alpha1.Application

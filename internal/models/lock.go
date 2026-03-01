@@ -29,18 +29,22 @@ type PlanDiffEntry struct {
 
 // Lock represents an application lock held by a PR.
 type Lock struct {
-	Application  string                `json:"application"`
-	PRNumber     int                   `json:"pr_number"`
-	Repo         string                `json:"repo"`
-	RepoURL      string                `json:"repo_url,omitempty"`
-	Provider     string                `json:"provider,omitempty"`
-	User         string                `json:"user"`
-	LockedAt     time.Time             `json:"locked_at"`
-	PlanRevision string                `json:"plan_revision"`
-	SourceFile   string                `json:"source_file,omitempty"`
-	PlanOutput   string                `json:"plan_output,omitempty"`
-	PlanDiffs    []PlanDiffEntry       `json:"plan_diffs,omitempty"`
-	ChangeType   ApplicationChangeType `json:"change_type,omitempty"`
+	Application        string                `json:"application"`
+	PRNumber           int                   `json:"pr_number"`
+	Repo               string                `json:"repo"`
+	RepoURL            string                `json:"repo_url,omitempty"`
+	Provider           string                `json:"provider,omitempty"`
+	User               string                `json:"user"`
+	LockedAt           time.Time             `json:"locked_at"`
+	PlanRevision       string                `json:"plan_revision"`
+	SourceFile         string                `json:"source_file,omitempty"`
+	PlanOutput         string                `json:"plan_output,omitempty"`
+	PlanDiffs          []PlanDiffEntry       `json:"plan_diffs,omitempty"`
+	ChangeType         ApplicationChangeType `json:"change_type,omitempty"`
+	AutoSyncDisabled   bool                  `json:"auto_sync_disabled,omitempty"`   // true if Lemuria disabled auto-sync
+	OriginalSyncPolicy []byte                `json:"original_sync_policy,omitempty"` // JSON of original *v1alpha1.SyncPolicyAutomated
+	ApplicationSetName string                `json:"application_set_name,omitempty"` // owning ApplicationSet (for grouped restore)
+	IsParentApp        bool                  `json:"is_parent_app,omitempty"`        // true if this is a parent app disabled for apps-of-apps
 }
 
 // LockRequest is used when attempting to acquire a lock.

@@ -16,11 +16,15 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
@@ -280,6 +284,27 @@ func (m *mockLock) GetPlan(_ context.Context, application string, prNumber int) 
 
 func (m *mockLock) Ping(_ context.Context) error { return nil }
 func (m *mockLock) Close() error                 { return nil }
+func (m *mockLock) UpdateLock(_ context.Context, _ *models.Lock) error {
+	return nil
+}
+func (m *mockLock) StoreAppSetAutoSync(_ context.Context, _, _ string, _ int, _ []byte) error {
+	return nil
+}
+func (m *mockLock) GetAppSetAutoSync(_ context.Context, _, _ string, _ int) ([]byte, error) {
+	return nil, nil
+}
+func (m *mockLock) DeleteAppSetAutoSync(_ context.Context, _, _ string, _ int) error {
+	return nil
+}
+func (m *mockLock) StoreParentAutoSync(_ context.Context, _, _ string, _ int, _ []byte) error {
+	return nil
+}
+func (m *mockLock) ListParentAutoSync(_ context.Context, _ string, _ int) (map[string][]byte, error) {
+	return nil, nil
+}
+func (m *mockLock) DeleteParentAutoSync(_ context.Context, _, _ string, _ int) error {
+	return nil
+}
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -1953,6 +1978,186 @@ func TestExecute_DispatchesRollback(t *testing.T) {
 		if !strings.Contains(vcs.postedComments[0].Body, "Nothing to rollback") {
 			t.Logf("rollback posted: %s", vcs.postedComments[0].Body)
 		}
+	}
+}
+
+func TestExecuteRollback_WithLocksDisablesAutoSync(t *testing.T) {
+	// When rollback is called without a specific app, it disables auto-sync on all locked apps
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		// ListApplications for BuildParentMap
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications" && r.URL.RawQuery != "":
+			resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		// GetApplication for rollback
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/my-app":
+			resp := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
+				Spec: v1alpha1.ApplicationSpec{
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://github.com/org/repo",
+						TargetRevision: "main",
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		// GetApplicationRaw for disableAutoSync
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/api/v1/applications/"):
+			appName := strings.TrimPrefix(r.URL.Path, "/api/v1/applications/")
+			resp := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: appName},
+				Spec:       v1alpha1.ApplicationSpec{}, // no auto-sync
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		// SyncApplication
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/sync"):
+			resp := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
+				Status: v1alpha1.ApplicationStatus{
+					OperationState: &v1alpha1.OperationState{
+						Phase:   "Succeeded",
+						Message: "ok",
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case strings.HasSuffix(r.URL.Path, "/managed-resources"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	vcsClient := &mockVCS{}
+	lockMgr := &mockLock{
+		locks: []models.Lock{
+			{
+				Application:  "my-app",
+				PRNumber:     42,
+				Repo:         "org/repo",
+				ChangeType:   models.ApplicationExisting,
+				PlanRevision: "abc123",
+			},
+		},
+	}
+
+	exec := &Executor{
+		vcs:      vcsClient,
+		argocd:   argoClient,
+		lock:     lockMgr,
+		config:   &config.Config{},
+		renderer: diff.NewRenderer(),
+	}
+
+	cmd := &Command{Name: CommandRollback}
+	event := defaultEvent()
+
+	err := exec.Execute(context.Background(), cmd, event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have posted a rollback result comment
+	if len(vcsClient.postedComments) == 0 {
+		t.Fatal("expected a comment to be posted")
+	}
+	if !strings.Contains(vcsClient.postedComments[0].Body, "Lemuria Rollback") {
+		t.Errorf("expected rollback comment, got: %s", vcsClient.postedComments[0].Body)
+	}
+}
+
+func TestExecuteRollback_SpecificAppDisablesAutoSync(t *testing.T) {
+	// When rollback is called with a specific app, it calls disableAutoSyncForRollback
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications" && r.URL.RawQuery != "":
+			resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/my-app":
+			resp := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
+				Spec: v1alpha1.ApplicationSpec{
+					SyncPolicy: &v1alpha1.SyncPolicy{
+						Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+					},
+					Source: &v1alpha1.ApplicationSource{
+						RepoURL:        "https://github.com/org/repo",
+						TargetRevision: "main",
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case r.Method == "PUT" && strings.HasSuffix(r.URL.Path, "/spec"):
+			w.WriteHeader(http.StatusOK)
+
+		case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/sync"):
+			resp := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
+				Status: v1alpha1.ApplicationStatus{
+					OperationState: &v1alpha1.OperationState{
+						Phase:   "Succeeded",
+						Message: "ok",
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case strings.HasSuffix(r.URL.Path, "/managed-resources"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	vcsClient := &mockVCS{}
+	lockMgr := &mockLock{
+		locks: []models.Lock{
+			{
+				Application:  "my-app",
+				PRNumber:     42,
+				Repo:         "org/repo",
+				ChangeType:   models.ApplicationExisting,
+				PlanRevision: "abc123",
+			},
+		},
+	}
+
+	exec := &Executor{
+		vcs:      vcsClient,
+		argocd:   argoClient,
+		lock:     lockMgr,
+		config:   &config.Config{},
+		renderer: diff.NewRenderer(),
+	}
+
+	cmd := &Command{Name: CommandRollback, Application: "my-app"}
+	event := defaultEvent()
+
+	err := exec.Execute(context.Background(), cmd, event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have posted a rollback result comment
+	if len(vcsClient.postedComments) == 0 {
+		t.Fatal("expected a comment to be posted")
+	}
+	if !strings.Contains(vcsClient.postedComments[0].Body, "Rollback") {
+		t.Errorf("expected rollback comment, got: %s", vcsClient.postedComments[0].Body)
 	}
 }
 

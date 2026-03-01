@@ -16,6 +16,7 @@ package commands
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -116,7 +117,7 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n❌ %s", err.Error()))
 	}
 
-	// Verify plans are not stale and check for auto-sync
+	// Verify plans are not stale
 	for _, l := range locks {
 		slog.Debug("verifying plan freshness",
 			"app", l.Application,
@@ -131,26 +132,12 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 			)
 			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n⚠️ Plan for `%s` is stale. Please run `lemuria plan` again.", l.Application))
 		}
+	}
 
-		// New and deleted apps don't exist (or shouldn't be checked) in ArgoCD yet — skip auto-sync check
-		if l.ChangeType == models.ApplicationNew || l.ChangeType == models.ApplicationDeleted {
-			continue
-		}
-
-		// Check if auto-sync is enabled
-		app, err := e.argocd.GetApplication(ctx, l.Application)
-		if err != nil {
-			slog.Debug("failed to get application",
-				"app", l.Application,
-				"error", err,
-			)
-			return e.postError(ctx, event, fmt.Errorf("getting application %s: %w", l.Application, err))
-		}
-		if app.HasAutoSync() {
-			slog.Debug("application has auto-sync enabled",
-				"app", l.Application,
-			)
-			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n❌ Application `%s` has auto-sync enabled.\n\nDisable auto-sync before using Lemuria to prevent conflicts.", l.Application))
+	// Disable auto-sync on applications that have it enabled (skip for dry-run)
+	if !cmd.DryRun {
+		if err := e.disableAutoSyncForLocks(ctx, locks, event); err != nil {
+			return e.postError(ctx, event, fmt.Errorf("disabling auto-sync: %w", err))
 		}
 	}
 
@@ -194,15 +181,40 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 		skipNoChanges = *repoConfigForSkip.SkipNoChanges
 	}
 
-	// Sync each application in parallel (bounded concurrency)
+	// Determine which apps to sync — only leaf apps are synced during
+	// `lemuria sync`. Parent apps that manage other locked apps are skipped
+	// because syncing them could reconcile child Application CRs and undo
+	// the child's PR-specific targetRevision override. Parents will reconcile
+	// naturally when the PR is merged and their auto-sync is restored.
 	slog.Debug("starting sync for applications",
 		"count", len(locks),
 		"skip_no_changes", skipNoChanges,
 	)
 	results := make([]syncResult, len(locks))
+	syncIndices, skippedParents := e.computeSyncTargets(ctx, locks)
+
+	// Mark skipped parent apps in results
+	for _, i := range skippedParents {
+		l := locks[i]
+		results[i] = syncResult{
+			Application: l.Application,
+			PlanOutput:  l.PlanOutput,
+			PlanDiffs:   l.PlanDiffs,
+			Result: &models.SyncResult{
+				Application:  l.Application,
+				Phase:        models.SyncPhaseSucceeded,
+				Message:      "Skipped — parent app will reconcile on PR merge",
+				HealthStatus: models.HealthStatusUnknown,
+			},
+		}
+		tracker.updateResult(ctx, i, results[i])
+	}
+
+	// Sync leaf apps in parallel (bounded concurrency)
 	g := new(errgroup.Group)
 	g.SetLimit(10)
-	for i, l := range locks {
+	for _, i := range syncIndices {
+		l := locks[i]
 		// Skip applications with no detected changes if configured.
 		// A no-op plan stores PlanOutput="" with zero diffs, or
 		// PlanOutput="No changes detected" (from formatPlanSummary fallback).
@@ -281,10 +293,23 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 					e.revertTargetRevision(ctx, l, event)
 				}
 			}
+
+			// Restore auto-sync before releasing locks. Re-fetch locks
+			// to get the updated auto-sync state stored during disableAutoSyncForLocks.
+			updatedLocks, err := e.lock.ListByPR(ctx, event.Repo.FullName, event.PR.Number)
+			if err != nil {
+				slog.Warn("failed to list locks for auto-sync restore", "error", err)
+			} else {
+				restoreAllAutoSync(ctx, e.argocd, e.lock, updatedLocks, event.Repo.FullName, event.PR.Number)
+			}
+
 			// Release all locks after successful auto-merge.
 			// If auto-merge is disabled or fails, locks persist until
 			// the PR is closed/merged (cleaned up by UnlockAll).
-			for _, l := range locks {
+			if updatedLocks == nil {
+				updatedLocks = locks
+			}
+			for _, l := range updatedLocks {
 				if err := e.lock.Unlock(ctx, l.Application, event.Repo.FullName, event.PR.Number); err != nil {
 					slog.Warn("failed to release lock after auto-merge", "app", l.Application, "error", err)
 				}
@@ -763,6 +788,107 @@ func IsProtectedBranch(branch string) bool {
 	return false
 }
 
+// computeSyncTargets returns the lock indices of leaf apps (apps that do not
+// manage other locked apps). Parent/grandparent apps in the locked set are
+// excluded from sync — they will reconcile naturally when the PR is merged
+// and their auto-sync is restored. This prevents parent apps from overwriting
+// child app targetRevision overrides during sync.
+//
+// Locks with IsParentApp=true are always excluded (they are locked only for
+// auto-sync management, not for syncing).
+//
+// If managed-resource detection fails for all apps, falls back to returning
+// all non-IsParentApp lock indices (same as pre-wave behavior).
+func (e *Executor) computeSyncTargets(ctx context.Context, locks []models.Lock) (syncIndices []int, skippedParents []int) {
+	// Build set of candidate lock indices — exclude IsParentApp locks
+	type appInfo struct {
+		lockIdx int
+		name    string
+	}
+	var candidates []appInfo
+	nameToIdx := make(map[string]int) // app name → index in candidates slice
+	for i, l := range locks {
+		if l.IsParentApp {
+			continue
+		}
+		nameToIdx[l.Application] = len(candidates)
+		candidates = append(candidates, appInfo{lockIdx: i, name: l.Application})
+	}
+
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// If only one app, no parent-child detection needed
+	if len(candidates) == 1 {
+		return []int{candidates[0].lockIdx}, nil
+	}
+
+	// Fetch managed resources for all candidate apps concurrently
+	type managedResult struct {
+		idx       int
+		resources []argocd.ManagedResource
+		err       error
+	}
+	results := make([]managedResult, len(candidates))
+	g := new(errgroup.Group)
+	g.SetLimit(10)
+	for i, info := range candidates {
+		idx, name := i, info.name
+		g.Go(func() error {
+			resources, err := e.argocd.GetManagedResources(ctx, name)
+			results[idx] = managedResult{idx: idx, resources: resources, err: err}
+			return nil
+		})
+	}
+	g.Wait() //nolint:errcheck
+
+	// Identify which candidates are parents of other candidates
+	isParent := make(map[int]bool) // candidates index → true if parent
+	for i, mr := range results {
+		if mr.err != nil {
+			slog.Warn("failed to get managed resources for parent detection",
+				"app", candidates[i].name, "error", mr.err)
+			continue
+		}
+		for _, r := range mr.resources {
+			if r.Kind == "Application" {
+				if _, ok := nameToIdx[r.Name]; ok {
+					isParent[i] = true
+					break
+				}
+			}
+		}
+	}
+
+	// If no parent-child relationships detected, return all candidates
+	if len(isParent) == 0 {
+		all := make([]int, len(candidates))
+		for i, info := range candidates {
+			all[i] = info.lockIdx
+		}
+		return all, nil
+	}
+
+	// Split into leaf apps (to sync) and parent apps (to skip)
+	for i, info := range candidates {
+		if isParent[i] {
+			skippedParents = append(skippedParents, info.lockIdx)
+			slog.Debug("skipping parent app from sync, will reconcile on PR merge",
+				"app", info.name)
+		} else {
+			syncIndices = append(syncIndices, info.lockIdx)
+		}
+	}
+
+	slog.Debug("computed sync targets",
+		"sync_count", len(syncIndices),
+		"skipped_parents", len(skippedParents),
+	)
+
+	return syncIndices, skippedParents
+}
+
 // mergeResourceHealth merges per-resource health info into sync result resources.
 func mergeResourceHealth(result *models.SyncResult, healthInfo []models.ResourceHealthInfo) {
 	healthMap := make(map[string]models.ResourceHealthInfo, len(healthInfo))
@@ -776,6 +902,98 @@ func mergeResourceHealth(result *models.SyncResult, healthInfo []models.Resource
 			result.Resources[i].HealthMessage = h.HealthMessage
 		}
 	}
+}
+
+// disableAutoSyncForLocks disables auto-sync on all locked applications that have
+// it enabled, including their ApplicationSet templates and parent apps.
+func (e *Executor) disableAutoSyncForLocks(ctx context.Context, locks []models.Lock, event *models.PREvent) error {
+	// Check if any existing apps need auto-sync handling
+	hasExistingApps := false
+	for _, l := range locks {
+		if l.ChangeType != models.ApplicationNew && l.ChangeType != models.ApplicationDeleted {
+			hasExistingApps = true
+			break
+		}
+	}
+	if !hasExistingApps {
+		return nil
+	}
+
+	// Precompute parent map once to avoid repeated ListApplications + GetManagedResources
+	// API calls for each locked app. This reduces O(N × M) calls to O(1 + M) where N is
+	// locked apps and M is auto-sync enabled apps.
+	parentMap, err := e.argocd.BuildParentMap(ctx)
+	if err != nil {
+		slog.Warn("failed to precompute parent map; falling back to per-app parent detection", "error", err)
+	}
+
+	visited := make(map[string]bool)
+	appSetDisabled := make(map[string]bool)
+
+	for _, l := range locks {
+		// Skip new and deleted apps
+		if l.ChangeType == models.ApplicationNew || l.ChangeType == models.ApplicationDeleted {
+			continue
+		}
+
+		state, err := disableAutoSync(ctx, e.argocd, l.Application)
+		if err != nil {
+			return fmt.Errorf("disabling auto-sync for %s: %w", l.Application, err)
+		}
+
+		// Mark this application as visited for parent traversal
+		visited[l.Application] = true
+
+		if state != nil {
+			// Store auto-sync state in lock
+			policyJSON, err := json.Marshal(state.OriginalPolicy)
+			if err != nil {
+				return fmt.Errorf("marshaling sync policy for %s: %w", l.Application, err)
+			}
+
+			currentLock, err := e.lock.Get(ctx, l.Application)
+			if err != nil {
+				return fmt.Errorf("getting lock for %s: %w", l.Application, err)
+			}
+			if currentLock == nil {
+				return fmt.Errorf("no lock found for %s while storing auto-sync state", l.Application)
+			}
+
+			currentLock.AutoSyncDisabled = true
+			currentLock.OriginalSyncPolicy = policyJSON
+			currentLock.ApplicationSetName = state.ApplicationSetName
+			if err := e.lock.UpdateLock(ctx, currentLock); err != nil {
+				return fmt.Errorf("storing auto-sync state in lock for %s: %w", l.Application, err)
+			}
+
+			// Disable auto-sync on ApplicationSet template if applicable
+			if state.ApplicationSetName != "" && !appSetDisabled[state.ApplicationSetName] {
+				originalBytes, err := disableAppSetAutoSync(ctx, e.argocd, state.ApplicationSetName)
+				if err != nil {
+					slog.Warn("failed to disable auto-sync on applicationset template",
+						"applicationset", state.ApplicationSetName, "error", err)
+				} else if originalBytes != nil {
+					if err := e.lock.StoreAppSetAutoSync(ctx, state.ApplicationSetName, event.Repo.FullName, event.PR.Number, originalBytes); err != nil {
+						slog.Warn("failed to store applicationset auto-sync state",
+							"applicationset", state.ApplicationSetName, "error", err)
+					}
+				}
+				appSetDisabled[state.ApplicationSetName] = true
+			}
+		}
+
+		// Disable auto-sync on parent apps (apps-of-apps pattern) — always run
+		// regardless of whether this app itself has auto-sync, because a parent
+		// app with auto-sync can still interfere.
+		if err := disableParentAutoSync(ctx, e.argocd, e.lock, l.Application,
+			event.Repo.FullName, event.Repo.HTMLURL, string(event.Provider),
+			event.PR.Number, event.Sender.Login, visited, 0, parentMap); err != nil {
+			slog.Warn("failed to disable parent auto-sync",
+				"app", l.Application, "error", err)
+		}
+	}
+
+	return nil
 }
 
 // syncCommentTracker manages the lifecycle of a progressive sync comment.
