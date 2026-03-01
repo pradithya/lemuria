@@ -123,6 +123,9 @@ func (e *Executor) disableAutoSyncForRollback(ctx context.Context, appName strin
 			if err := e.lock.UpdateLock(ctx, currentLock); err != nil {
 				return fmt.Errorf("storing auto-sync state in lock for %s: %w", appName, err)
 			}
+		} else {
+			slog.Warn("no lock found for app during rollback auto-sync disable; restore state not persisted",
+				"app", appName)
 		}
 	}
 

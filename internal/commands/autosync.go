@@ -166,8 +166,15 @@ func disableParentAutoSync(
 		// Disable auto-sync on parent
 		state, err := disableAutoSync(ctx, argoClient, parent.Name)
 		if err != nil {
-			slog.Warn("failed to disable auto-sync on parent app",
+			slog.Warn("failed to disable auto-sync on parent app, releasing lock",
 				"parent", parent.Name, "error", err)
+			// Release the lock since we failed to disable auto-sync —
+			// holding a lock without the intended protection is worse than
+			// not holding it (blocks other PRs from operating on this app).
+			if unlockErr := lockMgr.Unlock(ctx, parent.Name, repo, prNumber); unlockErr != nil {
+				slog.Warn("failed to release parent lock after disable failure",
+					"parent", parent.Name, "error", unlockErr)
+			}
 			continue
 		}
 

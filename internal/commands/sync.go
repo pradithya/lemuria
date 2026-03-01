@@ -924,7 +924,7 @@ func (e *Executor) disableAutoSyncForLocks(ctx context.Context, locks []models.L
 	// locked apps and M is auto-sync enabled apps.
 	parentMap, err := e.argocd.BuildParentMap(ctx)
 	if err != nil {
-		slog.Warn("failed to build parent map, parent detection will be skipped", "error", err)
+		slog.Warn("failed to precompute parent map; falling back to per-app parent detection", "error", err)
 	}
 
 	visited := make(map[string]bool)

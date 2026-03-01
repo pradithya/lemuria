@@ -1540,6 +1540,92 @@ func TestDisableParentAutoSync_CycleDetection(t *testing.T) {
 	// but when recursing, app-a should be skipped (already visited = cycle)
 }
 
+func TestDisableParentAutoSync_DisableFailsReleasesLock(t *testing.T) {
+	// When disableAutoSync fails on a parent, the lock should be released
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications" && r.URL.RawQuery != "":
+			resp := v1alpha1.ApplicationList{
+				Items: []v1alpha1.Application{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "parent-app"},
+						Spec: v1alpha1.ApplicationSpec{
+							SyncPolicy: &v1alpha1.SyncPolicy{
+								Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+							},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "child-app"},
+						Spec:       v1alpha1.ApplicationSpec{},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case strings.HasSuffix(r.URL.Path, "/managed-resources"):
+			if strings.Contains(r.URL.Path, "parent-app") {
+				resp := map[string]any{
+					"items": []map[string]any{
+						{"kind": "Application", "name": "child-app"},
+					},
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+			} else {
+				_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+			}
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/parent-app":
+			// Return 500 to trigger disableAutoSync failure
+			http.Error(w, `{"message":"server error"}`, http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	unlocked := make(map[string]bool)
+	mockLock := &mockAutoSyncLockWithUnlock{
+		lockStore: make(map[string]*models.Lock),
+		unlocked:  unlocked,
+	}
+
+	visited := make(map[string]bool)
+	err := disableParentAutoSync(context.Background(), client, mockLock,
+		"child-app", "org/repo", "https://github.com/org/repo", "github",
+		1, "user", visited, 0, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Lock should have been released after failure
+	if !unlocked["parent-app"] {
+		t.Error("expected parent-app lock to be released after disableAutoSync failure")
+	}
+}
+
+// mockAutoSyncLockWithUnlock tracks both lock and unlock calls.
+type mockAutoSyncLockWithUnlock struct {
+	mockLockManagerForSync
+	lockStore map[string]*models.Lock
+	unlocked  map[string]bool
+}
+
+func (m *mockAutoSyncLockWithUnlock) Lock(_ context.Context, req models.LockRequest) (*models.LockResult, error) {
+	lock := &models.Lock{
+		Application: req.Application,
+		PRNumber:    req.PRNumber,
+		Repo:        req.Repo,
+	}
+	m.lockStore[req.Application] = lock
+	return &models.LockResult{Acquired: true, Lock: lock}, nil
+}
+
+func (m *mockAutoSyncLockWithUnlock) Unlock(_ context.Context, application, _ string, _ int) error {
+	m.unlocked[application] = true
+	return nil
+}
+
 func TestRestoreAutoSync_NilSyncPolicy(t *testing.T) {
 	// When the app's SyncPolicy is nil, it should be created
 	var specUpdated bool

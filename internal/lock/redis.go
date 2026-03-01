@@ -321,10 +321,14 @@ func (m *RedisManager) GetAppSetAutoSync(ctx context.Context, appSetName, repo s
 // DeleteAppSetAutoSync removes the stored ApplicationSet auto-sync policy.
 func (m *RedisManager) DeleteAppSetAutoSync(ctx context.Context, appSetName, repo string, prNumber int) error {
 	key := m.appSetAutoSyncKey(appSetName, repo, prNumber)
-	m.client.Del(ctx, key)
+	if err := m.client.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("deleting appset auto-sync key %q: %w", key, err)
+	}
 
 	indexKey := m.prAppSetsKey(repo, prNumber)
-	m.client.SRem(ctx, indexKey, appSetName)
+	if err := m.client.SRem(ctx, indexKey, appSetName).Err(); err != nil {
+		return fmt.Errorf("removing appset from PR index %q: %w", indexKey, err)
+	}
 
 	return nil
 }
@@ -370,10 +374,14 @@ func (m *RedisManager) ListParentAutoSync(ctx context.Context, repo string, prNu
 // DeleteParentAutoSync removes the stored parent app auto-sync policy.
 func (m *RedisManager) DeleteParentAutoSync(ctx context.Context, parentAppName, repo string, prNumber int) error {
 	key := m.parentAutoSyncKey(parentAppName, repo, prNumber)
-	m.client.Del(ctx, key)
+	if err := m.client.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("deleting parent auto-sync key %q: %w", key, err)
+	}
 
 	indexKey := m.prParentsKey(repo, prNumber)
-	m.client.SRem(ctx, indexKey, parentAppName)
+	if err := m.client.SRem(ctx, indexKey, parentAppName).Err(); err != nil {
+		return fmt.Errorf("removing parent from PR index %q: %w", indexKey, err)
+	}
 
 	return nil
 }

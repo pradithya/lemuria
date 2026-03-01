@@ -263,7 +263,7 @@ type ParentMap map[string][]models.Application
 // BuildParentMap lists all applications, fetches managed resources for auto-sync
 // enabled apps, and builds a map from child app name to parent apps. This should
 // be called once per sync/rollback operation and the result passed to
-// FindParentAppsFromMap for efficient lookups.
+// FindParentApps as a non-nil ParentMap for efficient lookups.
 func (c *Client) BuildParentMap(ctx context.Context) (ParentMap, error) {
 	allApps, err := c.ListApplications(ctx)
 	if err != nil {
