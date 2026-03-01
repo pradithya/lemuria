@@ -348,6 +348,11 @@ defaults:
   auto_merge: false
   merge_method: "squash"
   skip_no_changes: false
+  protected_branches:
+    - "main"
+    - "master"
+    - "develop"
+    - "development"
   allowed_repos:
     - "myorg/repo1"
     - "myorg/infra-*"
@@ -362,6 +367,7 @@ defaults:
 | `auto_merge` | bool | `false` | Auto-merge PR after successful sync |
 | `merge_method` | string | `squash` | Merge method: `squash`, `merge`, `rebase` |
 | `skip_no_changes` | bool | `false` | Skip syncing applications with no detected changes |
+| `protected_branches` | []string | `["main","master","develop","development"]` | Branches that are never auto-deleted after merge |
 | `allowed_repos` | []string | `[]` | Repository allowlist (empty = all repos allowed) |
 
 ### Repository Allowlist Patterns
@@ -509,7 +515,7 @@ When `auto_merge: true`:
 1. After all syncs succeed, Lemuria merges the PR
 2. Uses the specified `merge_method`
 3. Optionally deletes the source branch (if `delete_source_branch: true`)
-4. Protected branches (`main`, `master`, `develop`, `development`) are never deleted
+4. Protected branches are never deleted (configurable via `defaults.protected_branches`, defaults to `main`, `master`, `develop`, `development`)
 
 **Server default:**
 

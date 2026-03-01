@@ -1654,6 +1654,131 @@ func TestExpandAppSetMappings_SkipsNonAppSetMappings(t *testing.T) {
 	}
 }
 
+func TestExpandAppSetMappings_PositiveMatch(t *testing.T) {
+	// Mock ArgoCD server that returns an ApplicationSet and its generated apps
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/applicationsets/my-appset":
+			// GetApplicationSet
+			resp := v1alpha1.ApplicationSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-appset"},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/api/v1/applications" && r.URL.Query().Get("selector") != "":
+			// ListApplicationsWithSelector — returns apps belonging to the appset
+			resp := v1alpha1.ApplicationList{
+				Items: []v1alpha1.Application{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "app-dev",
+							OwnerReferences: []metav1.OwnerReference{
+								{Kind: "ApplicationSet", Name: "my-appset"},
+							},
+						},
+						Spec: v1alpha1.ApplicationSpec{
+							Source: &v1alpha1.ApplicationSource{
+								RepoURL: "https://github.com/org/repo",
+								Path:    "apps/dev",
+							},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "app-staging",
+							OwnerReferences: []metav1.OwnerReference{
+								{Kind: "ApplicationSet", Name: "my-appset"},
+							},
+						},
+						Spec: v1alpha1.ApplicationSpec{
+							Source: &v1alpha1.ApplicationSource{
+								RepoURL: "https://github.com/org/repo",
+								Path:    "apps/staging",
+							},
+						},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	e := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+	alreadyDetected := make(map[string]bool)
+
+	repoConfig := &config.RepoConfig{
+		Applications: []config.ApplicationMapping{
+			{Name: "my-appset", ApplicationSet: "my-appset", Paths: []string{"apps/**"}},
+		},
+	}
+
+	result := e.expandAppSetMappings(context.Background(), repoConfig, []string{"apps/dev/values.yaml"}, alreadyDetected)
+
+	if len(result) != 2 {
+		t.Fatalf("expected 2 expanded apps, got %d", len(result))
+	}
+	for _, app := range result {
+		if app.ChangeType != models.ApplicationExisting {
+			t.Errorf("app %s ChangeType = %q, want %q", app.Name, app.ChangeType, models.ApplicationExisting)
+		}
+	}
+	if !alreadyDetected["app-dev"] || !alreadyDetected["app-staging"] {
+		t.Error("expected both apps to be marked in alreadyDetected")
+	}
+}
+
+func TestExpandAppSetMappings_SkipsDuplicates(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/applicationsets/my-appset":
+			resp := v1alpha1.ApplicationSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-appset"},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/api/v1/applications" && r.URL.Query().Get("selector") != "":
+			resp := v1alpha1.ApplicationList{
+				Items: []v1alpha1.Application{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "app-dev"},
+						Spec: v1alpha1.ApplicationSpec{
+							Source: &v1alpha1.ApplicationSource{
+								RepoURL: "https://github.com/org/repo",
+								Path:    "apps/dev",
+							},
+						},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	e := newTestExecutorWithArgo(&mockVCS{}, &mockLock{}, argoClient)
+
+	// Pre-populate alreadyDetected — app-dev should be skipped
+	alreadyDetected := map[string]bool{"app-dev": true}
+	repoConfig := &config.RepoConfig{
+		Applications: []config.ApplicationMapping{
+			{Name: "my-appset", ApplicationSet: "my-appset", Paths: []string{"apps/**"}},
+		},
+	}
+
+	result := e.expandAppSetMappings(context.Background(), repoConfig, []string{"apps/dev/values.yaml"}, alreadyDetected)
+
+	if len(result) != 0 {
+		t.Errorf("expected 0 apps (all duplicates), got %d", len(result))
+	}
+}
+
 func TestUpdateOrAppendAffected(t *testing.T) {
 	t.Run("appends new app", func(t *testing.T) {
 		affected := []models.Application{
