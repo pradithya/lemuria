@@ -117,6 +117,7 @@ func disableParentAutoSync(
 	user string,
 	visited map[string]bool,
 	depth int,
+	parentMap argocd.ParentMap,
 ) error {
 	if depth >= maxParentDepth {
 		slog.Warn("max parent depth reached, stopping recursion",
@@ -129,7 +130,7 @@ func disableParentAutoSync(
 	// auto-sync on it directly, but we still need to find its parents.
 	visited[appName] = true
 
-	parents, err := argoClient.FindParentApps(ctx, appName)
+	parents, err := argoClient.FindParentApps(ctx, appName, parentMap)
 	if err != nil {
 		slog.Warn("failed to find parent apps", "app", appName, "error", err)
 		return nil
@@ -198,7 +199,7 @@ func disableParentAutoSync(
 		}
 
 		// Recurse to find grandparents
-		if err := disableParentAutoSync(ctx, argoClient, lockMgr, parent.Name, repo, repoURL, provider, prNumber, user, visited, depth+1); err != nil {
+		if err := disableParentAutoSync(ctx, argoClient, lockMgr, parent.Name, repo, repoURL, provider, prNumber, user, visited, depth+1, parentMap); err != nil {
 			slog.Warn("failed to disable grandparent auto-sync",
 				"parent", parent.Name, "error", err)
 		}

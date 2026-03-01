@@ -496,7 +496,7 @@ func TestDisableParentAutoSync(t *testing.T) {
 	visited := make(map[string]bool)
 	err := disableParentAutoSync(context.Background(), client, mockLock,
 		"child-app", "org/repo", "https://github.com/org/repo", "github",
-		1, "user", visited, 0)
+		1, "user", visited, 0, nil)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -646,7 +646,7 @@ func TestDisableParentAutoSync_ChildWithoutAutoSync(t *testing.T) {
 	visited := map[string]bool{"child-no-autosync": true}
 	err := disableParentAutoSync(context.Background(), client, mockLock,
 		"child-no-autosync", "org/repo", "https://github.com/org/repo", "github",
-		1, "user", visited, 0)
+		1, "user", visited, 0, nil)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

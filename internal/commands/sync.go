@@ -907,6 +907,26 @@ func mergeResourceHealth(result *models.SyncResult, healthInfo []models.Resource
 // disableAutoSyncForLocks disables auto-sync on all locked applications that have
 // it enabled, including their ApplicationSet templates and parent apps.
 func (e *Executor) disableAutoSyncForLocks(ctx context.Context, locks []models.Lock, event *models.PREvent) error {
+	// Check if any existing apps need auto-sync handling
+	hasExistingApps := false
+	for _, l := range locks {
+		if l.ChangeType != models.ApplicationNew && l.ChangeType != models.ApplicationDeleted {
+			hasExistingApps = true
+			break
+		}
+	}
+	if !hasExistingApps {
+		return nil
+	}
+
+	// Precompute parent map once to avoid repeated ListApplications + GetManagedResources
+	// API calls for each locked app. This reduces O(N × M) calls to O(1 + M) where N is
+	// locked apps and M is auto-sync enabled apps.
+	parentMap, err := e.argocd.BuildParentMap(ctx)
+	if err != nil {
+		slog.Warn("failed to build parent map, parent detection will be skipped", "error", err)
+	}
+
 	visited := make(map[string]bool)
 	appSetDisabled := make(map[string]bool)
 
@@ -967,7 +987,7 @@ func (e *Executor) disableAutoSyncForLocks(ctx context.Context, locks []models.L
 		// app with auto-sync can still interfere.
 		if err := disableParentAutoSync(ctx, e.argocd, e.lock, l.Application,
 			event.Repo.FullName, event.Repo.HTMLURL, string(event.Provider),
-			event.PR.Number, event.Sender.Login, visited, 0); err != nil {
+			event.PR.Number, event.Sender.Login, visited, 0, parentMap); err != nil {
 			slog.Warn("failed to disable parent auto-sync",
 				"app", l.Application, "error", err)
 		}

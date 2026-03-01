@@ -132,7 +132,7 @@ func (e *Executor) disableAutoSyncForRollback(ctx context.Context, appName strin
 	visited := map[string]bool{appName: true}
 	if err := disableParentAutoSync(ctx, e.argocd, e.lock, appName,
 		event.Repo.FullName, event.Repo.HTMLURL, string(event.Provider),
-		event.PR.Number, event.Sender.Login, visited, 0); err != nil {
+		event.PR.Number, event.Sender.Login, visited, 0, nil); err != nil {
 		slog.Warn("failed to disable parent auto-sync for rollback",
 			"app", appName, "error", err)
 	}
