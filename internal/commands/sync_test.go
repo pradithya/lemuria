@@ -1607,3 +1607,145 @@ spec:
 		t.Error("expected TargetRevRewritten to be true")
 	}
 }
+
+func TestSyncApplicationStripsAutoSyncFromSourceFile(t *testing.T) {
+	// When the PR source file defines syncPolicy.automated, the sync flow
+	// must strip it before calling UpdateApplicationSpec. Otherwise, the
+	// spec update re-enables auto-sync that was intentionally disabled by
+	// disableAutoSyncForLocks, and ArgoCD rejects the subsequent sync with
+	// "Cannot sync to X: auto-sync currently set to main".
+	tests := []struct {
+		name           string
+		appSpec        v1alpha1.ApplicationSpec // live app spec (already has auto-sync disabled)
+		sourceFileYAML string                   // PR source file content
+	}{
+		{
+			name: "single-source app with auto-sync in source file",
+			appSpec: v1alpha1.ApplicationSpec{
+				Source: &v1alpha1.ApplicationSource{
+					RepoURL:        "https://github.com/org/repo",
+					Path:           "manifests",
+					TargetRevision: "main",
+				},
+				SyncPolicy: &v1alpha1.SyncPolicy{
+					SyncOptions: v1alpha1.SyncOptions{"CreateNamespace=true"},
+					// Automated is nil — already disabled by disableAutoSyncForLocks
+				},
+			},
+			sourceFileYAML: `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: test-app
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: manifests
+    targetRevision: main
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  project: default
+`,
+		},
+		{
+			name: "multi-source app with auto-sync in source file",
+			appSpec: v1alpha1.ApplicationSpec{
+				Sources: v1alpha1.ApplicationSources{
+					{RepoURL: "https://github.com/org/repo", Path: "manifests", TargetRevision: "main"},
+				},
+				SyncPolicy: &v1alpha1.SyncPolicy{
+					SyncOptions: v1alpha1.SyncOptions{"CreateNamespace=true"},
+				},
+			},
+			sourceFileYAML: `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: test-app
+spec:
+  sources:
+    - repoURL: https://github.com/org/repo
+      path: manifests
+      targetRevision: main
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  project: default
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newFakeArgoServer(v1alpha1.Application{
+				Spec: tt.appSpec,
+			})
+			defer fake.close()
+
+			exec := &Executor{
+				vcs:      &mockVCSForSync{prMergeable: true},
+				argocd:   fake.client(),
+				lock:     &mockLockManagerForSync{},
+				config:   &config.Config{ArgoCD: config.ArgoCDConfig{SyncTimeout: 30 * time.Second}},
+				renderer: diff.NewRenderer(),
+			}
+
+			lock := models.Lock{
+				Application:  "test-app",
+				PlanRevision: "abc123",
+				SourceFile:   "apps/test-app.yaml",
+			}
+			cmd := &Command{Name: CommandSync}
+			event := &models.PREvent{
+				Repo: models.RepoInfo{
+					Owner:    "org",
+					Name:     "repo",
+					FullName: "org/repo",
+					HTMLURL:  "https://github.com/org/repo",
+				},
+				PR: models.PRInfo{
+					Number:  1,
+					HeadSHA: "abc123",
+					HeadRef: "feature-branch",
+				},
+			}
+
+			headContents := map[string][]byte{
+				"apps/test-app.yaml": []byte(tt.sourceFileYAML),
+			}
+
+			result := exec.syncApplication(context.Background(), lock, cmd, event, headContents)
+
+			if result.Error != nil {
+				t.Fatalf("unexpected error: %v", result.Error)
+			}
+
+			// Verify UpdateApplicationSpec was called
+			specUpdates := int(fake.specUpdateCount.Load())
+			if specUpdates == 0 {
+				t.Fatal("expected UpdateApplicationSpec to be called")
+			}
+
+			// Verify the spec update does NOT contain syncPolicy.automated
+			spec := fake.lastSpecUpdate()
+			if spec == nil {
+				t.Fatal("expected spec update body, got nil")
+			}
+			if spec.SyncPolicy != nil && spec.SyncPolicy.Automated != nil {
+				t.Error("spec update must not contain syncPolicy.automated — " +
+					"it would re-enable auto-sync that was intentionally disabled")
+			}
+		})
+	}
+}

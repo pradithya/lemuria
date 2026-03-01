@@ -390,6 +390,14 @@ func (e *Executor) syncApplication(ctx context.Context, l models.Lock, cmd *Comm
 			result.Error = fmt.Errorf("parsing application CR from head branch: %w", err)
 			return result
 		}
+
+		// Strip auto-sync from the parsed spec to avoid re-enabling it.
+		// disableAutoSyncForLocks intentionally disabled auto-sync before
+		// the sync loop; updating the spec with the PR source file would
+		// undo that because the source file typically has syncPolicy.automated.
+		if parsed.Spec.SyncPolicy != nil {
+			parsed.Spec.SyncPolicy.Automated = nil
+		}
 	}
 
 	opts := &argocd.SyncOptions{
