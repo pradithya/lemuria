@@ -2405,12 +2405,3 @@ func TestToPlanDiffEntries_PreservesFields(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Tests: containsAppByName edge cases
 // ---------------------------------------------------------------------------
-
-func TestContainsAppByName_EmptySlice(t *testing.T) {
-	if containsAppByName(nil, "app") {
-		t.Error("expected false for nil slice")
-	}
-	if containsAppByName([]models.Application{}, "app") {
-		t.Error("expected false for empty slice")
-	}
-}

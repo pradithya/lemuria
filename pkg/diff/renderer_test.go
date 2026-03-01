@@ -897,6 +897,79 @@ func TestRenderPlanSplitOversizedResource(t *testing.T) {
 	}
 }
 
+func TestRenderNewAppPlan(t *testing.T) {
+	r := NewRenderer()
+
+	t.Run("generated app no diffs returns early", func(t *testing.T) {
+		var sb strings.Builder
+		result := PlanResult{
+			Application:        "test-app",
+			ChangeType:         models.ApplicationNew,
+			IsGeneratedApp:     true,
+			ApplicationSetName: "my-appset",
+			SourceFile:         "appsets/my-appset.yaml",
+		}
+		done := r.renderNewAppPlan(&sb, result)
+		if !done {
+			t.Error("expected done=true for new app with no diffs")
+		}
+		output := sb.String()
+		if !strings.Contains(output, "ApplicationSet `my-appset`") {
+			t.Error("expected ApplicationSet name in output")
+		}
+		if !strings.Contains(output, "Source file:") {
+			t.Error("expected source file in output")
+		}
+	})
+
+	t.Run("app with diffs does not return early", func(t *testing.T) {
+		var sb strings.Builder
+		result := PlanResult{
+			Application: "test-app",
+			ChangeType:  models.ApplicationNew,
+			Created:     1,
+		}
+		done := r.renderNewAppPlan(&sb, result)
+		if done {
+			t.Error("expected done=false when diffs exist")
+		}
+	})
+}
+
+func TestRenderDeletedAppPlan(t *testing.T) {
+	r := NewRenderer()
+
+	t.Run("generated app no diffs returns early", func(t *testing.T) {
+		var sb strings.Builder
+		result := PlanResult{
+			Application:        "test-app",
+			ChangeType:         models.ApplicationDeleted,
+			IsGeneratedApp:     true,
+			ApplicationSetName: "my-appset",
+		}
+		done := r.renderDeletedAppPlan(&sb, result)
+		if !done {
+			t.Error("expected done=true for deleted app with no diffs")
+		}
+		if !strings.Contains(sb.String(), "Application will be removed") {
+			t.Error("expected removal message")
+		}
+	})
+
+	t.Run("app with diffs does not return early", func(t *testing.T) {
+		var sb strings.Builder
+		result := PlanResult{
+			Application: "test-app",
+			ChangeType:  models.ApplicationDeleted,
+			Deleted:     3,
+		}
+		done := r.renderDeletedAppPlan(&sb, result)
+		if done {
+			t.Error("expected done=false when diffs exist")
+		}
+	})
+}
+
 // errTest is a test error.
 var errTest = testError("test error")
 

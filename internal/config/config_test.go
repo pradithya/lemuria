@@ -514,3 +514,29 @@ func TestMatchRepoPattern(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultConfig_ProtectedBranches(t *testing.T) {
+	cfg := DefaultConfig()
+	if len(cfg.Defaults.ProtectedBranches) == 0 {
+		t.Fatal("DefaultConfig().Defaults.ProtectedBranches must not be empty")
+	}
+	// Verify essential branches are protected by default
+	essential := map[string]bool{"main": false, "master": false}
+	for _, b := range cfg.Defaults.ProtectedBranches {
+		if _, ok := essential[b]; ok {
+			essential[b] = true
+		}
+	}
+	for branch, found := range essential {
+		if !found {
+			t.Errorf("default protected branches must include %q", branch)
+		}
+	}
+}
+
+func TestDefaultProtectedBranches_NotEmpty(t *testing.T) {
+	branches := DefaultProtectedBranches()
+	if len(branches) == 0 {
+		t.Fatal("DefaultProtectedBranches() must not return empty slice")
+	}
+}

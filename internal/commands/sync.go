@@ -71,38 +71,11 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 
 	// Filter to specific application if requested
 	if cmd.Application != "" {
-		slog.Debug("filtering locks to specific application",
-			"app", cmd.Application,
-		)
-		var filtered []models.Lock
-		for _, l := range locks {
-			if l.Application == cmd.Application {
-				filtered = append(filtered, l)
-			}
-		}
-		// If no direct match, try matching by ApplicationSetName
-		if len(filtered) == 0 {
-			slog.Debug("no direct lock match, trying applicationset name",
-				"app", cmd.Application,
-			)
-			apps, err := e.argocd.GetApplicationsByApplicationSet(ctx, cmd.Application)
-			if err != nil {
-				return e.postError(ctx, event, fmt.Errorf("listing applications for applicationset %q: %w", cmd.Application, err))
-			}
-			appNames := make(map[string]struct{}, len(apps))
-			for _, app := range apps {
-				appNames[app.Name] = struct{}{}
-			}
-			for _, l := range locks {
-				if _, ok := appNames[l.Application]; ok {
-					filtered = append(filtered, l)
-				}
-			}
+		filtered, filterErr := e.filterSyncLocks(ctx, locks, cmd.Application)
+		if filterErr != nil {
+			return e.postError(ctx, event, filterErr)
 		}
 		if len(filtered) == 0 {
-			slog.Debug("application not locked by this PR",
-				"app", cmd.Application,
-			)
 			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Sync\n\n⚠️ Application `%s` is not locked by this PR.", cmd.Application))
 		}
 		locks = filtered
@@ -320,6 +293,43 @@ func (e *Executor) executeSync(ctx context.Context, cmd *Command, event *models.
 	// Post final results (update existing comment or fall back to new comment)
 	output := e.renderSyncResults(results)
 	return tracker.postFinal(ctx, output)
+}
+
+// filterSyncLocks filters locks to those matching the given application name.
+// It first tries direct name matching, then falls back to ApplicationSet expansion.
+func (e *Executor) filterSyncLocks(ctx context.Context, locks []models.Lock, appName string) ([]models.Lock, error) {
+	slog.Debug("filtering locks to specific application",
+		"app", appName,
+	)
+
+	var filtered []models.Lock
+	for _, l := range locks {
+		if l.Application == appName {
+			filtered = append(filtered, l)
+		}
+	}
+
+	// If no direct match, try matching by ApplicationSetName
+	if len(filtered) == 0 {
+		slog.Debug("no direct lock match, trying applicationset name",
+			"app", appName,
+		)
+		apps, err := e.argocd.GetApplicationsByApplicationSet(ctx, appName)
+		if err != nil {
+			return nil, fmt.Errorf("listing applications for applicationset %q: %w", appName, err)
+		}
+		appNames := make(map[string]struct{}, len(apps))
+		for _, app := range apps {
+			appNames[app.Name] = struct{}{}
+		}
+		for _, l := range locks {
+			if _, ok := appNames[l.Application]; ok {
+				filtered = append(filtered, l)
+			}
+		}
+	}
+
+	return filtered, nil
 }
 
 // syncResult holds the result of syncing a single application.
@@ -770,7 +780,7 @@ func (e *Executor) autoMergePR(ctx context.Context, event *models.PREvent) error
 	// Delete source branch if configured and not a protected branch
 	if e.config.Defaults.DeleteSourceBranch {
 		branch := event.PR.HeadRef
-		if !IsProtectedBranch(branch) {
+		if !IsProtectedBranch(branch, e.config.Defaults.ProtectedBranches) {
 			if err := e.vcs.DeleteBranch(ctx, event.Repo.Owner, event.Repo.Name, branch); err != nil {
 				slog.Warn("failed to delete source branch",
 					"branch", branch,
@@ -786,9 +796,12 @@ func (e *Executor) autoMergePR(ctx context.Context, event *models.PREvent) error
 }
 
 // IsProtectedBranch returns true if the branch should never be deleted.
-func IsProtectedBranch(branch string) bool {
-	protected := []string{"main", "master", "develop", "development"}
-	for _, p := range protected {
+// If protectedBranches is empty, falls back to the default protected branches list.
+func IsProtectedBranch(branch string, protectedBranches []string) bool {
+	if len(protectedBranches) == 0 {
+		protectedBranches = config.DefaultProtectedBranches()
+	}
+	for _, p := range protectedBranches {
 		if branch == p {
 			return true
 		}
