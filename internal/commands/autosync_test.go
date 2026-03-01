@@ -25,23 +25,8 @@ import (
 	v1alpha1 "github.com/argoproj/argo-cd/v3/pkg/apis/application/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/org/lemuria/internal/argocd"
-	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/models"
 )
-
-func newTestArgoClient(t *testing.T, serverURL string) *argocd.Client {
-	t.Helper()
-	client, err := argocd.NewClient(config.ArgoCDConfig{
-		ServerURL: serverURL,
-		Token:     "test-token",
-		Insecure:  true,
-	})
-	if err != nil {
-		t.Fatalf("failed to create ArgoCD client: %v", err)
-	}
-	return client
-}
 
 func TestDisableAutoSync(t *testing.T) {
 	tests := []struct {
@@ -142,7 +127,7 @@ func TestDisableAutoSync(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			client := newTestArgoClient(t, ts.URL)
+			client := newTestArgoClient(ts)
 			state, err := disableAutoSync(context.Background(), client, "my-app")
 
 			if err != nil {
@@ -230,7 +215,7 @@ func TestDisableAppSetAutoSync(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			client := newTestArgoClient(t, ts.URL)
+			client := newTestArgoClient(ts)
 			policyBytes, err := disableAppSetAutoSync(context.Background(), client, "my-appset")
 
 			if err != nil {
@@ -326,7 +311,7 @@ func TestRestoreAutoSync(t *testing.T) {
 			}))
 			defer ts.Close()
 
-			client := newTestArgoClient(t, ts.URL)
+			client := newTestArgoClient(ts)
 			err := restoreAutoSync(context.Background(), client, tt.lock)
 
 			if err != nil {
@@ -345,7 +330,7 @@ func TestRestoreAutoSync_AppDeleted(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 	lock := models.Lock{
 		Application:      "deleted-app",
 		AutoSyncDisabled: true,
@@ -391,7 +376,7 @@ func TestRestoreAllAutoSync(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 	mockLock := &mockLockManagerForSync{}
 
 	policy := mustMarshal(t, &v1alpha1.SyncPolicyAutomated{Prune: true})
@@ -475,7 +460,7 @@ func TestDisableParentAutoSync(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 
 	// Mock lock manager that records lock acquisitions
 	lockCalls := make(map[string]bool)
@@ -563,7 +548,7 @@ func TestComputeSyncTargets_NoParentChild(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 	e := &Executor{argocd: client}
 
 	locks := []models.Lock{
@@ -608,7 +593,7 @@ func TestComputeSyncTargets_SimpleParentChild(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 	e := &Executor{argocd: client}
 
 	locks := []models.Lock{
@@ -665,7 +650,7 @@ func TestComputeSyncTargets_ThreeLevels(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 	e := &Executor{argocd: client}
 
 	locks := []models.Lock{
@@ -722,7 +707,7 @@ func TestComputeSyncTargets_DiamondPattern(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 	e := &Executor{argocd: client}
 
 	locks := []models.Lock{
@@ -751,7 +736,7 @@ func TestComputeSyncTargets_ManagedResourceError(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 	e := &Executor{argocd: client}
 
 	locks := []models.Lock{
@@ -787,7 +772,7 @@ func TestComputeSyncTargets_ParentAppLocksExcluded(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 	e := &Executor{argocd: client}
 
 	locks := []models.Lock{
@@ -834,7 +819,7 @@ func TestComputeSyncTargets_ParentManagesUnlockedChild(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	client := newTestArgoClient(t, ts.URL)
+	client := newTestArgoClient(ts)
 	e := &Executor{argocd: client}
 
 	locks := []models.Lock{
