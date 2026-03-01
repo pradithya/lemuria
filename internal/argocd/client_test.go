@@ -1435,3 +1435,16 @@ func TestGetLiveManifests(t *testing.T) {
 		})
 	}
 }
+
+func TestClientRequest_ConnectionError(t *testing.T) {
+	// Create a client pointing to a closed server to trigger a transport error.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	client := newTestClient(ts)
+	ts.Close() // Close immediately to force connection errors
+
+	var result struct{}
+	err := client.get(context.Background(), "/api/v1/applications", nil, &result)
+	if err == nil {
+		t.Fatal("expected error for connection failure")
+	}
+}

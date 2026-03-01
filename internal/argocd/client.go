@@ -79,15 +79,18 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 
 	resp, err := c.httpClient.Do(req)
 
-	normalizedPath := metrics.NormalizePath(path)
-	metrics.RecordArgoCDRequest(method, normalizedPath, resp.StatusCode)
-
-	if err != nil {
-		metrics.ObserveArgoCDRequestDuration(method, start)
-		return nil, fmt.Errorf("executing request: %w", err)
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
 	}
 
+	normalizedPath := metrics.NormalizePath(path)
+	metrics.RecordArgoCDRequest(method, normalizedPath, statusCode)
 	metrics.ObserveArgoCDRequestDuration(method, start)
+
+	if err != nil {
+		return nil, fmt.Errorf("executing request: %w", err)
+	}
 
 	return resp, nil
 }

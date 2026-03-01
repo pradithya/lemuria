@@ -391,10 +391,132 @@ func TestExecute_DispatchesHelp(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunAutoplan_CreatesCommandAndDelegates(t *testing.T) {
-	// RunAutoplan creates a plan Command and delegates to executePlan.
-	// We can't fully test without an argocd mock, so just verify the
-	// method exists and has the right shape. Full plan testing is done
-	// via the executePlan tests with the fake argocd server.
+	appYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/my-app
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+
+	vcs := &mockVCS{
+		changedFiles: []models.ChangedFile{
+			{Filename: "apps/my-app/deployment.yaml", Status: "modified"},
+		},
+		filesByPattern: map[string]map[string][]byte{
+			"feature-branch": {"argocd/app.yaml": []byte(appYAML)},
+			"main":           {"argocd/app.yaml": []byte(appYAML)},
+		},
+	}
+
+	// ArgoCD mock: responds to ListApplications, GetManifests, and CreateApplication
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == "GET" && strings.Contains(r.URL.Path, "/api/v1/applications") && !strings.Contains(r.URL.Path, "/manifests"):
+			// ListApplications or GetApplication
+			if strings.Count(strings.TrimSuffix(r.URL.Path, "/"), "/") > 3 {
+				// GetApplication (specific app)
+				json.NewEncoder(w).Encode(v1alpha1.Application{ //nolint:errcheck
+					ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
+					Spec: v1alpha1.ApplicationSpec{
+						Source: &v1alpha1.ApplicationSource{
+							RepoURL:        "https://github.com/org/repo",
+							Path:           "apps/my-app",
+							TargetRevision: "main",
+						},
+					},
+				})
+			} else {
+				json.NewEncoder(w).Encode(v1alpha1.ApplicationList{ //nolint:errcheck
+					Items: []v1alpha1.Application{},
+				})
+			}
+		default:
+			json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
+				"manifests": []string{`{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"test"}}`},
+			})
+		}
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Provider: models.VCSProviderGitHub,
+		Type:     models.EventTypePullRequest,
+		Action:   models.PRActionOpened,
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+			HeadSHA: "abc123",
+		},
+		Sender: models.UserInfo{Login: "user1"},
+	}
+
+	err := exec.RunAutoplan(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify plan comments were posted
+	if len(vcs.postedComments) == 0 {
+		t.Fatal("expected plan comment to be posted")
+	}
+}
+
+func TestRunAutoplan_ErrorPostsComment(t *testing.T) {
+	// When VCS returns an error for changed files, RunAutoplan posts an error comment.
+	vcs := &mockVCS{
+		changedFilesErr: fmt.Errorf("vcs error"),
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}) //nolint:errcheck
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Provider: models.VCSProviderGitHub,
+		Type:     models.EventTypePullRequest,
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+		},
+		Sender: models.UserInfo{Login: "user1"},
+	}
+
+	err := exec.RunAutoplan(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// executePlan calls postError which posts a comment with the error
+	if len(vcs.postedComments) == 0 {
+		t.Fatal("expected error comment to be posted")
+	}
 }
 
 // ---------------------------------------------------------------------------

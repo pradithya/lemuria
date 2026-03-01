@@ -21,6 +21,8 @@ import (
 	"net/http"
 	"os"
 
+	"errors"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -181,7 +183,14 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 			}
 		}()
 
-		prometheus.MustRegister(collector)
+		if err := prometheus.Register(collector); err != nil {
+			// If already registered (e.g., in tests), log and continue.
+			var are prometheus.AlreadyRegisteredError
+			if !errors.As(err, &are) {
+				return fmt.Errorf("registering queue collector: %w", err)
+			}
+			slog.Debug("queue collector already registered, skipping")
+		}
 
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", promhttp.Handler())

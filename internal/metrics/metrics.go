@@ -139,8 +139,10 @@ func RecordApplicationsDetected(changeType string, count int) {
 }
 
 // NormalizePath normalizes an ArgoCD API path for use as a metric label.
-// It keeps the first two path segments (e.g., /api/v1) and replaces
-// variable segments with placeholders.
+// It truncates paths to the first three segments (e.g., /api/v1/applications)
+// to avoid high-cardinality labels from resource-specific paths like
+// /api/v1/applications/my-app. Paths with three or fewer segments are
+// returned unchanged.
 func NormalizePath(path string) string {
 	// Common ArgoCD API prefixes — keep the resource type, drop specific names.
 	// Examples:
