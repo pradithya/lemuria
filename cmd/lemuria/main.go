@@ -169,7 +169,9 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 	worker := queue.NewWorker(cfg.Redis, cfg.Queue)
 	worker.RegisterHandler(queue.TypeWebhookProcess, handler)
 
-	// Start Prometheus metrics server with queue collector
+	// Start Prometheus metrics server with queue collector.
+	// Register the queue collector with the default registry so that both
+	// application-level metrics (via promauto) and queue metrics are exposed.
 	if cfg.Server.MetricsPort > 0 {
 		collector := queue.NewQueueCollector(cfg.Redis)
 		defer func() {
@@ -179,11 +181,10 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 			}
 		}()
 
-		reg := prometheus.NewRegistry()
-		reg.MustRegister(collector)
+		prometheus.MustRegister(collector)
 
 		metricsMux := http.NewServeMux()
-		metricsMux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+		metricsMux.Handle("/metrics", promhttp.Handler())
 
 		metricsAddr := fmt.Sprintf(":%d", cfg.Server.MetricsPort)
 		go func() {
