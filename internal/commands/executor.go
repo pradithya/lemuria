@@ -266,7 +266,8 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 				"app", app.Name,
 				"source_file", app.SourceFile,
 			)
-			app.ChangeType = models.ApplicationExisting
+			// Don't set ChangeType here — Step 4 (head-vs-base comparison)
+			// will set it correctly based on whether the app is new, modified, or existing.
 			affected = append(affected, app)
 			alreadyDetected[app.Name] = true
 		}
@@ -345,6 +346,17 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		if !alreadyDetected[app.Name] {
 			affected = append(affected, app)
 			alreadyDetected[app.Name] = true
+		} else {
+			// Update the existing entry to mark as new
+			for i := range affected {
+				if affected[i].Name == app.Name {
+					affected[i].ChangeType = models.ApplicationNew
+					if affected[i].SourceFile == "" {
+						affected[i].SourceFile = app.SourceFile
+					}
+					break
+				}
+			}
 		}
 	}
 
@@ -355,10 +367,13 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	}
 	for _, modApp := range parsed.Modified {
 		if alreadyDetected[modApp.Name] {
-			// Already in affected list, just propagate SourceFile
+			// Already in affected list — set ChangeType and propagate SourceFile
 			for i := range affected {
-				if affected[i].Name == modApp.Name && affected[i].SourceFile == "" {
-					affected[i].SourceFile = modApp.SourceFile
+				if affected[i].Name == modApp.Name {
+					affected[i].ChangeType = models.ApplicationExisting
+					if affected[i].SourceFile == "" {
+						affected[i].SourceFile = modApp.SourceFile
+					}
 					break
 				}
 			}
@@ -425,6 +440,15 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 					break
 				}
 			}
+		}
+	}
+
+	// Set ChangeType for apps detected via path matching that weren't
+	// classified by head-vs-base comparison. These apps exist in both
+	// branches with identical CRs but have changed manifest files.
+	for i := range affected {
+		if affected[i].ChangeType == "" {
+			affected[i].ChangeType = models.ApplicationExisting
 		}
 	}
 
