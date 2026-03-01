@@ -1117,6 +1117,80 @@ spec:
 	}
 }
 
+func TestFindAffectedApplications_NewAppWithMatchingSourcePath(t *testing.T) {
+	// A new Application CR whose source path matches changed manifest files
+	// should get ChangeType=ApplicationNew, not ApplicationExisting.
+	// This is the bug scenario from PR #21: new apps detected via path matching
+	// in Step 3 were prematurely set to ApplicationExisting, causing Step 4
+	// to skip them (already detected) and leaving them incorrectly classified.
+	newAppYAML := `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: new-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/org/repo
+    path: apps/new-app
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+`
+
+	vcs := &mockVCS{
+		changedFiles: []models.ChangedFile{
+			{Filename: "argocd/new-app.yaml", Status: "added"},
+			{Filename: "apps/new-app/deployment.yaml", Status: "added"},
+			{Filename: "apps/new-app/service.yaml", Status: "added"},
+		},
+		filesByPattern: map[string]map[string][]byte{
+			"feature-branch": {
+				"argocd/new-app.yaml": []byte(newAppYAML),
+			},
+			"main": {},
+		},
+	}
+
+	// ArgoCD mock: ListApplications returns empty (app doesn't exist yet)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer ts.Close()
+
+	argoClient := newTestArgoClient(ts)
+	exec := newTestExecutorWithArgo(vcs, &mockLock{}, argoClient)
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			Owner: "org", Name: "repo", FullName: "org/repo",
+			HTMLURL: "https://github.com/org/repo",
+		},
+		PR: models.PRInfo{
+			Number:  1,
+			HeadRef: "feature-branch",
+			BaseRef: "main",
+		},
+	}
+
+	affected, err := exec.findAffectedApplications(context.Background(), event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(affected) != 1 {
+		t.Fatalf("expected 1 affected app, got %d", len(affected))
+	}
+	if affected[0].Name != "new-app" {
+		t.Errorf("expected app name = 'new-app', got %q", affected[0].Name)
+	}
+	if affected[0].ChangeType != models.ApplicationNew {
+		t.Errorf("expected ChangeType = %q, got %q", models.ApplicationNew, affected[0].ChangeType)
+	}
+}
+
 func TestResolveValueFilePath(t *testing.T) {
 	tests := []struct {
 		name       string
