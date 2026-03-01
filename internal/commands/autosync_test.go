@@ -1662,6 +1662,118 @@ func (m *mockAutoSyncLockManagerFull) DeleteParentAutoSync(_ context.Context, pa
 	return nil
 }
 
+func TestRestoreAllAutoSync_ParentCleanup(t *testing.T) {
+	// Tests that parent-autosync index keys are cleaned up
+	var parentRestored bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/parent-app":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "parent-app"},
+				Spec:       v1alpha1.ApplicationSpec{SyncPolicy: &v1alpha1.SyncPolicy{}},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+		case r.Method == "PUT" && r.URL.Path == "/api/v1/applications/parent-app/spec":
+			parentRestored = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	policy := mustMarshal(t, &v1alpha1.SyncPolicyAutomated{Prune: true})
+
+	parentAutoSync := map[string][]byte{"parent-app": policy}
+	mockLock := &mockAutoSyncLockManagerFull{
+		lockStore:      make(map[string]*models.Lock),
+		parentAutoSync: parentAutoSync,
+	}
+
+	locks := []models.Lock{
+		{
+			Application:        "parent-app",
+			AutoSyncDisabled:   true,
+			OriginalSyncPolicy: policy,
+			IsParentApp:        true,
+		},
+		{
+			// Non-auto-sync lock — should be skipped
+			Application: "no-autosync-app",
+		},
+	}
+
+	restoreAllAutoSync(context.Background(), client, mockLock, locks, "org/repo", 1)
+
+	if !parentRestored {
+		t.Error("expected parent app to be restored")
+	}
+	// Parent autosync index should have been cleaned up via DeleteParentAutoSync
+	if _, exists := mockLock.parentAutoSync["parent-app"]; exists {
+		t.Error("expected parent-autosync key to be deleted")
+	}
+}
+
+func TestDisableAutoSync_ErrorGettingApp(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"server error"}`, http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	_, err := disableAutoSync(context.Background(), client, "fail-app")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "getting application") {
+		t.Errorf("expected 'getting application' error, got: %v", err)
+	}
+}
+
+func TestDisableAppSetAutoSync_ErrorGettingAppSet(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"server error"}`, http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	_, err := disableAppSetAutoSync(context.Background(), client, "fail-appset")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "getting applicationset") {
+		t.Errorf("expected 'getting applicationset' error, got: %v", err)
+	}
+}
+
+func TestRestoreAutoSync_BadPolicyJSON(t *testing.T) {
+	lock := models.Lock{
+		Application:        "my-app",
+		AutoSyncDisabled:   true,
+		OriginalSyncPolicy: []byte("invalid json"),
+	}
+
+	err := restoreAutoSync(context.Background(), nil, lock)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unmarshaling sync policy") {
+		t.Errorf("expected 'unmarshaling' error, got: %v", err)
+	}
+}
+
+func TestRestoreAppSetAutoSync_BadPolicyJSON(t *testing.T) {
+	err := restoreAppSetAutoSync(context.Background(), nil, "my-appset", []byte("invalid json"))
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unmarshaling applicationset sync policy") {
+		t.Errorf("expected unmarshal error, got: %v", err)
+	}
+}
+
 func TestComputeSyncTargets_ParentManagesUnlockedChild(t *testing.T) {
 	// parent manages "other-app" which is NOT in the locks — parent should be synced
 	// because its child relationship is with an app outside the locked set
