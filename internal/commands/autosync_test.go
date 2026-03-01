@@ -920,6 +920,552 @@ func TestComputeSyncTargets_ParentAppLocksExcluded(t *testing.T) {
 	}
 }
 
+func TestDisableAutoSyncForLocks(t *testing.T) {
+	// Tests the full disableAutoSyncForLocks flow: disables auto-sync on apps,
+	// stores state in locks, and disables parent auto-sync.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		// ListApplications for BuildParentMap
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications" && r.URL.RawQuery != "":
+			resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		// GetApplicationRaw for disableAutoSync
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/app-with-autosync":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-with-autosync"},
+				Spec: v1alpha1.ApplicationSpec{
+					SyncPolicy: &v1alpha1.SyncPolicy{
+						Automated: &v1alpha1.SyncPolicyAutomated{Prune: true, SelfHeal: true},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/app-no-autosync":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-no-autosync"},
+				Spec:       v1alpha1.ApplicationSpec{},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+
+		// UpdateApplicationSpec
+		case r.Method == "PUT" && strings.HasSuffix(r.URL.Path, "/spec"):
+			w.WriteHeader(http.StatusOK)
+
+		// GetManagedResources for parent detection
+		case strings.HasSuffix(r.URL.Path, "/managed-resources"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	lockStore := make(map[string]*models.Lock)
+	mockLock := &mockAutoSyncLockManagerFull{
+		lockStore: lockStore,
+	}
+
+	// Pre-populate locks in the store
+	lockStore["app-with-autosync"] = &models.Lock{
+		Application: "app-with-autosync",
+		PRNumber:    1,
+		Repo:        "org/repo",
+		ChangeType:  models.ApplicationExisting,
+	}
+	lockStore["app-no-autosync"] = &models.Lock{
+		Application: "app-no-autosync",
+		PRNumber:    1,
+		Repo:        "org/repo",
+		ChangeType:  models.ApplicationExisting,
+	}
+
+	e := &Executor{argocd: client, lock: mockLock}
+
+	locks := []models.Lock{
+		{Application: "app-with-autosync", ChangeType: models.ApplicationExisting},
+		{Application: "app-no-autosync", ChangeType: models.ApplicationExisting},
+		{Application: "new-app", ChangeType: models.ApplicationNew}, // should be skipped
+	}
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{
+			FullName: "org/repo",
+			HTMLURL:  "https://github.com/org/repo",
+		},
+		PR:       models.PRInfo{Number: 1},
+		Provider: "github",
+		Sender:   models.UserInfo{Login: "user"},
+	}
+
+	err := e.disableAutoSyncForLocks(context.Background(), locks, event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify auto-sync state was stored for app-with-autosync
+	storedLock := lockStore["app-with-autosync"]
+	if !storedLock.AutoSyncDisabled {
+		t.Error("expected AutoSyncDisabled=true for app-with-autosync")
+	}
+	if len(storedLock.OriginalSyncPolicy) == 0 {
+		t.Error("expected OriginalSyncPolicy to be set")
+	}
+
+	// Verify app-no-autosync was not marked as disabled
+	noAutoSyncLock := lockStore["app-no-autosync"]
+	if noAutoSyncLock.AutoSyncDisabled {
+		t.Error("expected AutoSyncDisabled=false for app-no-autosync")
+	}
+}
+
+func TestDisableAutoSyncForLocks_AllNewApps(t *testing.T) {
+	// When all locks are new apps, no ArgoCD calls should be made.
+	e := &Executor{argocd: nil} // nil client — should not be called
+
+	locks := []models.Lock{
+		{Application: "new-app-1", ChangeType: models.ApplicationNew},
+		{Application: "new-app-2", ChangeType: models.ApplicationDeleted},
+	}
+
+	event := &models.PREvent{
+		Repo: models.RepoInfo{FullName: "org/repo"},
+		PR:   models.PRInfo{Number: 1},
+	}
+
+	err := e.disableAutoSyncForLocks(context.Background(), locks, event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDisableAutoSyncForLocks_WithAppSet(t *testing.T) {
+	// Tests that ApplicationSet template auto-sync is also disabled.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications" && r.URL.RawQuery != "":
+			resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/appset-app":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "appset-app",
+					Labels: map[string]string{"argocd.argoproj.io/application-set-name": "my-appset"},
+				},
+				Spec: v1alpha1.ApplicationSpec{
+					SyncPolicy: &v1alpha1.SyncPolicy{
+						Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applicationsets/my-appset":
+			appSet := v1alpha1.ApplicationSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-appset"},
+				Spec: v1alpha1.ApplicationSetSpec{
+					Template: v1alpha1.ApplicationSetTemplate{
+						Spec: v1alpha1.ApplicationSpec{
+							SyncPolicy: &v1alpha1.SyncPolicy{
+								Automated: &v1alpha1.SyncPolicyAutomated{Prune: true, SelfHeal: true},
+							},
+						},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(appSet)
+
+		case r.Method == "PUT" && r.URL.Path == "/api/v1/applicationsets/my-appset":
+			w.WriteHeader(http.StatusOK)
+
+		case r.Method == "PUT" && strings.HasSuffix(r.URL.Path, "/spec"):
+			w.WriteHeader(http.StatusOK)
+
+		case strings.HasSuffix(r.URL.Path, "/managed-resources"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	lockStore := make(map[string]*models.Lock)
+	mockLock := &mockAutoSyncLockManagerFull{
+		lockStore:     lockStore,
+		appSetStored:  make(map[string][]byte),
+	}
+	lockStore["appset-app"] = &models.Lock{
+		Application: "appset-app",
+		PRNumber:    1,
+		Repo:        "org/repo",
+		ChangeType:  models.ApplicationExisting,
+	}
+
+	e := &Executor{argocd: client, lock: mockLock}
+
+	locks := []models.Lock{
+		{Application: "appset-app", ChangeType: models.ApplicationExisting},
+	}
+	event := &models.PREvent{
+		Repo:     models.RepoInfo{FullName: "org/repo", HTMLURL: "https://github.com/org/repo"},
+		PR:       models.PRInfo{Number: 1},
+		Provider: "github",
+		Sender:   models.UserInfo{Login: "user"},
+	}
+
+	err := e.disableAutoSyncForLocks(context.Background(), locks, event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify ApplicationSet auto-sync state was stored
+	if len(mockLock.appSetStored) == 0 {
+		t.Error("expected ApplicationSet auto-sync state to be stored")
+	}
+	if _, ok := mockLock.appSetStored["my-appset"]; !ok {
+		t.Error("expected 'my-appset' in stored AppSet policies")
+	}
+
+	// Verify lock has ApplicationSetName set
+	if lockStore["appset-app"].ApplicationSetName != "my-appset" {
+		t.Errorf("expected ApplicationSetName='my-appset', got %q", lockStore["appset-app"].ApplicationSetName)
+	}
+}
+
+func TestDisableAutoSyncForRollback(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications" && r.URL.RawQuery != "":
+			// ListApplications for FindParentApps
+			resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/my-app":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
+				Spec: v1alpha1.ApplicationSpec{
+					SyncPolicy: &v1alpha1.SyncPolicy{
+						Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+
+		case r.Method == "PUT" && strings.HasSuffix(r.URL.Path, "/spec"):
+			w.WriteHeader(http.StatusOK)
+
+		case strings.HasSuffix(r.URL.Path, "/managed-resources"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	lockStore := make(map[string]*models.Lock)
+	mockLock := &mockAutoSyncLockManagerFull{lockStore: lockStore}
+	lockStore["my-app"] = &models.Lock{
+		Application: "my-app",
+		PRNumber:    1,
+		Repo:        "org/repo",
+	}
+
+	e := &Executor{argocd: client, lock: mockLock}
+
+	event := &models.PREvent{
+		Repo:     models.RepoInfo{FullName: "org/repo", HTMLURL: "https://github.com/org/repo"},
+		PR:       models.PRInfo{Number: 1},
+		Provider: "github",
+		Sender:   models.UserInfo{Login: "user"},
+	}
+
+	err := e.disableAutoSyncForRollback(context.Background(), "my-app", event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify state stored in lock
+	storedLock := lockStore["my-app"]
+	if !storedLock.AutoSyncDisabled {
+		t.Error("expected AutoSyncDisabled=true")
+	}
+	if len(storedLock.OriginalSyncPolicy) == 0 {
+		t.Error("expected OriginalSyncPolicy to be set")
+	}
+}
+
+func TestDisableAutoSyncForRollback_NoAutoSync(t *testing.T) {
+	// App without auto-sync — state not modified but parent detection still runs
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications" && r.URL.RawQuery != "":
+			resp := v1alpha1.ApplicationList{Items: []v1alpha1.Application{}}
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/manual-app":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "manual-app"},
+				Spec:       v1alpha1.ApplicationSpec{},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+
+		case strings.HasSuffix(r.URL.Path, "/managed-resources"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	lockStore := make(map[string]*models.Lock)
+	mockLock := &mockAutoSyncLockManagerFull{lockStore: lockStore}
+	lockStore["manual-app"] = &models.Lock{Application: "manual-app", PRNumber: 1}
+
+	e := &Executor{argocd: client, lock: mockLock}
+	event := &models.PREvent{
+		Repo:     models.RepoInfo{FullName: "org/repo", HTMLURL: "https://github.com/org/repo"},
+		PR:       models.PRInfo{Number: 1},
+		Provider: "github",
+		Sender:   models.UserInfo{Login: "user"},
+	}
+
+	err := e.disableAutoSyncForRollback(context.Background(), "manual-app", event)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Lock should not be marked as auto-sync disabled
+	if lockStore["manual-app"].AutoSyncDisabled {
+		t.Error("expected AutoSyncDisabled=false for manual-sync app")
+	}
+}
+
+func TestRestoreAllAutoSync_WithAppSet(t *testing.T) {
+	// Tests the full restore flow including ApplicationSet templates and parent cleanup.
+	var childRestored, parentRestored, appSetRestored bool
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/child-app":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "child-app"},
+				Spec:       v1alpha1.ApplicationSpec{SyncPolicy: &v1alpha1.SyncPolicy{}},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+		case r.Method == "PUT" && r.URL.Path == "/api/v1/applications/child-app/spec":
+			childRestored = true
+			w.WriteHeader(http.StatusOK)
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/parent-app":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "parent-app"},
+				Spec:       v1alpha1.ApplicationSpec{SyncPolicy: &v1alpha1.SyncPolicy{}},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+		case r.Method == "PUT" && r.URL.Path == "/api/v1/applications/parent-app/spec":
+			parentRestored = true
+			w.WriteHeader(http.StatusOK)
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applicationsets/my-appset":
+			appSet := v1alpha1.ApplicationSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-appset"},
+				Spec: v1alpha1.ApplicationSetSpec{
+					Template: v1alpha1.ApplicationSetTemplate{
+						Spec: v1alpha1.ApplicationSpec{
+							SyncPolicy: &v1alpha1.SyncPolicy{},
+						},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(appSet)
+		case r.Method == "PUT" && r.URL.Path == "/api/v1/applicationsets/my-appset":
+			appSetRestored = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+
+	policy := mustMarshal(t, &v1alpha1.SyncPolicyAutomated{Prune: true})
+	appSetPolicy := mustMarshal(t, &v1alpha1.SyncPolicyAutomated{Prune: true, SelfHeal: true})
+
+	mockLock := &mockAutoSyncLockManagerFull{
+		lockStore: make(map[string]*models.Lock),
+		appSetStored: map[string][]byte{
+			"my-appset": appSetPolicy,
+		},
+		parentAutoSync: make(map[string][]byte),
+	}
+
+	locks := []models.Lock{
+		{
+			Application:        "child-app",
+			AutoSyncDisabled:   true,
+			OriginalSyncPolicy: policy,
+			IsParentApp:        false,
+			ApplicationSetName: "my-appset",
+		},
+		{
+			Application:        "parent-app",
+			AutoSyncDisabled:   true,
+			OriginalSyncPolicy: policy,
+			IsParentApp:        true,
+		},
+	}
+
+	restoreAllAutoSync(context.Background(), client, mockLock, locks, "org/repo", 1)
+
+	if !childRestored {
+		t.Error("expected child app auto-sync to be restored")
+	}
+	if !parentRestored {
+		t.Error("expected parent app auto-sync to be restored")
+	}
+	if !appSetRestored {
+		t.Error("expected ApplicationSet auto-sync to be restored")
+	}
+	if !mockLock.appSetDeleted["my-appset"] {
+		t.Error("expected AppSet auto-sync state to be cleaned up")
+	}
+}
+
+func TestRestoreAppSetAutoSync_Success(t *testing.T) {
+	var updated bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applicationsets/my-appset":
+			appSet := v1alpha1.ApplicationSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-appset"},
+				Spec: v1alpha1.ApplicationSetSpec{
+					Template: v1alpha1.ApplicationSetTemplate{
+						Spec: v1alpha1.ApplicationSpec{
+							SyncPolicy: &v1alpha1.SyncPolicy{},
+						},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(appSet)
+		case r.Method == "PUT" && r.URL.Path == "/api/v1/applicationsets/my-appset":
+			updated = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	policy := mustMarshal(t, &v1alpha1.SyncPolicyAutomated{Prune: true, SelfHeal: true})
+
+	err := restoreAppSetAutoSync(context.Background(), client, "my-appset", policy)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !updated {
+		t.Error("expected ApplicationSet to be updated")
+	}
+}
+
+func TestRestoreAppSetAutoSync_EmptyPolicy(t *testing.T) {
+	// Should be a no-op when policy is empty
+	err := restoreAppSetAutoSync(context.Background(), nil, "my-appset", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// mockAutoSyncLockManagerFull provides a more complete mock for testing
+// disableAutoSyncForLocks and disableAutoSyncForRollback flows.
+type mockAutoSyncLockManagerFull struct {
+	mockLockManagerForSync
+	lockStore      map[string]*models.Lock
+	appSetStored   map[string][]byte
+	appSetDeleted  map[string]bool
+	parentAutoSync map[string][]byte
+}
+
+func (m *mockAutoSyncLockManagerFull) Lock(_ context.Context, req models.LockRequest) (*models.LockResult, error) {
+	lock := &models.Lock{
+		Application: req.Application,
+		PRNumber:    req.PRNumber,
+		Repo:        req.Repo,
+	}
+	if m.lockStore != nil {
+		m.lockStore[req.Application] = lock
+	}
+	return &models.LockResult{Acquired: true, Lock: lock}, nil
+}
+
+func (m *mockAutoSyncLockManagerFull) Get(_ context.Context, application string) (*models.Lock, error) {
+	if m.lockStore != nil {
+		if lock, ok := m.lockStore[application]; ok {
+			return lock, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockAutoSyncLockManagerFull) UpdateLock(_ context.Context, lock *models.Lock) error {
+	if m.lockStore != nil {
+		m.lockStore[lock.Application] = lock
+	}
+	return nil
+}
+
+func (m *mockAutoSyncLockManagerFull) StoreAppSetAutoSync(_ context.Context, appSetName, _ string, _ int, data []byte) error {
+	if m.appSetStored == nil {
+		m.appSetStored = make(map[string][]byte)
+	}
+	m.appSetStored[appSetName] = data
+	return nil
+}
+
+func (m *mockAutoSyncLockManagerFull) GetAppSetAutoSync(_ context.Context, appSetName, _ string, _ int) ([]byte, error) {
+	if m.appSetStored != nil {
+		return m.appSetStored[appSetName], nil
+	}
+	return nil, nil
+}
+
+func (m *mockAutoSyncLockManagerFull) DeleteAppSetAutoSync(_ context.Context, appSetName, _ string, _ int) error {
+	if m.appSetDeleted == nil {
+		m.appSetDeleted = make(map[string]bool)
+	}
+	m.appSetDeleted[appSetName] = true
+	return nil
+}
+
+func (m *mockAutoSyncLockManagerFull) StoreParentAutoSync(_ context.Context, parentApp, _ string, _ int, data []byte) error {
+	if m.parentAutoSync == nil {
+		m.parentAutoSync = make(map[string][]byte)
+	}
+	m.parentAutoSync[parentApp] = data
+	return nil
+}
+
+func (m *mockAutoSyncLockManagerFull) DeleteParentAutoSync(_ context.Context, parentApp, _ string, _ int) error {
+	if m.parentAutoSync != nil {
+		delete(m.parentAutoSync, parentApp)
+	}
+	return nil
+}
+
 func TestComputeSyncTargets_ParentManagesUnlockedChild(t *testing.T) {
 	// parent manages "other-app" which is NOT in the locks — parent should be synced
 	// because its child relationship is with an app outside the locked set
