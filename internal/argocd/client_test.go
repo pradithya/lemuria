@@ -17,6 +17,7 @@ package argocd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -94,6 +95,44 @@ func TestClientGet(t *testing.T) {
 				if result["Version"] != "2.10.0" {
 					t.Errorf("result = %v, want Version=2.10.0", result)
 				}
+			}
+		})
+	}
+}
+
+func TestIsNotFound(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "404 error",
+			err:  fmt.Errorf("API error (status 404): not found"),
+			want: true,
+		},
+		{
+			name: "500 error",
+			err:  fmt.Errorf("API error (status 500): internal error"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "wrapped 404",
+			err:  fmt.Errorf("getting app: %w", fmt.Errorf("API error (status 404): not found")),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsNotFound(tt.err)
+			if got != tt.want {
+				t.Errorf("IsNotFound(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}

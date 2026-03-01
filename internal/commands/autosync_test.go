@@ -326,7 +326,7 @@ func TestRestoreAutoSync(t *testing.T) {
 
 func TestRestoreAutoSync_AppDeleted(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
+		http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
 	}))
 	defer ts.Close()
 
@@ -339,10 +339,35 @@ func TestRestoreAutoSync_AppDeleted(t *testing.T) {
 		}),
 	}
 
-	// Should not return error when app is deleted
+	// Should not return error when app is deleted (404)
 	err := restoreAutoSync(context.Background(), client, lock)
 	if err != nil {
 		t.Fatalf("expected no error for deleted app, got: %v", err)
+	}
+}
+
+func TestRestoreAutoSync_TransientError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"internal error"}`, http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	lock := models.Lock{
+		Application:      "my-app",
+		AutoSyncDisabled: true,
+		OriginalSyncPolicy: mustMarshal(t, &v1alpha1.SyncPolicyAutomated{
+			Prune: true,
+		}),
+	}
+
+	// Should return error on transient (non-404) failures
+	err := restoreAutoSync(context.Background(), client, lock)
+	if err == nil {
+		t.Fatal("expected error for transient failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "getting application") {
+		t.Errorf("expected error about getting application, got: %v", err)
 	}
 }
 
@@ -527,6 +552,108 @@ func mustMarshal(t *testing.T, v any) []byte {
 		t.Fatalf("failed to marshal: %v", err)
 	}
 	return data
+}
+
+func TestRestoreAppSetAutoSync_TransientError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"internal error"}`, http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	policy := mustMarshal(t, &v1alpha1.SyncPolicyAutomated{Prune: true})
+
+	// Should return error on transient (non-404) failures
+	err := restoreAppSetAutoSync(context.Background(), client, "my-appset", policy)
+	if err == nil {
+		t.Fatal("expected error for transient failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "getting applicationset") {
+		t.Errorf("expected error about getting applicationset, got: %v", err)
+	}
+}
+
+func TestRestoreAppSetAutoSync_NotFound(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"not found"}`, http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	policy := mustMarshal(t, &v1alpha1.SyncPolicyAutomated{Prune: true})
+
+	// Should not return error when appset is deleted (404)
+	err := restoreAppSetAutoSync(context.Background(), client, "my-appset", policy)
+	if err != nil {
+		t.Fatalf("expected no error for deleted appset, got: %v", err)
+	}
+}
+
+func TestDisableParentAutoSync_ChildWithoutAutoSync(t *testing.T) {
+	// Even when the child has no auto-sync, parent detection should still run
+	// and find+disable parent apps with auto-sync.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications":
+			resp := v1alpha1.ApplicationList{
+				Items: []v1alpha1.Application{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "parent-app"},
+						Spec: v1alpha1.ApplicationSpec{
+							SyncPolicy: &v1alpha1.SyncPolicy{
+								Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+							},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "child-no-autosync"},
+						Spec:       v1alpha1.ApplicationSpec{},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/parent-app/managed-resources":
+			resp := map[string]any{
+				"items": []map[string]any{
+					{"kind": "Application", "name": "child-no-autosync"},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/parent-app":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "parent-app"},
+				Spec: v1alpha1.ApplicationSpec{
+					SyncPolicy: &v1alpha1.SyncPolicy{
+						Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+		case r.Method == "PUT" && r.URL.Path == "/api/v1/applications/parent-app/spec":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	lockCalls := make(map[string]bool)
+	mockLock := &mockAutoSyncLockManager{lockCalls: lockCalls}
+
+	// Child has no auto-sync, but parent detection should still run
+	visited := map[string]bool{"child-no-autosync": true}
+	err := disableParentAutoSync(context.Background(), client, mockLock,
+		"child-no-autosync", "org/repo", "https://github.com/org/repo", "github",
+		1, "user", visited, 0)
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !lockCalls["parent-app"] {
+		t.Error("expected lock to be acquired on parent-app even though child has no auto-sync")
+	}
 }
 
 // --- computeSyncTargets tests ---

@@ -49,8 +49,8 @@ func (e *Executor) executeRollback(ctx context.Context, cmd *Command, event *mod
 			return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Rollback\n\n"+
 				"Application `%s` not found: %s", cmd.Application, err.Error()))
 		}
-		// Disable auto-sync if enabled (will be restored on PR merge/close)
-		if app.HasAutoSync() && !cmd.DryRun {
+		// Disable auto-sync if enabled and disable parent auto-sync (will be restored on PR merge/close)
+		if !cmd.DryRun {
 			if err := e.disableAutoSyncForRollback(ctx, cmd.Application, event); err != nil {
 				return e.postComment(ctx, event, "", fmt.Sprintf("## Lemuria Rollback\n\n"+
 					"Failed to disable auto-sync for `%s`: %s", cmd.Application, err.Error()))
@@ -104,28 +104,31 @@ func (e *Executor) disableAutoSyncForRollback(ctx context.Context, appName strin
 	if err != nil {
 		return err
 	}
-	if state == nil {
-		return nil
-	}
 
-	policyJSON, err := json.Marshal(state.OriginalPolicy)
-	if err != nil {
-		return fmt.Errorf("marshaling sync policy: %w", err)
-	}
+	if state != nil {
+		policyJSON, err := json.Marshal(state.OriginalPolicy)
+		if err != nil {
+			return fmt.Errorf("marshaling sync policy: %w", err)
+		}
 
-	// Update lock if one exists
-	currentLock, _ := e.lock.Get(ctx, appName)
-	if currentLock != nil {
-		currentLock.AutoSyncDisabled = true
-		currentLock.OriginalSyncPolicy = policyJSON
-		currentLock.ApplicationSetName = state.ApplicationSetName
-		if err := e.lock.UpdateLock(ctx, currentLock); err != nil {
-			slog.Warn("failed to store auto-sync state in lock",
-				"app", appName, "error", err)
+		// Update lock if one exists
+		currentLock, err := e.lock.Get(ctx, appName)
+		if err != nil {
+			return fmt.Errorf("getting lock for %s: %w", appName, err)
+		}
+		if currentLock != nil {
+			currentLock.AutoSyncDisabled = true
+			currentLock.OriginalSyncPolicy = policyJSON
+			currentLock.ApplicationSetName = state.ApplicationSetName
+			if err := e.lock.UpdateLock(ctx, currentLock); err != nil {
+				return fmt.Errorf("storing auto-sync state in lock for %s: %w", appName, err)
+			}
 		}
 	}
 
-	// Disable auto-sync on parent apps
+	// Disable auto-sync on parent apps — always run regardless of whether
+	// this app itself has auto-sync, because a parent with auto-sync can
+	// still interfere with the rollback.
 	visited := map[string]bool{appName: true}
 	if err := disableParentAutoSync(ctx, e.argocd, e.lock, appName,
 		event.Repo.FullName, event.Repo.HTMLURL, string(event.Provider),

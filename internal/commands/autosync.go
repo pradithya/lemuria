@@ -220,10 +220,12 @@ func restoreAutoSync(ctx context.Context, argoClient *argocd.Client, l models.Lo
 
 	raw, err := argoClient.GetApplicationRaw(ctx, l.Application)
 	if err != nil {
-		// App may have been deleted
-		slog.Warn("failed to get application for auto-sync restore, app may be deleted",
-			"app", l.Application, "error", err)
-		return nil
+		if argocd.IsNotFound(err) {
+			slog.Warn("application not found for auto-sync restore, app may be deleted",
+				"app", l.Application)
+			return nil
+		}
+		return fmt.Errorf("getting application %s for auto-sync restore: %w", l.Application, err)
 	}
 
 	if raw.Spec.SyncPolicy == nil {
@@ -252,9 +254,12 @@ func restoreAppSetAutoSync(ctx context.Context, argoClient *argocd.Client, appSe
 
 	raw, err := argoClient.GetApplicationSetRaw(ctx, appSetName)
 	if err != nil {
-		slog.Warn("failed to get applicationset for auto-sync restore",
-			"applicationset", appSetName, "error", err)
-		return nil
+		if argocd.IsNotFound(err) {
+			slog.Warn("applicationset not found for auto-sync restore, may be deleted",
+				"applicationset", appSetName)
+			return nil
+		}
+		return fmt.Errorf("getting applicationset %s for auto-sync restore: %w", appSetName, err)
 	}
 
 	if raw.Spec.Template.Spec.SyncPolicy == nil {

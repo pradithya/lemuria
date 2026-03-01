@@ -272,6 +272,8 @@ func (c *Client) FindParentApps(ctx context.Context, childAppName string) ([]mod
 
 		managed, err := c.GetManagedResources(ctx, app.Name)
 		if err != nil {
+			slog.Warn("failed to get managed resources for parent detection, skipping app",
+				"app", app.Name, "child", childAppName, "error", err)
 			continue
 		}
 

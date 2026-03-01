@@ -921,45 +921,50 @@ func (e *Executor) disableAutoSyncForLocks(ctx context.Context, locks []models.L
 			return fmt.Errorf("disabling auto-sync for %s: %w", l.Application, err)
 		}
 
-		if state == nil {
-			visited[l.Application] = true
-			continue
-		}
+		// Mark this application as visited for parent traversal
+		visited[l.Application] = true
 
-		// Store auto-sync state in lock
-		policyJSON, err := json.Marshal(state.OriginalPolicy)
-		if err != nil {
-			return fmt.Errorf("marshaling sync policy for %s: %w", l.Application, err)
-		}
+		if state != nil {
+			// Store auto-sync state in lock
+			policyJSON, err := json.Marshal(state.OriginalPolicy)
+			if err != nil {
+				return fmt.Errorf("marshaling sync policy for %s: %w", l.Application, err)
+			}
 
-		currentLock, err := e.lock.Get(ctx, l.Application)
-		if err == nil && currentLock != nil {
+			currentLock, err := e.lock.Get(ctx, l.Application)
+			if err != nil {
+				return fmt.Errorf("getting lock for %s: %w", l.Application, err)
+			}
+			if currentLock == nil {
+				return fmt.Errorf("no lock found for %s while storing auto-sync state", l.Application)
+			}
+
 			currentLock.AutoSyncDisabled = true
 			currentLock.OriginalSyncPolicy = policyJSON
 			currentLock.ApplicationSetName = state.ApplicationSetName
 			if err := e.lock.UpdateLock(ctx, currentLock); err != nil {
-				slog.Warn("failed to store auto-sync state in lock",
-					"app", l.Application, "error", err)
+				return fmt.Errorf("storing auto-sync state in lock for %s: %w", l.Application, err)
 			}
-		}
 
-		// Disable auto-sync on ApplicationSet template if applicable
-		if state.ApplicationSetName != "" && !appSetDisabled[state.ApplicationSetName] {
-			originalBytes, err := disableAppSetAutoSync(ctx, e.argocd, state.ApplicationSetName)
-			if err != nil {
-				slog.Warn("failed to disable auto-sync on applicationset template",
-					"applicationset", state.ApplicationSetName, "error", err)
-			} else if originalBytes != nil {
-				if err := e.lock.StoreAppSetAutoSync(ctx, state.ApplicationSetName, event.Repo.FullName, event.PR.Number, originalBytes); err != nil {
-					slog.Warn("failed to store applicationset auto-sync state",
+			// Disable auto-sync on ApplicationSet template if applicable
+			if state.ApplicationSetName != "" && !appSetDisabled[state.ApplicationSetName] {
+				originalBytes, err := disableAppSetAutoSync(ctx, e.argocd, state.ApplicationSetName)
+				if err != nil {
+					slog.Warn("failed to disable auto-sync on applicationset template",
 						"applicationset", state.ApplicationSetName, "error", err)
+				} else if originalBytes != nil {
+					if err := e.lock.StoreAppSetAutoSync(ctx, state.ApplicationSetName, event.Repo.FullName, event.PR.Number, originalBytes); err != nil {
+						slog.Warn("failed to store applicationset auto-sync state",
+							"applicationset", state.ApplicationSetName, "error", err)
+					}
 				}
+				appSetDisabled[state.ApplicationSetName] = true
 			}
-			appSetDisabled[state.ApplicationSetName] = true
 		}
 
-		// Disable auto-sync on parent apps (apps-of-apps pattern)
-		visited[l.Application] = true
+		// Disable auto-sync on parent apps (apps-of-apps pattern) — always run
+		// regardless of whether this app itself has auto-sync, because a parent
+		// app with auto-sync can still interfere.
 		if err := disableParentAutoSync(ctx, e.argocd, e.lock, l.Application,
 			event.Repo.FullName, event.Repo.HTMLURL, string(event.Provider),
 			event.PR.Number, event.Sender.Login, visited, 0); err != nil {
