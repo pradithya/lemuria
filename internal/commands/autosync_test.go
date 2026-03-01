@@ -1099,8 +1099,8 @@ func TestDisableAutoSyncForLocks_WithAppSet(t *testing.T) {
 	client := newTestArgoClient(ts)
 	lockStore := make(map[string]*models.Lock)
 	mockLock := &mockAutoSyncLockManagerFull{
-		lockStore:     lockStore,
-		appSetStored:  make(map[string][]byte),
+		lockStore:    lockStore,
+		appSetStored: make(map[string][]byte),
 	}
 	lockStore["appset-app"] = &models.Lock{
 		Application: "appset-app",
@@ -1379,6 +1379,202 @@ func TestRestoreAppSetAutoSync_Success(t *testing.T) {
 	}
 	if !updated {
 		t.Error("expected ApplicationSet to be updated")
+	}
+}
+
+func TestDisableParentAutoSync_MaxDepth(t *testing.T) {
+	// When max depth is reached, recursion should stop gracefully
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	mockLock := &mockAutoSyncLockManagerFull{lockStore: make(map[string]*models.Lock)}
+	visited := make(map[string]bool)
+
+	// Should not error at max depth
+	err := disableParentAutoSync(context.Background(), client, mockLock,
+		"deep-app", "org/repo", "https://github.com/org/repo", "github",
+		1, "user", visited, maxParentDepth, nil)
+	if err != nil {
+		t.Fatalf("unexpected error at max depth: %v", err)
+	}
+}
+
+func TestDisableParentAutoSync_LockNotAcquired(t *testing.T) {
+	// When parent lock is held by another PR, should skip gracefully
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications" && r.URL.RawQuery != "":
+			resp := v1alpha1.ApplicationList{
+				Items: []v1alpha1.Application{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "parent-app"},
+						Spec: v1alpha1.ApplicationSpec{
+							SyncPolicy: &v1alpha1.SyncPolicy{
+								Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+							},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "child-app"},
+						Spec:       v1alpha1.ApplicationSpec{},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case strings.HasSuffix(r.URL.Path, "/managed-resources"):
+			if strings.Contains(r.URL.Path, "parent-app") {
+				resp := map[string]any{
+					"items": []map[string]any{
+						{"kind": "Application", "name": "child-app"},
+					},
+				}
+				_ = json.NewEncoder(w).Encode(resp)
+			} else {
+				_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{}})
+			}
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	mockLock := &mockAutoSyncLockNotAcquired{}
+
+	visited := make(map[string]bool)
+	err := disableParentAutoSync(context.Background(), client, mockLock,
+		"child-app", "org/repo", "https://github.com/org/repo", "github",
+		1, "user", visited, 0, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// mockAutoSyncLockNotAcquired returns lock-not-acquired for all Lock calls.
+type mockAutoSyncLockNotAcquired struct {
+	mockLockManagerForSync
+}
+
+func (m *mockAutoSyncLockNotAcquired) Lock(_ context.Context, _ models.LockRequest) (*models.LockResult, error) {
+	return &models.LockResult{
+		Acquired: false,
+		HeldBy:   &models.Lock{PRNumber: 99},
+	}, nil
+}
+
+func TestDisableParentAutoSync_CycleDetection(t *testing.T) {
+	// When a parent is already visited, it should be skipped (cycle)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications" && r.URL.RawQuery != "":
+			resp := v1alpha1.ApplicationList{
+				Items: []v1alpha1.Application{
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "app-a"},
+						Spec: v1alpha1.ApplicationSpec{
+							SyncPolicy: &v1alpha1.SyncPolicy{
+								Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+							},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{Name: "app-b"},
+						Spec: v1alpha1.ApplicationSpec{
+							SyncPolicy: &v1alpha1.SyncPolicy{
+								Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+							},
+						},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/api/v1/applications/app-a/managed-resources":
+			resp := map[string]any{
+				"items": []map[string]any{
+					{"kind": "Application", "name": "app-b"},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/api/v1/applications/app-b/managed-resources":
+			resp := map[string]any{
+				"items": []map[string]any{
+					{"kind": "Application", "name": "app-a"},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/app-b":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "app-b"},
+				Spec: v1alpha1.ApplicationSpec{
+					SyncPolicy: &v1alpha1.SyncPolicy{
+						Automated: &v1alpha1.SyncPolicyAutomated{Prune: true},
+					},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(app)
+		case r.Method == "PUT" && strings.HasSuffix(r.URL.Path, "/spec"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	mockLock := &mockAutoSyncLockManagerFull{lockStore: make(map[string]*models.Lock)}
+
+	visited := map[string]bool{"app-a": true}
+	err := disableParentAutoSync(context.Background(), client, mockLock,
+		"app-a", "org/repo", "https://github.com/org/repo", "github",
+		1, "user", visited, 0, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// app-b should have been processed (it's a parent of app-a)
+	// but when recursing, app-a should be skipped (already visited = cycle)
+}
+
+func TestRestoreAutoSync_NilSyncPolicy(t *testing.T) {
+	// When the app's SyncPolicy is nil, it should be created
+	var specUpdated bool
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/applications/my-app":
+			app := v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-app"},
+				Spec:       v1alpha1.ApplicationSpec{}, // No SyncPolicy
+			}
+			_ = json.NewEncoder(w).Encode(app)
+		case r.Method == "PUT" && r.URL.Path == "/api/v1/applications/my-app/spec":
+			specUpdated = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer ts.Close()
+
+	client := newTestArgoClient(ts)
+	lock := models.Lock{
+		Application:      "my-app",
+		AutoSyncDisabled: true,
+		OriginalSyncPolicy: mustMarshal(t, &v1alpha1.SyncPolicyAutomated{
+			Prune: true,
+		}),
+	}
+
+	err := restoreAutoSync(context.Background(), client, lock)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !specUpdated {
+		t.Error("expected spec to be updated")
 	}
 }
 
