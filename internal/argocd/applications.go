@@ -795,6 +795,7 @@ func convertV1alpha1Application(app v1alpha1.Application, sourceFile string) mod
 				Path:           src.Path,
 				TargetRevision: src.TargetRevision,
 				Chart:          src.Chart,
+				Ref:            src.Ref,
 			}
 			if src.Helm != nil {
 				result.Sources[i].Helm = &models.HelmSource{

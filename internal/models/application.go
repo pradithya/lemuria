@@ -59,6 +59,7 @@ type ApplicationSource struct {
 	Path           string      `json:"path,omitempty"`
 	TargetRevision string      `json:"targetRevision"`
 	Chart          string      `json:"chart,omitempty"`
+	Ref            string      `json:"ref,omitempty"`
 	Helm           *HelmSource `json:"helm,omitempty"`
 }
 
