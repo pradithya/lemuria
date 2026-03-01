@@ -252,35 +252,9 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		result.Diffs = diffs
 		result.Summary = argocd.SummarizeDiffs(diffs)
 
-		// Diff succeeded — acquire lock so sync can find it later
-		lockResult, err := e.lock.Lock(ctx, models.LockRequest{
-			Application: app.Name,
-			PRNumber:    event.PR.Number,
-			Repo:        event.Repo.FullName,
-			RepoURL:     event.Repo.HTMLURL,
-			Provider:    string(event.Provider),
-			User:        event.Sender.Login,
-			ChangeType:  models.ApplicationNew,
-		})
-		if err != nil {
-			result.Error = fmt.Errorf("failed to acquire lock: %w", err)
+		// Acquire lock and store plan
+		if err := e.lockAndStorePlan(ctx, &result, app, event, models.ApplicationNew); err != nil {
 			return result
-		}
-		if !lockResult.Acquired {
-			result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
-			return result
-		}
-		result.LockStatus = "Locked by this PR"
-
-		// Store plan
-		var planSummary string
-		var planDiffs []models.PlanDiffEntry
-		if len(diffs) > 0 {
-			planSummary = formatPlanSummary(result.Summary)
-			planDiffs = toPlanDiffEntries(diffs)
-		}
-		if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
-			slog.Warn("failed to store plan for new app", "app", app.Name, "error", err)
 		}
 
 		return result
@@ -345,35 +319,9 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		result.Diffs = diffs
 		result.Summary = argocd.SummarizeDiffs(diffs)
 
-		// Diff succeeded — acquire lock so sync can find it later
-		lockResult, err := e.lock.Lock(ctx, models.LockRequest{
-			Application: app.Name,
-			PRNumber:    event.PR.Number,
-			Repo:        event.Repo.FullName,
-			RepoURL:     event.Repo.HTMLURL,
-			Provider:    string(event.Provider),
-			User:        event.Sender.Login,
-			ChangeType:  models.ApplicationDeleted,
-		})
-		if err != nil {
-			result.Error = fmt.Errorf("failed to acquire lock: %w", err)
+		// Acquire lock and store plan
+		if err := e.lockAndStorePlan(ctx, &result, app, event, models.ApplicationDeleted); err != nil {
 			return result
-		}
-		if !lockResult.Acquired {
-			result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
-			return result
-		}
-		result.LockStatus = "Locked by this PR"
-
-		// Store plan
-		var planSummary string
-		var planDiffs []models.PlanDiffEntry
-		if len(diffs) > 0 {
-			planSummary = formatPlanSummary(result.Summary)
-			planDiffs = toPlanDiffEntries(diffs)
-		}
-		if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
-			slog.Warn("failed to store plan for deleted app", "app", app.Name, "error", err)
 		}
 
 		return result
@@ -485,13 +433,26 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		"deleted", result.Summary.Deleted,
 	)
 
-	// Diff succeeded — acquire lock
+	// Acquire lock and store plan
+	if err := e.lockAndStorePlan(ctx, &result, app, event, models.ApplicationExisting); err != nil {
+		return result
+	}
+
+	return result
+}
+
+// lockAndStorePlan acquires a lock for the application and stores the plan.
+// On success it sets result.LockStatus. On failure it sets result.Error and
+// result.LockStatus as appropriate. Returns a non-nil error if the caller
+// should return early (the result is already populated).
+func (e *Executor) lockAndStorePlan(ctx context.Context, result *appPlanResult, app models.Application, event *models.PREvent, changeType models.ApplicationChangeType) error {
 	slog.Debug("attempting to acquire lock",
 		"app", app.Name,
 		"pr", event.PR.Number,
 		"repo", event.Repo.FullName,
 		"user", event.Sender.Login,
 	)
+
 	lockResult, err := e.lock.Lock(ctx, models.LockRequest{
 		Application: app.Name,
 		PRNumber:    event.PR.Number,
@@ -499,46 +460,30 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		RepoURL:     event.Repo.HTMLURL,
 		Provider:    string(event.Provider),
 		User:        event.Sender.Login,
-		ChangeType:  models.ApplicationExisting,
+		ChangeType:  changeType,
 	})
 	if err != nil {
-		slog.Debug("failed to acquire lock",
-			"app", app.Name,
-			"error", err,
-		)
 		result.Error = fmt.Errorf("failed to acquire lock: %w", err)
-		return result
+		return err
 	}
-
 	if !lockResult.Acquired {
-		slog.Debug("lock held by another PR",
-			"app", app.Name,
-			"held_by_pr", lockResult.HeldBy.PRNumber,
-			"held_by_user", lockResult.HeldBy.User,
-		)
 		result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
-		return result
+		return fmt.Errorf("lock held by another PR")
 	}
-
-	slog.Debug("lock acquired",
-		"app", app.Name,
-		"pr", event.PR.Number,
-	)
 	result.LockStatus = "Locked by this PR"
 
-	// Store plan revision for later sync verification.
+	// Store plan revision for later sync verification
 	var planSummary string
 	var planDiffs []models.PlanDiffEntry
-	if len(diffs) > 0 {
-		summary := argocd.SummarizeDiffs(diffs)
-		planSummary = formatPlanSummary(summary)
-		planDiffs = toPlanDiffEntries(diffs)
+	if len(result.Diffs) > 0 {
+		planSummary = formatPlanSummary(result.Summary)
+		planDiffs = toPlanDiffEntries(result.Diffs)
 	}
 	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
 		slog.Warn("failed to store plan", "app", app.Name, "error", err)
 	}
 
-	return result
+	return nil
 }
 
 // renderPlanResults formats plan results as markdown comments.

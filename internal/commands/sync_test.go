@@ -1749,3 +1749,45 @@ spec:
 		})
 	}
 }
+
+func TestFilterSyncLocks(t *testing.T) {
+	t.Run("direct match", func(t *testing.T) {
+		locks := []models.Lock{
+			{Application: "app-a"},
+			{Application: "app-b"},
+			{Application: "app-c"},
+		}
+		// Create a minimal fake ArgoCD server — we only need the client
+		fake := newFakeArgoServer(v1alpha1.Application{})
+		defer fake.close()
+		e := &Executor{argocd: fake.client()}
+
+		filtered, err := e.filterSyncLocks(context.Background(), locks, "app-b")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(filtered) != 1 {
+			t.Fatalf("expected 1 lock, got %d", len(filtered))
+		}
+		if filtered[0].Application != "app-b" {
+			t.Errorf("expected app-b, got %s", filtered[0].Application)
+		}
+	})
+
+	t.Run("no match returns empty", func(t *testing.T) {
+		locks := []models.Lock{
+			{Application: "app-a"},
+		}
+		fake := newFakeArgoServer(v1alpha1.Application{})
+		defer fake.close()
+		e := &Executor{argocd: fake.client()}
+
+		filtered, err := e.filterSyncLocks(context.Background(), locks, "nonexistent")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(filtered) != 0 {
+			t.Errorf("expected 0 locks, got %d", len(filtered))
+		}
+	})
+}

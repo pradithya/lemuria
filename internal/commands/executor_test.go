@@ -1653,3 +1653,59 @@ func TestExpandAppSetMappings_SkipsNonAppSetMappings(t *testing.T) {
 		t.Errorf("expected no results for non-appset mappings, got %d", len(result))
 	}
 }
+
+func TestUpdateOrAppendAffected(t *testing.T) {
+	t.Run("appends new app", func(t *testing.T) {
+		affected := []models.Application{
+			{Name: "existing-app", ChangeType: models.ApplicationExisting},
+		}
+		detected := map[string]bool{"existing-app": true}
+		newApp := models.Application{Name: "new-app", ChangeType: models.ApplicationNew, SourceFile: "apps/new.yaml"}
+
+		result := updateOrAppendAffected(affected, newApp, detected)
+
+		if len(result) != 2 {
+			t.Fatalf("expected 2 apps, got %d", len(result))
+		}
+		if result[1].Name != "new-app" {
+			t.Errorf("expected new-app, got %s", result[1].Name)
+		}
+		if !detected["new-app"] {
+			t.Error("expected new-app to be marked as detected")
+		}
+	})
+
+	t.Run("updates existing app", func(t *testing.T) {
+		affected := []models.Application{
+			{Name: "my-app", ChangeType: models.ApplicationExisting},
+		}
+		detected := map[string]bool{"my-app": true}
+		update := models.Application{Name: "my-app", ChangeType: models.ApplicationNew, SourceFile: "apps/my-app.yaml"}
+
+		result := updateOrAppendAffected(affected, update, detected)
+
+		if len(result) != 1 {
+			t.Fatalf("expected 1 app, got %d", len(result))
+		}
+		if result[0].ChangeType != models.ApplicationNew {
+			t.Errorf("expected ChangeType %q, got %q", models.ApplicationNew, result[0].ChangeType)
+		}
+		if result[0].SourceFile != "apps/my-app.yaml" {
+			t.Errorf("expected SourceFile %q, got %q", "apps/my-app.yaml", result[0].SourceFile)
+		}
+	})
+
+	t.Run("preserves existing source file", func(t *testing.T) {
+		affected := []models.Application{
+			{Name: "my-app", ChangeType: models.ApplicationExisting, SourceFile: "original.yaml"},
+		}
+		detected := map[string]bool{"my-app": true}
+		update := models.Application{Name: "my-app", ChangeType: models.ApplicationNew, SourceFile: "new.yaml"}
+
+		result := updateOrAppendAffected(affected, update, detected)
+
+		if result[0].SourceFile != "original.yaml" {
+			t.Errorf("expected SourceFile to be preserved as %q, got %q", "original.yaml", result[0].SourceFile)
+		}
+	})
+}

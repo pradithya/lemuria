@@ -816,3 +816,98 @@ func TestSortedMapKeys_DifferentValueTypes(t *testing.T) {
 		}
 	})
 }
+
+func TestClassifyAppSetApps(t *testing.T) {
+	tests := []struct {
+		name        string
+		headApps    []models.Application
+		baseApps    []models.Application
+		wantNew     int
+		wantRemoved int
+	}{
+		{
+			name: "new apps in head",
+			headApps: []models.Application{
+				{Name: "app-a"},
+				{Name: "app-b"},
+			},
+			baseApps: []models.Application{
+				{Name: "app-a"},
+			},
+			wantNew:     1,
+			wantRemoved: 0,
+		},
+		{
+			name: "removed apps from base",
+			headApps: []models.Application{
+				{Name: "app-a"},
+			},
+			baseApps: []models.Application{
+				{Name: "app-a"},
+				{Name: "app-b"},
+			},
+			wantNew:     0,
+			wantRemoved: 1,
+		},
+		{
+			name: "both new and removed",
+			headApps: []models.Application{
+				{Name: "app-a"},
+				{Name: "app-c"},
+			},
+			baseApps: []models.Application{
+				{Name: "app-a"},
+				{Name: "app-b"},
+			},
+			wantNew:     1,
+			wantRemoved: 1,
+		},
+		{
+			name: "identical sets",
+			headApps: []models.Application{
+				{Name: "app-a"},
+			},
+			baseApps: []models.Application{
+				{Name: "app-a"},
+			},
+			wantNew:     0,
+			wantRemoved: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mod := classifyAppSetApps(tt.headApps, tt.baseApps, "test-appset", "appsets/test.yaml")
+
+			if len(mod.NewApps) != tt.wantNew {
+				t.Errorf("NewApps count = %d, want %d", len(mod.NewApps), tt.wantNew)
+			}
+			if len(mod.RemovedApps) != tt.wantRemoved {
+				t.Errorf("RemovedApps count = %d, want %d", len(mod.RemovedApps), tt.wantRemoved)
+			}
+			if mod.Name != "test-appset" {
+				t.Errorf("Name = %q, want %q", mod.Name, "test-appset")
+			}
+			if mod.SourceFile != "appsets/test.yaml" {
+				t.Errorf("SourceFile = %q, want %q", mod.SourceFile, "appsets/test.yaml")
+			}
+
+			// Verify ChangeType and metadata on new apps
+			for _, a := range mod.NewApps {
+				if a.ChangeType != models.ApplicationNew {
+					t.Errorf("new app %s ChangeType = %q, want %q", a.Name, a.ChangeType, models.ApplicationNew)
+				}
+				if a.ApplicationSetName != "test-appset" {
+					t.Errorf("new app %s ApplicationSetName = %q, want %q", a.Name, a.ApplicationSetName, "test-appset")
+				}
+			}
+
+			// Verify ChangeType and metadata on removed apps
+			for _, a := range mod.RemovedApps {
+				if a.ChangeType != models.ApplicationDeleted {
+					t.Errorf("removed app %s ChangeType = %q, want %q", a.Name, a.ChangeType, models.ApplicationDeleted)
+				}
+			}
+		})
+	}
+}

@@ -313,21 +313,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 			"app", app.Name,
 			"source_file", app.SourceFile,
 		)
-		if !alreadyDetected[app.Name] {
-			affected = append(affected, app)
-			alreadyDetected[app.Name] = true
-		} else {
-			// Update the existing entry to mark as new
-			for i := range affected {
-				if affected[i].Name == app.Name {
-					affected[i].ChangeType = models.ApplicationNew
-					if affected[i].SourceFile == "" {
-						affected[i].SourceFile = app.SourceFile
-					}
-					break
-				}
-			}
-		}
+		affected = updateOrAppendAffected(affected, app, alreadyDetected)
 	}
 
 	// Process modified apps (Application CRs whose content differs between head and base)
@@ -338,15 +324,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	for _, modApp := range parsed.Modified {
 		if alreadyDetected[modApp.Name] {
 			// Already in affected list — set ChangeType and propagate SourceFile
-			for i := range affected {
-				if affected[i].Name == modApp.Name {
-					affected[i].ChangeType = models.ApplicationExisting
-					if affected[i].SourceFile == "" {
-						affected[i].SourceFile = modApp.SourceFile
-					}
-					break
-				}
-			}
+			updateAffectedInPlace(affected, modApp.Name, models.ApplicationExisting, modApp.SourceFile)
 		} else if modApp.SourceFile != "" && changedFileSet[modApp.SourceFile] {
 			// App CR file is among the PR's changed files — add as affected
 			slog.Debug("adding modified application from scan",
@@ -402,7 +380,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 			affected = append(affected, app)
 			alreadyDetected[app.Name] = true
 		} else {
-			// Update the existing entry to mark as deleted
+			// For deleted apps, always overwrite SourceFile (unlike new/modified)
 			for i := range affected {
 				if affected[i].Name == app.Name {
 					affected[i].ChangeType = models.ApplicationDeleted
@@ -788,6 +766,32 @@ func filesToChangedFiles(paths []string) []models.ChangedFile {
 		files[i] = models.ChangedFile{Filename: p}
 	}
 	return files
+}
+
+// updateOrAppendAffected adds an app to the affected list if not already detected,
+// or updates the existing entry's ChangeType and SourceFile if it is.
+func updateOrAppendAffected(affected []models.Application, app models.Application, alreadyDetected map[string]bool) []models.Application {
+	if !alreadyDetected[app.Name] {
+		affected = append(affected, app)
+		alreadyDetected[app.Name] = true
+		return affected
+	}
+	updateAffectedInPlace(affected, app.Name, app.ChangeType, app.SourceFile)
+	return affected
+}
+
+// updateAffectedInPlace updates the ChangeType and SourceFile for a named app
+// that is already in the affected slice.
+func updateAffectedInPlace(affected []models.Application, name string, changeType models.ApplicationChangeType, sourceFile string) {
+	for i := range affected {
+		if affected[i].Name == name {
+			affected[i].ChangeType = changeType
+			if affected[i].SourceFile == "" {
+				affected[i].SourceFile = sourceFile
+			}
+			return
+		}
+	}
 }
 
 // InvalidatePlanComments marks all existing plan comments on a PR as stale.

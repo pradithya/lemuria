@@ -334,42 +334,10 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 			continue
 		}
 
-		baseAppNames := make(map[string]bool)
-		for _, a := range baseApps {
-			baseAppNames[a.Name] = true
-		}
-
-		headAppNames := make(map[string]bool)
-		for _, a := range headApps {
-			headAppNames[a.Name] = true
-		}
-
-		mod := AppSetModification{
-			Name:       name,
-			SourceFile: headPAS.SourceFile,
-		}
-
-		for _, a := range headApps {
-			if !baseAppNames[a.Name] {
-				a.ChangeType = models.ApplicationNew
-				a.ApplicationSetName = name
-				a.SourceFile = headPAS.SourceFile
-				mod.NewApps = append(mod.NewApps, a)
-				result.NewApps = append(result.NewApps, a)
-			}
-		}
-
-		for _, a := range baseApps {
-			if !headAppNames[a.Name] {
-				a.ChangeType = models.ApplicationDeleted
-				a.ApplicationSetName = name
-				a.SourceFile = headPAS.SourceFile
-				mod.RemovedApps = append(mod.RemovedApps, a)
-				result.DeletedApps = append(result.DeletedApps, a)
-			}
-		}
-
+		mod := classifyAppSetApps(headApps, baseApps, name, headPAS.SourceFile)
 		if len(mod.NewApps) > 0 || len(mod.RemovedApps) > 0 {
+			result.NewApps = append(result.NewApps, mod.NewApps...)
+			result.DeletedApps = append(result.DeletedApps, mod.RemovedApps...)
 			result.Modified = append(result.Modified, mod)
 			slog.Debug("applicationset generator changed",
 				"appset", name,
@@ -387,6 +355,46 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 	)
 
 	return result, nil
+}
+
+// classifyAppSetApps computes the set-difference between head and base generated
+// apps, returning an AppSetModification with new apps (in head but not base)
+// and removed apps (in base but not head).
+func classifyAppSetApps(headApps, baseApps []models.Application, appSetName, sourceFile string) AppSetModification {
+	baseAppNames := make(map[string]bool, len(baseApps))
+	for _, a := range baseApps {
+		baseAppNames[a.Name] = true
+	}
+
+	headAppNames := make(map[string]bool, len(headApps))
+	for _, a := range headApps {
+		headAppNames[a.Name] = true
+	}
+
+	mod := AppSetModification{
+		Name:       appSetName,
+		SourceFile: sourceFile,
+	}
+
+	for _, a := range headApps {
+		if !baseAppNames[a.Name] {
+			a.ChangeType = models.ApplicationNew
+			a.ApplicationSetName = appSetName
+			a.SourceFile = sourceFile
+			mod.NewApps = append(mod.NewApps, a)
+		}
+	}
+
+	for _, a := range baseApps {
+		if !headAppNames[a.Name] {
+			a.ChangeType = models.ApplicationDeleted
+			a.ApplicationSetName = appSetName
+			a.SourceFile = sourceFile
+			mod.RemovedApps = append(mod.RemovedApps, a)
+		}
+	}
+
+	return mod
 }
 
 // detectCrossRepoAffectedApps checks the given existing apps for cross-repo references
