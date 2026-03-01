@@ -211,16 +211,20 @@ Application CRs being removed in the PR:
 
 ### Detection Logic
 
-Lemuria uses two complementary strategies:
+Lemuria uses a **repo-scan-first** approach to detect affected applications:
 
-1. **Path-based detection** (`.lemuria.yaml`): Matches changed files against configured path patterns. This is the primary method when a repo config exists.
+1. **Repository scan**: Downloads all YAML files from both the head and base branches (narrowed by `cr_paths` if configured in `.lemuria.yaml`), then parses them for Application and ApplicationSet CRs.
 
-2. **Source path detection** (fallback): Checks if changed files fall within an Argo CD application's configured `source.path`.
+2. **Path matching**: For each scanned application, checks if its `source.path` overlaps with the changed files in the PR, or matches explicit path patterns from `.lemuria.yaml`.
 
-For Application CR changes specifically:
-1. **Added files**: Parse for new Application CRs
-2. **Removed files**: Parse from base branch to find deleted Applications
-3. **Modified files**: Compare base and head to detect added/removed/modified Applications within the file
+3. **Change detection**: Compares head vs base branch applications by name to detect:
+   - **New apps**: Application CRs in head but not in base
+   - **Deleted apps**: Application CRs in base but not in head
+   - **Modified apps**: Application CRs whose names exist in both branches and whose manifest content differs between head and base (or whose CR cannot be retrieved in one of the branches, in which case Lemuria conservatively treats them as modified)
+
+4. **ApplicationSet expansion**: For ApplicationSet CRs that changed between branches, uses the ArgoCD Generate API to preview which apps would be added or removed.
+
+5. **Cross-repo fallback**: Queries the ArgoCD API for applications whose CRs live in a different repository but whose `source.repoURL` points to this repository. This ensures apps managed externally are still detected when their source files change.
 
 ---
 

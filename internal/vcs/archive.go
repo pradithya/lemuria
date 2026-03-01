@@ -17,10 +17,18 @@ package vcs
 import (
 	"archive/tar"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"log/slog"
 	"path"
 	"strings"
+)
+
+const (
+	// maxFileSize is the maximum size of a single file extracted from an archive (10MB).
+	maxFileSize = 10 << 20
+	// maxTotalSize is the maximum total size of all extracted files (100MB).
+	maxTotalSize = 100 << 20
 )
 
 // ExtractFilesFromTarGz reads a gzipped tar stream and extracts the contents
@@ -77,9 +85,12 @@ func ExtractFilesFromTarGz(r io.Reader, paths []string) (map[string][]byte, erro
 			continue
 		}
 
-		data, err := io.ReadAll(tr)
+		data, err := io.ReadAll(io.LimitReader(tr, maxFileSize+1))
 		if err != nil {
 			return result, err
+		}
+		if int64(len(data)) > maxFileSize {
+			return result, fmt.Errorf("file %s exceeds maximum size of %d bytes", stripped, maxFileSize)
 		}
 		result[stripped] = data
 
@@ -89,6 +100,107 @@ func ExtractFilesFromTarGz(r io.Reader, paths []string) (map[string][]byte, erro
 	}
 
 	return result, nil
+}
+
+// ExtractFilesByPattern reads a gzipped tar stream and extracts files matching
+// the given filename patterns (e.g. "*.yaml", "*.yml") and optionally limited
+// to specific path prefixes (e.g. "argocd/", "apps/"). Both GitHub and GitLab
+// prefix archive entries with a top-level directory, so the first path component
+// is stripped before matching.
+//
+// If patterns is empty, all files are extracted. If pathPrefixes is empty, no
+// prefix filtering is applied. Returns a map of stripped path → file content.
+func ExtractFilesByPattern(r io.Reader, patterns []string, pathPrefixes []string) (map[string][]byte, error) {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if cerr := gz.Close(); cerr != nil {
+			slog.Error("error closing gzip reader", "error", cerr)
+		}
+	}()
+
+	tr := tar.NewReader(gz)
+	result := make(map[string][]byte)
+	var totalSize int64
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return result, err
+		}
+
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+
+		stripped := stripFirstComponent(hdr.Name)
+		if stripped == "" {
+			continue
+		}
+
+		// Check path prefix filter
+		if len(pathPrefixes) > 0 && !matchesAnyPrefix(stripped, pathPrefixes) {
+			continue
+		}
+
+		// Check filename pattern filter
+		if len(patterns) > 0 && !matchesAnyPattern(path.Base(stripped), patterns) {
+			continue
+		}
+
+		data, err := io.ReadAll(io.LimitReader(tr, maxFileSize+1))
+		if err != nil {
+			return result, err
+		}
+		if int64(len(data)) > maxFileSize {
+			slog.Warn("skipping file that exceeds size limit", "file", stripped, "max_bytes", maxFileSize)
+			continue
+		}
+		totalSize += int64(len(data))
+		if totalSize > maxTotalSize {
+			return result, fmt.Errorf("total extracted size exceeds maximum of %d bytes", maxTotalSize)
+		}
+		result[stripped] = data
+	}
+
+	return result, nil
+}
+
+// matchesAnyPrefix checks if the path starts with any of the given prefixes.
+func matchesAnyPrefix(filePath string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		p := prefix
+		if !strings.HasSuffix(p, "/") {
+			p += "/"
+		}
+		if strings.HasPrefix(filePath, p) || filePath == strings.TrimSuffix(p, "/") {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAnyPattern checks if the filename matches any of the given glob patterns.
+// Uses path.Match (not filepath.Match) since tar archives always use forward slashes.
+// Matching is case-insensitive (both filename and pattern are lowercased).
+func matchesAnyPattern(filename string, patterns []string) bool {
+	lowerFilename := strings.ToLower(filename)
+	for _, pattern := range patterns {
+		matched, err := path.Match(strings.ToLower(pattern), lowerFilename)
+		if err != nil {
+			slog.Warn("invalid glob pattern", "pattern", pattern, "error", err)
+			continue
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 // stripFirstComponent removes the first path component from name.

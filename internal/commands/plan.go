@@ -202,7 +202,57 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			"app", app.Name,
 		)
 
-		// Acquire lock for new app so sync can find it later
+		// Generate diff first — only acquire lock if diff succeeds
+		if app.SourceFile == "" {
+			slog.Warn("new application has no source file, skipping",
+				"app", app.Name,
+			)
+			return result
+		}
+
+		headContent, ok := headContents[app.SourceFile]
+		if !ok {
+			slog.Warn("application CR not found in head contents for new app, skipping diff",
+				"app", app.Name,
+				"source_file", app.SourceFile,
+			)
+			return result
+		}
+
+		headAppSpec, parseErr := argocd.ParseRawApplicationFromYAML(headContent, app.Name)
+		if parseErr != nil {
+			slog.Warn("failed to parse application CR from head branch for new app, skipping diff",
+				"app", app.Name,
+				"error", parseErr,
+			)
+			return result
+		}
+
+		timeout := e.config.ArgoCD.TempAppTimeout
+		if timeout == 0 {
+			timeout = 2 * time.Minute
+		}
+
+		diffs, diffErr := e.argocd.DiffNewApp(ctx, headAppSpec, argocd.DiffOptions{
+			TargetBranch: event.PR.HeadRef,
+			PRNumber:     event.PR.Number,
+			PRRepo:       event.Repo.HTMLURL,
+			Timeout:      timeout,
+		})
+
+		if diffErr != nil {
+			slog.Warn("failed to generate diff for new application",
+				"app", app.Name,
+				"error", diffErr,
+			)
+			result.Error = fmt.Errorf("failed to generate diff for new application: %w", diffErr)
+			return result
+		}
+
+		result.Diffs = diffs
+		result.Summary = argocd.SummarizeDiffs(diffs)
+
+		// Diff succeeded — acquire lock so sync can find it later
 		lockResult, err := e.lock.Lock(ctx, models.LockRequest{
 			Application: app.Name,
 			PRNumber:    event.PR.Number,
@@ -222,58 +272,15 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		}
 		result.LockStatus = "Locked by this PR"
 
-		// Try to generate diff for new app by reading spec from head branch
-		if app.SourceFile != "" {
-			headContent, ok := headContents[app.SourceFile]
-			if !ok {
-				slog.Warn("application CR not found in head contents for new app, skipping diff",
-					"app", app.Name,
-					"source_file", app.SourceFile,
-				)
-				return result
-			}
-
-			headAppSpec, parseErr := argocd.ParseRawApplicationFromYAML(headContent, app.Name)
-			if parseErr != nil {
-				slog.Warn("failed to parse application CR from head branch for new app, skipping diff",
-					"app", app.Name,
-					"error", parseErr,
-				)
-				return result
-			}
-
-			timeout := e.config.ArgoCD.TempAppTimeout
-			if timeout == 0 {
-				timeout = 2 * time.Minute
-			}
-
-			diffs, diffErr := e.argocd.DiffNewApp(ctx, headAppSpec, argocd.DiffOptions{
-				TargetBranch: event.PR.HeadRef,
-				PRNumber:     event.PR.Number,
-				PRRepo:       event.Repo.HTMLURL,
-				Timeout:      timeout,
-			})
-			if diffErr != nil {
-				slog.Warn("failed to generate diff for new application, skipping diff",
-					"app", app.Name,
-					"error", diffErr,
-				)
-				return result
-			}
-
-			result.Diffs = diffs
-			result.Summary = argocd.SummarizeDiffs(diffs)
-
-			// Store plan
-			var planSummary string
-			var planDiffs []models.PlanDiffEntry
-			if len(diffs) > 0 {
-				planSummary = formatPlanSummary(result.Summary)
-				planDiffs = toPlanDiffEntries(diffs)
-			}
-			if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
-				slog.Warn("failed to store plan for new app", "app", app.Name, "error", err)
-			}
+		// Store plan
+		var planSummary string
+		var planDiffs []models.PlanDiffEntry
+		if len(diffs) > 0 {
+			planSummary = formatPlanSummary(result.Summary)
+			planDiffs = toPlanDiffEntries(diffs)
+		}
+		if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
+			slog.Warn("failed to store plan for new app", "app", app.Name, "error", err)
 		}
 
 		return result
@@ -286,27 +293,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		)
 		result.Warning = "This application will be removed after the PR is merged."
 
-		// Acquire lock for deleted app so sync can find it later
-		lockResult, err := e.lock.Lock(ctx, models.LockRequest{
-			Application: app.Name,
-			PRNumber:    event.PR.Number,
-			Repo:        event.Repo.FullName,
-			RepoURL:     event.Repo.HTMLURL,
-			Provider:    string(event.Provider),
-			User:        event.Sender.Login,
-			ChangeType:  models.ApplicationDeleted,
-		})
-		if err != nil {
-			result.Error = fmt.Errorf("failed to acquire lock: %w", err)
-			return result
-		}
-		if !lockResult.Acquired {
-			result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
-			return result
-		}
-		result.LockStatus = "Locked by this PR"
-
-		// Try to generate diff for deleted app
+		// Generate diff first — only acquire lock if diff succeeds
 		diffMode := argocd.DiffMode(e.config.ArgoCD.DiffMode)
 		if diffMode == "" {
 			diffMode = argocd.DiffModeBranch
@@ -347,15 +334,36 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 			BaseAppSpec: baseAppSpec,
 		})
 		if diffErr != nil {
-			slog.Warn("failed to generate diff for deleted application, continuing without diff",
+			slog.Warn("failed to generate diff for deleted application",
 				"app", app.Name,
 				"error", diffErr,
 			)
+			result.Error = fmt.Errorf("failed to generate diff for deleted application: %w", diffErr)
 			return result
 		}
 
 		result.Diffs = diffs
 		result.Summary = argocd.SummarizeDiffs(diffs)
+
+		// Diff succeeded — acquire lock so sync can find it later
+		lockResult, err := e.lock.Lock(ctx, models.LockRequest{
+			Application: app.Name,
+			PRNumber:    event.PR.Number,
+			Repo:        event.Repo.FullName,
+			RepoURL:     event.Repo.HTMLURL,
+			Provider:    string(event.Provider),
+			User:        event.Sender.Login,
+			ChangeType:  models.ApplicationDeleted,
+		})
+		if err != nil {
+			result.Error = fmt.Errorf("failed to acquire lock: %w", err)
+			return result
+		}
+		if !lockResult.Acquired {
+			result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
+			return result
+		}
+		result.LockStatus = "Locked by this PR"
 
 		// Store plan
 		var planSummary string
@@ -379,49 +387,7 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		result.Warning = "Auto-sync is enabled. It will be temporarily disabled during sync and restored when the PR is merged or closed."
 	}
 
-	// Try to acquire lock
-	slog.Debug("attempting to acquire lock",
-		"app", app.Name,
-		"pr", event.PR.Number,
-		"repo", event.Repo.FullName,
-		"user", event.Sender.Login,
-	)
-	lockResult, err := e.lock.Lock(ctx, models.LockRequest{
-		Application: app.Name,
-		PRNumber:    event.PR.Number,
-		Repo:        event.Repo.FullName,
-		RepoURL:     event.Repo.HTMLURL,
-		Provider:    string(event.Provider),
-		User:        event.Sender.Login,
-		ChangeType:  models.ApplicationExisting,
-	})
-	if err != nil {
-		slog.Debug("failed to acquire lock",
-			"app", app.Name,
-			"error", err,
-		)
-		result.Error = fmt.Errorf("failed to acquire lock: %w", err)
-		return result
-	}
-
-	if !lockResult.Acquired {
-		slog.Debug("lock held by another PR",
-			"app", app.Name,
-			"held_by_pr", lockResult.HeldBy.PRNumber,
-			"held_by_user", lockResult.HeldBy.User,
-		)
-		result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
-		return result
-	}
-
-	slog.Debug("lock acquired",
-		"app", app.Name,
-		"pr", event.PR.Number,
-	)
-	result.LockStatus = "Locked by this PR"
-
-	// Get diff using temporary applications
-	// This properly handles multi-source apps with external Helm charts
+	// Generate diff first — only acquire lock if diff succeeds
 	diffMode := argocd.DiffMode(e.config.ArgoCD.DiffMode)
 	if diffMode == "" {
 		diffMode = argocd.DiffModeBranch // Default to branch mode
@@ -499,22 +465,6 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		BaseAppSpec:  baseAppSpec,
 		HeadAppSpec:  headAppSpec,
 	})
-	// Compute a concise plan summary from diffs (empty if diff failed).
-	var planSummary string
-	var planDiffs []models.PlanDiffEntry
-	if err == nil && len(diffs) > 0 {
-		summary := argocd.SummarizeDiffs(diffs)
-		planSummary = formatPlanSummary(summary)
-		planDiffs = toPlanDiffEntries(diffs)
-	}
-
-	// Store plan revision for later sync verification.
-	// This is stored regardless of diff outcome so that sync can proceed
-	// even if the diff fails (e.g., temp app timeout for external Helm charts).
-	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
-		slog.Warn("failed to store plan", "app", app.Name, "error", err)
-	}
-
 	if err != nil {
 		slog.Debug("failed to generate diff",
 			"app", app.Name,
@@ -534,6 +484,59 @@ func (e *Executor) planApplication(ctx context.Context, app models.Application, 
 		"updated", result.Summary.Updated,
 		"deleted", result.Summary.Deleted,
 	)
+
+	// Diff succeeded — acquire lock
+	slog.Debug("attempting to acquire lock",
+		"app", app.Name,
+		"pr", event.PR.Number,
+		"repo", event.Repo.FullName,
+		"user", event.Sender.Login,
+	)
+	lockResult, err := e.lock.Lock(ctx, models.LockRequest{
+		Application: app.Name,
+		PRNumber:    event.PR.Number,
+		Repo:        event.Repo.FullName,
+		RepoURL:     event.Repo.HTMLURL,
+		Provider:    string(event.Provider),
+		User:        event.Sender.Login,
+		ChangeType:  models.ApplicationExisting,
+	})
+	if err != nil {
+		slog.Debug("failed to acquire lock",
+			"app", app.Name,
+			"error", err,
+		)
+		result.Error = fmt.Errorf("failed to acquire lock: %w", err)
+		return result
+	}
+
+	if !lockResult.Acquired {
+		slog.Debug("lock held by another PR",
+			"app", app.Name,
+			"held_by_pr", lockResult.HeldBy.PRNumber,
+			"held_by_user", lockResult.HeldBy.User,
+		)
+		result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
+		return result
+	}
+
+	slog.Debug("lock acquired",
+		"app", app.Name,
+		"pr", event.PR.Number,
+	)
+	result.LockStatus = "Locked by this PR"
+
+	// Store plan revision for later sync verification.
+	var planSummary string
+	var planDiffs []models.PlanDiffEntry
+	if len(diffs) > 0 {
+		summary := argocd.SummarizeDiffs(diffs)
+		planSummary = formatPlanSummary(summary)
+		planDiffs = toPlanDiffEntries(diffs)
+	}
+	if err := e.lock.StorePlan(ctx, app.Name, event.PR.Number, event.PR.HeadSHA, app.SourceFile, planSummary, planDiffs); err != nil {
+		slog.Warn("failed to store plan", "app", app.Name, "error", err)
+	}
 
 	return result
 }

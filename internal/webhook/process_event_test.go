@@ -94,6 +94,10 @@ func (m *mockVCSClient) DeleteBranch(_ context.Context, _, _, _ string) error {
 	return nil
 }
 
+func (m *mockVCSClient) GetFilesByPattern(_ context.Context, _, _, _ string, _ []string, _ []string) (map[string][]byte, error) {
+	return map[string][]byte{}, nil
+}
+
 func (m *mockVCSClient) MaxCommentSize() int {
 	return 0
 }

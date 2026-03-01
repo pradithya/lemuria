@@ -88,6 +88,27 @@ func GetFilePaths(files []models.ChangedFile) []string {
 	return paths
 }
 
+// GetAllFilePaths extracts file paths from changed files, including
+// PreviousFilename for renamed files. This ensures that apps whose source
+// files were renamed/moved are correctly detected as affected.
+func GetAllFilePaths(files []models.ChangedFile) []string {
+	seen := make(map[string]struct{}, len(files)*2)
+	var paths []string
+	for _, f := range files {
+		if _, ok := seen[f.Filename]; !ok {
+			seen[f.Filename] = struct{}{}
+			paths = append(paths, f.Filename)
+		}
+		if f.PreviousFilename != "" && f.Status == models.FileStatusRenamed {
+			if _, ok := seen[f.PreviousFilename]; !ok {
+				seen[f.PreviousFilename] = struct{}{}
+				paths = append(paths, f.PreviousFilename)
+			}
+		}
+	}
+	return paths
+}
+
 // IsYAMLFile checks if a filename has a YAML extension.
 func IsYAMLFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
