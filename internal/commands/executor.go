@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
 	"regexp"
 	"strings"
 
@@ -535,29 +536,25 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 		"app", app.Name,
 	)
 
-	// Default: check if any changed file is in the app's path
-	if app.Path != "" {
-		slog.Debug("checking default path matching",
-			"app", app.Name,
-			"app_path", app.Path,
-			"changed_files_count", len(files),
-		)
-		for _, f := range files {
-			contains := pathContains(app.Path, f)
-			if contains {
-				slog.Debug("file matches application path",
-					"app", app.Name,
-					"app_path", app.Path,
-					"file", f,
-				)
-				return true
-			}
+	// Default: check if any changed file matches the app's source paths (including multi-source and Helm valueFiles)
+	slog.Debug("checking default path matching",
+		"app", app.Name,
+		"app_path", app.Path,
+		"is_multi_source", app.IsMultiSource(),
+		"changed_files_count", len(files),
+	)
+	for _, f := range files {
+		if fileMatchesAppSources(app, repoURL, f) {
+			slog.Debug("file matches application source",
+				"app", app.Name,
+				"file", f,
+			)
+			return true
 		}
-		slog.Debug("no files match application path",
-			"app", app.Name,
-			"app_path", app.Path,
-		)
 	}
+	slog.Debug("no files match application sources",
+		"app", app.Name,
+	)
 
 	return false
 }
@@ -605,6 +602,113 @@ func isPatternMatch(pattern string) bool {
 		return true
 	}
 	return strings.ContainsRune(pattern, '*')
+}
+
+// resolveValueFilePath resolves a Helm valueFile path relative to a source path,
+// following ArgoCD's resolution rules:
+//   - Absolute paths (starting with /) are repo-root-relative (leading / stripped)
+//   - Relative paths are resolved relative to the source path
+//   - Paths with .. are resolved via path.Join (e.g., "../common/values.yaml" with sourcePath="charts/app" → "charts/common/values.yaml")
+func resolveValueFilePath(sourcePath, valueFile string) string {
+	if strings.HasPrefix(valueFile, "/") {
+		return strings.TrimPrefix(valueFile, "/")
+	}
+	if sourcePath == "" || sourcePath == "." {
+		return path.Clean(valueFile)
+	}
+	return path.Join(sourcePath, valueFile)
+}
+
+// fileMatchesAppSources checks if a changed file matches any of an application's source paths
+// or Helm valueFile paths. For multi-source apps, it checks each source whose RepoURL matches.
+// For single-source apps, it falls back to the existing pathContains check on app.Path.
+//
+// For $ref valueFile references (e.g., "$values/apps/harbor/values.yaml"), it resolves
+// the reference by finding the source with a matching Ref name and checking if that
+// source's RepoURL matches the target repo.
+func fileMatchesAppSources(app models.Application, repoURL, file string) bool {
+	normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
+
+	if app.IsMultiSource() {
+		// Build a map of ref name → source for resolving $ref valueFile references
+		refSources := buildRefSourceMap(app.Sources)
+
+		for _, src := range app.Sources {
+			srcRepoMatch := argocd.NormalizeRepoURL(src.RepoURL) == normalizedRepoURL
+
+			// Check if the file is under the source path (only if repo matches)
+			if srcRepoMatch && src.Path != "" && pathContains(src.Path, file) {
+				return true
+			}
+
+			// Check Helm valueFiles
+			if src.Helm != nil {
+				for _, vf := range src.Helm.ValueFiles {
+					if strings.HasPrefix(vf, "$") {
+						// Resolve $ref cross-source reference
+						if resolveRefValueFile(vf, refSources, normalizedRepoURL, file) {
+							return true
+						}
+						continue
+					}
+					if srcRepoMatch {
+						resolved := resolveValueFilePath(src.Path, vf)
+						if resolved == file {
+							return true
+						}
+					}
+				}
+			}
+		}
+		return false
+	}
+
+	// Single-source: existing behavior
+	if app.Path != "" {
+		return pathContains(app.Path, file)
+	}
+	return false
+}
+
+// buildRefSourceMap builds a map from ref name to ApplicationSource for all sources
+// that have a Ref field set.
+func buildRefSourceMap(sources []models.ApplicationSource) map[string]models.ApplicationSource {
+	m := make(map[string]models.ApplicationSource)
+	for _, src := range sources {
+		if src.Ref != "" {
+			m[src.Ref] = src
+		}
+	}
+	return m
+}
+
+// resolveRefValueFile resolves a $ref-prefixed valueFile path (e.g., "$values/apps/harbor/values.yaml")
+// against the ref sources map. It returns true if the referenced source's repo matches the target
+// repo and the resolved file path matches the changed file.
+func resolveRefValueFile(valueFile string, refSources map[string]models.ApplicationSource, normalizedRepoURL, file string) bool {
+	// Parse "$refName/path/to/file" from the valueFile
+	withoutDollar := valueFile[1:] // strip leading "$"
+	slashIdx := strings.Index(withoutDollar, "/")
+	if slashIdx < 0 {
+		// No path component after ref name (e.g., "$values") — can't match a file
+		return false
+	}
+
+	refName := withoutDollar[:slashIdx]
+	refPath := withoutDollar[slashIdx+1:]
+
+	refSrc, ok := refSources[refName]
+	if !ok {
+		// No source with this ref name — skip
+		return false
+	}
+
+	// Check if the ref source's repo matches the target repo
+	if argocd.NormalizeRepoURL(refSrc.RepoURL) != normalizedRepoURL {
+		return false
+	}
+
+	return refPath == file
 }
 
 // pathContains checks if a file path is within the given directory.

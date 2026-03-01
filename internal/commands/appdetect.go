@@ -418,19 +418,16 @@ func detectCrossRepoAffectedApps(repoURL string, filePaths []string, alreadyDete
 			continue
 		}
 
-		// Check if any changed file is in the app's path
-		if app.Path != "" {
-			for _, f := range filePaths {
-				if pathContains(app.Path, f) {
-					slog.Debug("cross-repo application affected",
-						"app", app.Name,
-						"app_path", app.Path,
-						"file", f,
-					)
-					app.ChangeType = models.ApplicationExisting
-					affected = append(affected, app)
-					break
-				}
+		// Check if any changed file matches the app's source paths (including multi-source and Helm valueFiles)
+		for _, f := range filePaths {
+			if fileMatchesAppSources(app, repoURL, f) {
+				slog.Debug("cross-repo application affected",
+					"app", app.Name,
+					"file", f,
+				)
+				app.ChangeType = models.ApplicationExisting
+				affected = append(affected, app)
+				break
 			}
 		}
 	}

@@ -535,6 +535,89 @@ func TestDetectCrossRepoAffectedApps(t *testing.T) {
 	}
 }
 
+func TestDetectCrossRepoAffectedApps_MultiSource(t *testing.T) {
+	existingApps := []models.Application{
+		{
+			Name: "multi-source-app",
+			Sources: []models.ApplicationSource{
+				{RepoURL: "https://github.com/org/charts.git", Path: "charts/myapp"},
+				{
+					RepoURL: "https://github.com/org/repo.git",
+					Path:    "deploy/prod",
+					Helm:    &models.HelmSource{ValueFiles: []string{"values.yaml", "../common/values.yaml"}},
+				},
+			},
+		},
+		{
+			Name: "multi-source-no-match",
+			Sources: []models.ApplicationSource{
+				{RepoURL: "https://github.com/org/other.git", Path: "deploy"},
+			},
+		},
+	}
+
+	filePaths := []string{"deploy/common/values.yaml"}
+
+	affected := detectCrossRepoAffectedApps(
+		"https://github.com/org/repo",
+		filePaths,
+		nil,
+		existingApps,
+	)
+
+	if len(affected) != 1 {
+		t.Fatalf("expected 1 affected app, got %d", len(affected))
+	}
+	if affected[0].Name != "multi-source-app" {
+		t.Errorf("expected affected app = 'multi-source-app', got %q", affected[0].Name)
+	}
+	if affected[0].ChangeType != models.ApplicationExisting {
+		t.Errorf("expected ChangeType = %q, got %q", models.ApplicationExisting, affected[0].ChangeType)
+	}
+}
+
+func TestDetectCrossRepoAffectedApps_RefValueFile(t *testing.T) {
+	existingApps := []models.Application{
+		{
+			Name: "harbor",
+			Sources: []models.ApplicationSource{
+				{
+					RepoURL:        "https://github.com/org/argocd-gitops.git",
+					TargetRevision: "main",
+					Ref:            "values",
+				},
+				{
+					RepoURL:        "https://helm.goharbor.io",
+					Chart:          "harbor",
+					TargetRevision: "1.16.1",
+					Helm:           &models.HelmSource{ValueFiles: []string{"$values/apps/harbor/values.yaml"}},
+				},
+				{
+					RepoURL:        "https://github.com/org/argocd-gitops.git",
+					TargetRevision: "main",
+					Path:           "apps/harbor/manifests",
+				},
+			},
+		},
+	}
+
+	filePaths := []string{"apps/harbor/values.yaml"}
+
+	affected := detectCrossRepoAffectedApps(
+		"https://github.com/org/argocd-gitops",
+		filePaths,
+		nil,
+		existingApps,
+	)
+
+	if len(affected) != 1 {
+		t.Fatalf("expected 1 affected app, got %d", len(affected))
+	}
+	if affected[0].Name != "harbor" {
+		t.Errorf("expected affected app = 'harbor', got %q", affected[0].Name)
+	}
+}
+
 func TestDetectCrossRepoAffectedApps_EmptyExistingApps(t *testing.T) {
 	affected := detectCrossRepoAffectedApps(
 		"https://github.com/org/repo", []string{"file.yaml"}, nil, nil,

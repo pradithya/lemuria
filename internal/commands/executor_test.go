@@ -426,6 +426,107 @@ func TestIsAppAffected(t *testing.T) {
 			want:    false,
 		},
 		{
+			name: "multi-source app path matches",
+			app: models.Application{
+				Name: "multi-app",
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/org/repo", Path: "apps/frontend"},
+					{RepoURL: "https://github.com/org/repo", Path: "apps/backend"},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"apps/backend/deployment.yaml"},
+			want:    true,
+		},
+		{
+			name: "multi-source app path does not match",
+			app: models.Application{
+				Name: "multi-app",
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/org/repo", Path: "apps/frontend"},
+					{RepoURL: "https://github.com/org/repo", Path: "apps/backend"},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"apps/other/deployment.yaml"},
+			want:    false,
+		},
+		{
+			name: "multi-source only one source references this repo",
+			app: models.Application{
+				Name: "multi-app",
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/other-org/charts", Path: "charts/app"},
+					{RepoURL: "https://github.com/org/repo", Path: "deploy/app"},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"deploy/app/values.yaml"},
+			want:    true,
+		},
+		{
+			name: "multi-source helm valueFile relative path matches",
+			app: models.Application{
+				Name: "helm-app",
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/org/charts", Path: "charts/myapp", Chart: "myapp"},
+					{
+						RepoURL: "https://github.com/org/repo",
+						Path:    "deploy/envs/prod",
+						Helm:    &models.HelmSource{ValueFiles: []string{"values-prod.yaml"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"deploy/envs/prod/values-prod.yaml"},
+			want:    true,
+		},
+		{
+			name: "multi-source helm valueFile absolute path matches",
+			app: models.Application{
+				Name: "helm-app",
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/org/charts", Path: "charts/myapp"},
+					{
+						RepoURL: "https://github.com/org/repo",
+						Path:    "deploy/envs/prod",
+						Helm:    &models.HelmSource{ValueFiles: []string{"/common/values.yaml"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"common/values.yaml"},
+			want:    true,
+		},
+		{
+			name: "multi-source helm valueFile with $ref is skipped",
+			app: models.Application{
+				Name: "helm-app",
+				Sources: []models.ApplicationSource{
+					{
+						RepoURL: "https://github.com/org/repo",
+						Chart:   "mychart",
+						Helm:    &models.HelmSource{ValueFiles: []string{"$values/common.yaml"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"values/common.yaml"},
+			want:    false,
+		},
+		{
+			name: "multi-source chart-only source with no path",
+			app: models.Application{
+				Name: "chart-only-app",
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/org/repo", Chart: "mychart"},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			files:   []string{"charts/mychart/values.yaml"},
+			want:    false,
+		},
+		{
 			name:    "repo config path mapping overrides",
 			app:     models.Application{Name: "my-app", Path: "apps/my-app", RepoURL: "https://github.com/org/repo"},
 			repoURL: "https://github.com/org/repo",
@@ -1013,5 +1114,295 @@ spec:
 		for _, a := range affected {
 			t.Logf("  affected: %s (change_type=%s)", a.Name, a.ChangeType)
 		}
+	}
+}
+
+func TestResolveValueFilePath(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourcePath string
+		valueFile  string
+		want       string
+	}{
+		{
+			name:       "absolute path strips leading slash",
+			sourcePath: "charts/app",
+			valueFile:  "/values.yaml",
+			want:       "values.yaml",
+		},
+		{
+			name:       "absolute path with subdirectory",
+			sourcePath: "charts/app",
+			valueFile:  "/common/values.yaml",
+			want:       "common/values.yaml",
+		},
+		{
+			name:       "relative path joined with source path",
+			sourcePath: "charts/app",
+			valueFile:  "values-prod.yaml",
+			want:       "charts/app/values-prod.yaml",
+		},
+		{
+			name:       "relative path with parent directory",
+			sourcePath: "charts/app",
+			valueFile:  "../common/values.yaml",
+			want:       "charts/common/values.yaml",
+		},
+		{
+			name:       "empty source path",
+			sourcePath: "",
+			valueFile:  "values.yaml",
+			want:       "values.yaml",
+		},
+		{
+			name:       "dot source path",
+			sourcePath: ".",
+			valueFile:  "values.yaml",
+			want:       "values.yaml",
+		},
+		{
+			name:       "nested relative path",
+			sourcePath: "deploy/envs/prod",
+			valueFile:  "overrides/values.yaml",
+			want:       "deploy/envs/prod/overrides/values.yaml",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveValueFilePath(tt.sourcePath, tt.valueFile)
+			if got != tt.want {
+				t.Errorf("resolveValueFilePath(%q, %q) = %q, want %q", tt.sourcePath, tt.valueFile, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFileMatchesAppSources(t *testing.T) {
+	tests := []struct {
+		name    string
+		app     models.Application
+		repoURL string
+		file    string
+		want    bool
+	}{
+		{
+			name:    "single-source path match",
+			app:     models.Application{Path: "apps/my-app", RepoURL: "https://github.com/org/repo"},
+			repoURL: "https://github.com/org/repo",
+			file:    "apps/my-app/deployment.yaml",
+			want:    true,
+		},
+		{
+			name:    "single-source path no match",
+			app:     models.Application{Path: "apps/my-app", RepoURL: "https://github.com/org/repo"},
+			repoURL: "https://github.com/org/repo",
+			file:    "apps/other/deployment.yaml",
+			want:    false,
+		},
+		{
+			name:    "single-source empty path",
+			app:     models.Application{Path: "", RepoURL: "https://github.com/org/repo"},
+			repoURL: "https://github.com/org/repo",
+			file:    "anything.yaml",
+			want:    false,
+		},
+		{
+			name: "multi-source path match first source",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/org/repo", Path: "apps/frontend"},
+					{RepoURL: "https://github.com/org/repo", Path: "apps/backend"},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "apps/frontend/index.html",
+			want:    true,
+		},
+		{
+			name: "multi-source different repo not matched",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/other/repo", Path: "charts/app"},
+					{RepoURL: "https://github.com/org/repo", Path: "deploy"},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "charts/app/Chart.yaml",
+			want:    false,
+		},
+		{
+			name: "multi-source helm valueFile relative",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{
+						RepoURL: "https://github.com/org/repo",
+						Path:    "deploy/prod",
+						Helm:    &models.HelmSource{ValueFiles: []string{"values.yaml", "values-override.yaml"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "deploy/prod/values-override.yaml",
+			want:    true,
+		},
+		{
+			name: "multi-source helm valueFile absolute",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{
+						RepoURL: "https://github.com/org/repo",
+						Path:    "deploy/prod",
+						Helm:    &models.HelmSource{ValueFiles: []string{"/shared/values.yaml"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "shared/values.yaml",
+			want:    true,
+		},
+		{
+			name: "multi-source helm $ref resolved to matching repo",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{
+						RepoURL:        "https://github.com/org/repo",
+						TargetRevision: "main",
+						Ref:            "values",
+					},
+					{
+						RepoURL:        "https://helm.example.io",
+						Chart:          "mychart",
+						TargetRevision: "1.0.0",
+						Helm:           &models.HelmSource{ValueFiles: []string{"$values/apps/myapp/values.yaml"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "apps/myapp/values.yaml",
+			want:    true,
+		},
+		{
+			name: "multi-source helm $ref resolved to different repo",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{
+						RepoURL:        "https://github.com/other-org/other-repo",
+						TargetRevision: "main",
+						Ref:            "values",
+					},
+					{
+						RepoURL:        "https://helm.example.io",
+						Chart:          "mychart",
+						TargetRevision: "1.0.0",
+						Helm:           &models.HelmSource{ValueFiles: []string{"$values/apps/myapp/values.yaml"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "apps/myapp/values.yaml",
+			want:    false,
+		},
+		{
+			name: "multi-source helm $ref with no matching ref source",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{
+						RepoURL:        "https://github.com/org/repo",
+						TargetRevision: "main",
+						// No Ref field set
+					},
+					{
+						RepoURL:        "https://helm.example.io",
+						Chart:          "mychart",
+						TargetRevision: "1.0.0",
+						Helm:           &models.HelmSource{ValueFiles: []string{"$values/common.yaml"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "common.yaml",
+			want:    false,
+		},
+		{
+			name: "harbor-like: ref-only source + helm chart with $ref valueFile",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{
+						RepoURL:        "https://github.com/org/argocd-gitops.git",
+						TargetRevision: "main",
+						Ref:            "values",
+					},
+					{
+						RepoURL:        "https://helm.goharbor.io",
+						Chart:          "harbor",
+						TargetRevision: "1.16.1",
+						Helm:           &models.HelmSource{ValueFiles: []string{"$values/apps/harbor/values.yaml"}},
+					},
+					{
+						RepoURL:        "https://github.com/org/argocd-gitops.git",
+						TargetRevision: "main",
+						Path:           "apps/harbor/manifests",
+					},
+				},
+			},
+			repoURL: "https://github.com/org/argocd-gitops",
+			file:    "apps/harbor/values.yaml",
+			want:    true,
+		},
+		{
+			name: "multi-source helm $ref bare ref name without path",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{
+						RepoURL: "https://github.com/org/repo",
+						Ref:     "values",
+					},
+					{
+						RepoURL: "https://helm.example.io",
+						Chart:   "mychart",
+						Helm:    &models.HelmSource{ValueFiles: []string{"$values"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "values",
+			want:    false,
+		},
+		{
+			name: "multi-source helm valueFile with parent dir",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{
+						RepoURL: "https://github.com/org/repo",
+						Path:    "deploy/envs/prod",
+						Helm:    &models.HelmSource{ValueFiles: []string{"../../common/values.yaml"}},
+					},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "deploy/common/values.yaml",
+			want:    true,
+		},
+		{
+			name: "multi-source chart-only no path no match",
+			app: models.Application{
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/org/repo", Chart: "mychart"},
+				},
+			},
+			repoURL: "https://github.com/org/repo",
+			file:    "anything.yaml",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := fileMatchesAppSources(tt.app, tt.repoURL, tt.file)
+			if got != tt.want {
+				t.Errorf("fileMatchesAppSources() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
