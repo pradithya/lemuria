@@ -30,6 +30,12 @@ Lemuria enables teams to preview, approve, and sync Argo CD applications through
 - **Web UI** — View locks, application status, and manage users
 - **Multiple Auth Methods** — GitHub OAuth, GitLab OAuth, OIDC, and basic auth with RBAC
 
+## Demo
+
+<p align="center">
+  <img src="assets/lemuria.gif" alt="Lemuria Demo">
+</p>
+
 ## Quick Start
 
 1. [Getting started guide](https://pradithya.github.io/lemuria/getting-started.html)
