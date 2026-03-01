@@ -950,7 +950,7 @@ func TestIsAppAffected_RepoURLMatching(t *testing.T) {
 			},
 			repoURL: "https://github.com/org/repo",
 			files:   []string{"manifests/deployment.yaml"},
-			want:    false, // multi-source has empty Path at top level
+			want:    true, // multi-source paths are now checked individually
 		},
 		{
 			name: "app with empty path does not match (isAppAffected requires non-empty path)",

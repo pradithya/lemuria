@@ -194,6 +194,53 @@ func TestConvertV1alpha1Application(t *testing.T) {
 			},
 		},
 		{
+			name: "multi-source app with Ref field preserved",
+			app: v1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "ref-app",
+					Namespace: "argocd",
+				},
+				Spec: v1alpha1.ApplicationSpec{
+					Project: "default",
+					Sources: v1alpha1.ApplicationSources{
+						{
+							RepoURL:        "https://github.com/org/gitops",
+							TargetRevision: "main",
+							Ref:            "values",
+						},
+						{
+							RepoURL:        "https://helm.example.io",
+							Chart:          "mychart",
+							TargetRevision: "1.0.0",
+							Helm: &v1alpha1.ApplicationSourceHelm{
+								ValueFiles: []string{"$values/apps/myapp/values.yaml"},
+							},
+						},
+					},
+					Destination: v1alpha1.ApplicationDestination{
+						Server: "https://kubernetes.default.svc",
+					},
+				},
+			},
+			want: models.Application{
+				Name:              "ref-app",
+				Namespace:         "argocd",
+				Project:           "default",
+				DestinationServer: "https://kubernetes.default.svc",
+				Sources: []models.ApplicationSource{
+					{RepoURL: "https://github.com/org/gitops", TargetRevision: "main", Ref: "values"},
+					{
+						RepoURL:        "https://helm.example.io",
+						Chart:          "mychart",
+						TargetRevision: "1.0.0",
+						Helm: &models.HelmSource{
+							ValueFiles: []string{"$values/apps/myapp/values.yaml"},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "app with ApplicationSet label",
 			app: v1alpha1.Application{
 				ObjectMeta: metav1.ObjectMeta{
@@ -346,6 +393,9 @@ func TestConvertV1alpha1Application(t *testing.T) {
 				}
 				if src.Chart != wantSrc.Chart {
 					t.Errorf("Sources[%d].Chart = %q, want %q", i, src.Chart, wantSrc.Chart)
+				}
+				if src.Ref != wantSrc.Ref {
+					t.Errorf("Sources[%d].Ref = %q, want %q", i, src.Ref, wantSrc.Ref)
 				}
 				if (src.Helm == nil) != (wantSrc.Helm == nil) {
 					t.Errorf("Sources[%d].Helm nil = %v, want %v", i, src.Helm == nil, wantSrc.Helm == nil)
