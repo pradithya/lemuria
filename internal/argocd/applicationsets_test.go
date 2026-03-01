@@ -680,10 +680,10 @@ func TestGetApplicationsByApplicationSet(t *testing.T) {
 
 func TestGetApplicationSetRaw(t *testing.T) {
 	tests := []struct {
-		name     string
-		status   int
-		appSet   *v1alpha1.ApplicationSet
-		wantErr  bool
+		name    string
+		status  int
+		appSet  *v1alpha1.ApplicationSet
+		wantErr bool
 	}{
 		{
 			name:   "successful get",
