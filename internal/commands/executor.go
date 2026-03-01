@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/org/lemuria/internal/argocd"
@@ -278,39 +279,8 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	)
 
 	// Expand ApplicationSet mappings from .lemuria.yaml
-	if repoConfig != nil {
-		for _, mapping := range repoConfig.Applications {
-			if mapping.ApplicationSet == "" {
-				continue
-			}
-			matched := vcs.FilterFilesByPatterns(
-				filesToChangedFiles(filePaths),
-				mapping.Paths,
-			)
-			if len(matched) == 0 {
-				continue
-			}
-			slog.Debug("applicationset mapping matched",
-				"applicationset", mapping.ApplicationSet,
-				"matched_files", len(matched),
-			)
-			expandedApps, err := e.expandApplicationSet(ctx, mapping.ApplicationSet)
-			if err != nil {
-				slog.Warn("failed to expand applicationset",
-					"applicationset", mapping.ApplicationSet,
-					"error", err,
-				)
-				continue
-			}
-			for _, app := range expandedApps {
-				if !alreadyDetected[app.Name] {
-					app.ChangeType = models.ApplicationExisting
-					affected = append(affected, app)
-					alreadyDetected[app.Name] = true
-				}
-			}
-		}
-	}
+	appSetApps := e.expandAppSetMappings(ctx, repoConfig, filePaths, alreadyDetected)
+	affected = append(affected, appSetApps...)
 
 	// Step 4: Detect new/deleted/modified apps by comparing head vs base
 	parsed := detectApplicationChangesFromScan(scanned)
@@ -415,7 +385,7 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		}
 
 		for _, app := range appSetChanges.DeletedApps {
-			if !containsAppByName(parsed.Deleted, app.Name) {
+			if !slices.ContainsFunc(parsed.Deleted, func(a models.Application) bool { return a.Name == app.Name }) {
 				app.IsGeneratedApp = true
 				parsed.Deleted = append(parsed.Deleted, app)
 			}
@@ -472,98 +442,57 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	return affected, nil
 }
 
+// expandAppSetMappings expands ApplicationSet mappings from .lemuria.yaml,
+// returning apps whose changed files match the mapping paths.
+func (e *Executor) expandAppSetMappings(ctx context.Context, repoConfig *config.RepoConfig, filePaths []string, alreadyDetected map[string]bool) []models.Application {
+	if repoConfig == nil {
+		return nil
+	}
+
+	changedFiles := filesToChangedFiles(filePaths)
+	var result []models.Application
+
+	for _, mapping := range repoConfig.Applications {
+		if mapping.ApplicationSet == "" {
+			continue
+		}
+		matched := vcs.FilterFilesByPatterns(changedFiles, mapping.Paths)
+		if len(matched) == 0 {
+			continue
+		}
+		slog.Debug("applicationset mapping matched",
+			"applicationset", mapping.ApplicationSet,
+			"matched_files", len(matched),
+		)
+		expandedApps, err := e.expandApplicationSet(ctx, mapping.ApplicationSet)
+		if err != nil {
+			slog.Warn("failed to expand applicationset",
+				"applicationset", mapping.ApplicationSet,
+				"error", err,
+			)
+			continue
+		}
+		for _, app := range expandedApps {
+			if !alreadyDetected[app.Name] {
+				app.ChangeType = models.ApplicationExisting
+				result = append(result, app)
+				alreadyDetected[app.Name] = true
+			}
+		}
+	}
+
+	return result
+}
+
 // isAppAffected checks if an application is affected by the changed files.
 func (e *Executor) isAppAffected(app models.Application, repoURL string, files []string, repoConfig *config.RepoConfig) bool {
-	// First, check if there's an explicit path mapping in .lemuria.yaml
-	// If there is, use it regardless of whether the app's source references this repo
-	// (e.g., Helm chart apps where the Application CR is in this repo but the chart is external)
-	//
-	// Exact name mappings take precedence over wildcard mappings.
-	// If an exact mapping exists for this app, its result is authoritative —
-	// wildcard mappings will NOT be consulted even if the exact mapping's paths don't match.
-	if repoConfig != nil {
-		hasExactMapping := false
-		for _, mapping := range repoConfig.Applications {
-			nameMatches := matchAppName(mapping.Name, app.Name)
-			isWildcard := isPatternMatch(mapping.Name)
-			slog.Debug("checking repo config mapping",
-				"app", app.Name,
-				"mapping_name", mapping.Name,
-				"mapping_paths", mapping.Paths,
-				"name_matches", nameMatches,
-				"is_wildcard", isWildcard,
-			)
-			if !nameMatches {
-				continue
-			}
-			// Skip wildcard mappings for now; process them only if no exact mapping matched
-			if isWildcard {
-				continue
-			}
-			hasExactMapping = true
-			matched := vcs.FilterFilesByPatterns(
-				filesToChangedFiles(files),
-				mapping.Paths,
-			)
-			slog.Debug("path pattern matching result",
-				"app", app.Name,
-				"patterns", mapping.Paths,
-				"matched_files", matched,
-				"matched_count", len(matched),
-			)
-			if len(matched) > 0 {
-				slog.Debug("application affected via explicit .lemuria.yaml mapping",
-					"app", app.Name,
-				)
-				return true
-			}
-		}
-		// Only check wildcard mappings if no exact mapping was found for this app
-		if !hasExactMapping {
-			for _, mapping := range repoConfig.Applications {
-				if !isPatternMatch(mapping.Name) {
-					continue
-				}
-				if !matchAppName(mapping.Name, app.Name) {
-					continue
-				}
-				matched := vcs.FilterFilesByPatterns(
-					filesToChangedFiles(files),
-					mapping.Paths,
-				)
-				slog.Debug("path pattern matching result (wildcard)",
-					"app", app.Name,
-					"patterns", mapping.Paths,
-					"matched_files", matched,
-					"matched_count", len(matched),
-				)
-				if len(matched) > 0 {
-					slog.Debug("application affected via wildcard .lemuria.yaml mapping",
-						"app", app.Name,
-					)
-					return true
-				}
-			}
-		}
+	// Check repo config mappings first — if a mapping handles this app, its result is authoritative
+	if result := e.matchByRepoConfig(app, files, repoConfig); result != nil {
+		return *result
 	}
 
 	// Check if app references this repo
-	appRepos := app.GetRepoURLs()
-	normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
-	repoMatch := false
-	for _, appRepo := range appRepos {
-		if argocd.NormalizeRepoURL(appRepo) == normalizedRepoURL {
-			repoMatch = true
-			break
-		}
-	}
-
-	if !repoMatch {
-		slog.Debug("application does not reference target repo",
-			"app", app.Name,
-			"app_repos", appRepos,
-			"target_repo", repoURL,
-		)
+	if !e.appReferencesRepo(app, repoURL) {
 		return false
 	}
 
@@ -591,6 +520,96 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 		"app", app.Name,
 	)
 
+	return false
+}
+
+// matchByRepoConfig checks if an app is affected based on .lemuria.yaml mappings.
+// Returns nil if no mapping handles this app (caller should fall through to repo URL matching).
+// Returns a *bool with the definitive result if a mapping was found.
+//
+// Exact name mappings take precedence over wildcard mappings.
+// If an exact mapping exists for this app, its result is authoritative —
+// wildcard mappings will NOT be consulted even if the exact mapping's paths don't match.
+func (e *Executor) matchByRepoConfig(app models.Application, files []string, repoConfig *config.RepoConfig) *bool {
+	if repoConfig == nil {
+		return nil
+	}
+
+	changedFiles := filesToChangedFiles(files)
+	hasExactMapping := false
+
+	// First pass: check exact name mappings
+	for _, mapping := range repoConfig.Applications {
+		if isPatternMatch(mapping.Name) {
+			continue
+		}
+		if !matchAppName(mapping.Name, app.Name) {
+			continue
+		}
+		hasExactMapping = true
+		matched := vcs.FilterFilesByPatterns(changedFiles, mapping.Paths)
+		slog.Debug("path pattern matching result",
+			"app", app.Name,
+			"patterns", mapping.Paths,
+			"matched_files", matched,
+			"matched_count", len(matched),
+		)
+		if len(matched) > 0 {
+			slog.Debug("application affected via explicit .lemuria.yaml mapping",
+				"app", app.Name,
+			)
+			result := true
+			return &result
+		}
+	}
+
+	// If an exact mapping exists, it is authoritative — don't check wildcards
+	if hasExactMapping {
+		result := false
+		return &result
+	}
+
+	// Second pass: check wildcard mappings
+	for _, mapping := range repoConfig.Applications {
+		if !isPatternMatch(mapping.Name) {
+			continue
+		}
+		if !matchAppName(mapping.Name, app.Name) {
+			continue
+		}
+		matched := vcs.FilterFilesByPatterns(changedFiles, mapping.Paths)
+		slog.Debug("path pattern matching result (wildcard)",
+			"app", app.Name,
+			"patterns", mapping.Paths,
+			"matched_files", matched,
+			"matched_count", len(matched),
+		)
+		if len(matched) > 0 {
+			slog.Debug("application affected via wildcard .lemuria.yaml mapping",
+				"app", app.Name,
+			)
+			result := true
+			return &result
+		}
+	}
+
+	return nil
+}
+
+// appReferencesRepo checks if any of the app's source repo URLs match the target repo.
+func (e *Executor) appReferencesRepo(app models.Application, repoURL string) bool {
+	appRepos := app.GetRepoURLs()
+	normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
+	for _, appRepo := range appRepos {
+		if argocd.NormalizeRepoURL(appRepo) == normalizedRepoURL {
+			return true
+		}
+	}
+	slog.Debug("application does not reference target repo",
+		"app", app.Name,
+		"app_repos", appRepos,
+		"target_repo", repoURL,
+	)
 	return false
 }
 

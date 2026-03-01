@@ -83,6 +83,12 @@ type DefaultsConfig struct {
 	AutoMerge          bool     `koanf:"auto_merge"`
 	MergeMethod        string   `koanf:"merge_method"`
 	SkipNoChanges      bool     `koanf:"skip_no_changes"`
+	ProtectedBranches  []string `koanf:"protected_branches"`
+}
+
+// DefaultProtectedBranches returns the default list of branches that should never be deleted.
+func DefaultProtectedBranches() []string {
+	return []string{"main", "master", "develop", "development"}
 }
 
 // AuthConfig holds authentication settings.
@@ -193,6 +199,7 @@ func DefaultConfig() *Config {
 			DeleteSourceBranch: false,
 			AutoMerge:          false,
 			MergeMethod:        "squash",
+			ProtectedBranches:  DefaultProtectedBranches(),
 		},
 		Auth: AuthConfig{
 			Enabled:      false,

@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/models"
@@ -73,8 +73,8 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 	}
 
 	// Sort file paths for deterministic iteration order
-	headPaths := sortedKeys(headContents)
-	basePaths := sortedKeys(baseContents)
+	headPaths := sortedMapKeys(headContents)
+	basePaths := sortedMapKeys(baseContents)
 
 	// Parse Application CRs from head branch
 	for _, filePath := range headPaths {
@@ -166,8 +166,8 @@ func detectApplicationChangesFromScan(scanned *ScannedRepoApps) *argocd.ParsedAp
 	}
 
 	// Sort names for deterministic iteration order
-	headNames := sortedStringKeys(headByName)
-	baseNames := sortedStringKeys(baseByName)
+	headNames := sortedMapKeys(headByName)
+	baseNames := sortedMapKeys(baseByName)
 
 	// New apps: in head but not in base
 	for _, name := range headNames {
@@ -261,8 +261,8 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 	}
 
 	// Sort names for deterministic iteration order
-	headAppSetNames := sortedParsedAppSetKeys(headByName)
-	baseAppSetNames := sortedParsedAppSetKeys(baseByName)
+	headAppSetNames := sortedMapKeys(headByName)
+	baseAppSetNames := sortedMapKeys(baseByName)
 
 	// AppSets in head but not in base → new
 	for _, name := range headAppSetNames {
@@ -439,16 +439,6 @@ func detectCrossRepoAffectedApps(repoURL string, filePaths []string, alreadyDete
 	return affected
 }
 
-// containsAppByName checks if an app with the given name exists in the slice.
-func containsAppByName(apps []models.Application, name string) bool {
-	for _, app := range apps {
-		if app.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 // setToSlice converts a string set to a slice.
 func setToSlice(s map[string]struct{}) []string {
 	result := make([]string, 0, len(s))
@@ -520,32 +510,12 @@ func verifyDeletedAppsExist(parsed *argocd.ParsedApplications, existingByName ma
 	parsed.Deleted = actuallyDeleted
 }
 
-// sortedStringKeys returns the keys of a map[string]models.Application sorted alphabetically.
-func sortedStringKeys(m map[string]models.Application) []string {
+// sortedMapKeys returns the keys of a string-keyed map sorted alphabetically.
+func sortedMapKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
-	return keys
-}
-
-// sortedParsedAppSetKeys returns the keys of a map[string]argocd.ParsedAppSet sorted alphabetically.
-func sortedParsedAppSetKeys(m map[string]argocd.ParsedAppSet) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// sortedKeys returns the keys of a map sorted alphabetically.
-func sortedKeys(m map[string][]byte) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }

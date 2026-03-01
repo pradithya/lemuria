@@ -750,7 +750,7 @@ func TestScanRepoForApplications_NonAppYAML(t *testing.T) {
 	}
 }
 
-func TestSortedKeys(t *testing.T) {
+func TestSortedMapKeys(t *testing.T) {
 	tests := []struct {
 		name string
 		m    map[string][]byte
@@ -763,7 +763,7 @@ func TestSortedKeys(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sortedKeys(tt.m)
+			got := sortedMapKeys(tt.m)
 			if len(got) == 0 && len(tt.want) == 0 {
 				return
 			}
@@ -777,4 +777,42 @@ func TestSortedKeys(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSortedMapKeys_DifferentValueTypes(t *testing.T) {
+	// Verify the generic function works with different value types
+	t.Run("map[string]Application", func(t *testing.T) {
+		m := map[string]models.Application{
+			"c-app": {Name: "c-app"},
+			"a-app": {Name: "a-app"},
+			"b-app": {Name: "b-app"},
+		}
+		got := sortedMapKeys(m)
+		want := []string{"a-app", "b-app", "c-app"}
+		if len(got) != len(want) {
+			t.Fatalf("len = %d, want %d", len(got), len(want))
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("index %d = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
+
+	t.Run("map[string]ParsedAppSet", func(t *testing.T) {
+		m := map[string]argocd.ParsedAppSet{
+			"z-set": {},
+			"a-set": {},
+		}
+		got := sortedMapKeys(m)
+		want := []string{"a-set", "z-set"}
+		if len(got) != len(want) {
+			t.Fatalf("len = %d, want %d", len(got), len(want))
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("index %d = %q, want %q", i, got[i], want[i])
+			}
+		}
+	})
 }

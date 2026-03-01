@@ -770,7 +770,7 @@ func (e *Executor) autoMergePR(ctx context.Context, event *models.PREvent) error
 	// Delete source branch if configured and not a protected branch
 	if e.config.Defaults.DeleteSourceBranch {
 		branch := event.PR.HeadRef
-		if !IsProtectedBranch(branch) {
+		if !IsProtectedBranch(branch, e.config.Defaults.ProtectedBranches) {
 			if err := e.vcs.DeleteBranch(ctx, event.Repo.Owner, event.Repo.Name, branch); err != nil {
 				slog.Warn("failed to delete source branch",
 					"branch", branch,
@@ -786,9 +786,12 @@ func (e *Executor) autoMergePR(ctx context.Context, event *models.PREvent) error
 }
 
 // IsProtectedBranch returns true if the branch should never be deleted.
-func IsProtectedBranch(branch string) bool {
-	protected := []string{"main", "master", "develop", "development"}
-	for _, p := range protected {
+// If protectedBranches is empty, falls back to the default protected branches list.
+func IsProtectedBranch(branch string, protectedBranches []string) bool {
+	if len(protectedBranches) == 0 {
+		protectedBranches = config.DefaultProtectedBranches()
+	}
+	for _, p := range protectedBranches {
 		if branch == p {
 			return true
 		}

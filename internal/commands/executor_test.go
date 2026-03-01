@@ -188,32 +188,6 @@ func TestToPlanDiffEntries(t *testing.T) {
 	}
 }
 
-func TestContainsAppByName(t *testing.T) {
-	apps := []models.Application{
-		{Name: "app-a"},
-		{Name: "app-b"},
-		{Name: "app-c"},
-	}
-
-	tests := []struct {
-		name    string
-		appName string
-		want    bool
-	}{
-		{"found", "app-b", true},
-		{"not found", "app-d", false},
-		{"empty name", "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := containsAppByName(apps, tt.appName); got != tt.want {
-				t.Errorf("containsAppByName(%q) = %v, want %v", tt.appName, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestConvertToRenderResultsApplicationSetName(t *testing.T) {
 	results := []appPlanResult{
 		{
@@ -371,23 +345,27 @@ func TestIsAppAffected_ExactMappingTakesPrecedenceOverWildcard(t *testing.T) {
 
 func TestIsProtectedBranch(t *testing.T) {
 	tests := []struct {
-		name   string
-		branch string
-		want   bool
+		name              string
+		branch            string
+		protectedBranches []string
+		want              bool
 	}{
-		{"main is protected", "main", true},
-		{"master is protected", "master", true},
-		{"develop is protected", "develop", true},
-		{"development is protected", "development", true},
-		{"release is not protected", "release", false},
-		{"feature is not protected", "feature-branch", false},
-		{"fix is not protected", "fix/my-bug", false},
+		{"main is protected with defaults", "main", nil, true},
+		{"master is protected with defaults", "master", nil, true},
+		{"develop is protected with defaults", "develop", nil, true},
+		{"development is protected with defaults", "development", nil, true},
+		{"release is not protected with defaults", "release", nil, false},
+		{"feature is not protected with defaults", "feature-branch", nil, false},
+		{"fix is not protected with defaults", "fix/my-bug", nil, false},
+		{"custom protected branch", "release", []string{"main", "release"}, true},
+		{"not in custom list", "master", []string{"main", "release"}, false},
+		{"empty list falls back to defaults", "main", []string{}, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IsProtectedBranch(tt.branch); got != tt.want {
-				t.Errorf("IsProtectedBranch(%q) = %v, want %v", tt.branch, got, tt.want)
+			if got := IsProtectedBranch(tt.branch, tt.protectedBranches); got != tt.want {
+				t.Errorf("IsProtectedBranch(%q, %v) = %v, want %v", tt.branch, tt.protectedBranches, got, tt.want)
 			}
 		})
 	}
@@ -1478,5 +1456,200 @@ func TestFileMatchesAppSources(t *testing.T) {
 				t.Errorf("fileMatchesAppSources() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMatchByRepoConfig(t *testing.T) {
+	e := &Executor{}
+
+	tests := []struct {
+		name       string
+		app        models.Application
+		files      []string
+		repoConfig *config.RepoConfig
+		wantNil    bool // true if matchByRepoConfig should return nil (not handled)
+		wantResult bool // only checked when wantNil is false
+	}{
+		{
+			name:       "nil config returns nil",
+			app:        models.Application{Name: "my-app"},
+			files:      []string{"apps/my-app/deploy.yaml"},
+			repoConfig: nil,
+			wantNil:    true,
+		},
+		{
+			name:  "exact mapping matches - returns true",
+			app:   models.Application{Name: "my-app"},
+			files: []string{"apps/my-app/deploy.yaml"},
+			repoConfig: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "my-app", Paths: []string{"apps/my-app/**"}},
+				},
+			},
+			wantResult: true,
+		},
+		{
+			name:  "exact mapping exists but paths dont match - returns false",
+			app:   models.Application{Name: "my-app"},
+			files: []string{"other/file.yaml"},
+			repoConfig: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "my-app", Paths: []string{"apps/my-app/**"}},
+				},
+			},
+			wantResult: false,
+		},
+		{
+			name:  "wildcard matches when no exact mapping exists",
+			app:   models.Application{Name: "grafana"},
+			files: []string{"apps/grafana/values.yaml"},
+			repoConfig: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "*", Paths: []string{"apps/**"}},
+				},
+			},
+			wantResult: true,
+		},
+		{
+			name:  "no matching mapping returns nil",
+			app:   models.Application{Name: "unknown-app"},
+			files: []string{"apps/grafana/values.yaml"},
+			repoConfig: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "my-app", Paths: []string{"apps/my-app/**"}},
+				},
+			},
+			wantNil: true,
+		},
+		{
+			name:  "exact mapping takes precedence - blocks wildcard",
+			app:   models.Application{Name: "sealed-secrets"},
+			files: []string{"apps/grafana/values.yaml"},
+			repoConfig: &config.RepoConfig{
+				Applications: []config.ApplicationMapping{
+					{Name: "sealed-secrets", Paths: []string{"bootstrap/sealed-secret/**"}},
+					{Name: "*", Paths: []string{"apps/**"}},
+				},
+			},
+			wantResult: false, // exact mapping exists, paths don't match, wildcard blocked
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := e.matchByRepoConfig(tt.app, tt.files, tt.repoConfig)
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("matchByRepoConfig() = %v, want nil", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("matchByRepoConfig() = nil, want %v", tt.wantResult)
+			}
+			if *got != tt.wantResult {
+				t.Errorf("matchByRepoConfig() = %v, want %v", *got, tt.wantResult)
+			}
+		})
+	}
+}
+
+func TestAppReferencesRepo(t *testing.T) {
+	e := &Executor{}
+
+	tests := []struct {
+		name    string
+		app     models.Application
+		repoURL string
+		want    bool
+	}{
+		{
+			name:    "matching repo URL",
+			app:     models.Application{Name: "my-app", RepoURL: "https://github.com/org/repo"},
+			repoURL: "https://github.com/org/repo",
+			want:    true,
+		},
+		{
+			name:    "matching with .git suffix",
+			app:     models.Application{Name: "my-app", RepoURL: "https://github.com/org/repo.git"},
+			repoURL: "https://github.com/org/repo",
+			want:    true,
+		},
+		{
+			name:    "non-matching repo",
+			app:     models.Application{Name: "my-app", RepoURL: "https://github.com/org/other-repo"},
+			repoURL: "https://github.com/org/repo",
+			want:    false,
+		},
+		{
+			name:    "no repo URL on app",
+			app:     models.Application{Name: "my-app"},
+			repoURL: "https://github.com/org/repo",
+			want:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := e.appReferencesRepo(tt.app, tt.repoURL); got != tt.want {
+				t.Errorf("appReferencesRepo() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExpandAppSetMappings_NilConfig(t *testing.T) {
+	e := &Executor{}
+	alreadyDetected := make(map[string]bool)
+
+	result := e.expandAppSetMappings(context.Background(), nil, []string{"file.yaml"}, alreadyDetected)
+	if len(result) != 0 {
+		t.Errorf("expected no results for nil config, got %d", len(result))
+	}
+}
+
+func TestExpandAppSetMappings_NoAppSetMappings(t *testing.T) {
+	e := &Executor{}
+	alreadyDetected := make(map[string]bool)
+	repoConfig := &config.RepoConfig{
+		Applications: []config.ApplicationMapping{
+			{Name: "my-app", Paths: []string{"apps/**"}},
+		},
+	}
+
+	result := e.expandAppSetMappings(context.Background(), repoConfig, []string{"apps/my-app/deploy.yaml"}, alreadyDetected)
+	if len(result) != 0 {
+		t.Errorf("expected no results when no appset mappings, got %d", len(result))
+	}
+}
+
+func TestExpandAppSetMappings_NoMatchingPaths(t *testing.T) {
+	e := newTestExecutor(&mockVCS{}, &mockLock{}, nil)
+	alreadyDetected := make(map[string]bool)
+	repoConfig := &config.RepoConfig{
+		Applications: []config.ApplicationMapping{
+			{Name: "my-appset", ApplicationSet: "my-appset", Paths: []string{"apps/**"}},
+		},
+	}
+
+	// Changed files don't match the mapping paths
+	result := e.expandAppSetMappings(context.Background(), repoConfig, []string{"other/file.yaml"}, alreadyDetected)
+	if len(result) != 0 {
+		t.Errorf("expected no results when paths don't match, got %d", len(result))
+	}
+}
+
+func TestExpandAppSetMappings_SkipsNonAppSetMappings(t *testing.T) {
+	e := newTestExecutor(&mockVCS{}, &mockLock{}, nil)
+	alreadyDetected := make(map[string]bool)
+	repoConfig := &config.RepoConfig{
+		Applications: []config.ApplicationMapping{
+			{Name: "my-app", Paths: []string{"apps/**"}}, // No ApplicationSet field
+		},
+	}
+
+	result := e.expandAppSetMappings(context.Background(), repoConfig, []string{"apps/values.yaml"}, alreadyDetected)
+	if len(result) != 0 {
+		t.Errorf("expected no results for non-appset mappings, got %d", len(result))
 	}
 }
