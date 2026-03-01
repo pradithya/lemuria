@@ -127,6 +127,10 @@ func (m *mockVCSClient) DeleteBranch(ctx context.Context, owner, repo, branch st
 	return nil
 }
 
+func (m *mockVCSClient) GetFilesByPattern(_ context.Context, _, _, _ string, _ []string, _ []string) (map[string][]byte, error) {
+	return map[string][]byte{}, nil
+}
+
 func (m *mockVCSClient) MaxCommentSize() int {
 	return 0
 }

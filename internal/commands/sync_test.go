@@ -93,6 +93,10 @@ func (m *mockVCSForSync) DeleteBranch(context.Context, string, string, string) e
 	return nil
 }
 
+func (m *mockVCSForSync) GetFilesByPattern(context.Context, string, string, string, []string, []string) (map[string][]byte, error) {
+	return map[string][]byte{}, nil
+}
+
 func (m *mockVCSForSync) MaxCommentSize() int {
 	return 0
 }

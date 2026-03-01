@@ -25,6 +25,7 @@ type Client interface {
 	GetChangedFiles(ctx context.Context, owner, repo string, number int) ([]models.ChangedFile, error)
 	GetRepoConfig(ctx context.Context, owner, repo, ref string) ([]byte, error)
 	GetFileContents(ctx context.Context, owner, repo string, paths []string, ref string) (map[string][]byte, error)
+	GetFilesByPattern(ctx context.Context, owner, repo, ref string, patterns []string, pathPrefixes []string) (map[string][]byte, error)
 	GetPR(ctx context.Context, owner, repo string, number int) (*models.PullRequestDetail, error)
 	IsPRApproved(ctx context.Context, owner, repo string, number int) (bool, error)
 	PostComment(ctx context.Context, owner, repo string, number int, body string, isPlan bool) (*models.CommentResult, error)

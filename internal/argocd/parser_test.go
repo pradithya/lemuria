@@ -700,6 +700,121 @@ spec:
 	})
 }
 
+func TestParseApplicationContentFromYAML(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		wantKeys  []string
+		wantEmpty bool
+	}{
+		{
+			name: "multi-doc YAML with two Application CRs returns both keyed by name",
+			content: `apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-alpha
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: alpha
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-beta
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: beta
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+`,
+			wantKeys: []string{"app-alpha", "app-beta"},
+		},
+		{
+			name: "non-Application YAML documents are skipped",
+			content: `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: my-config
+data:
+  key: value
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: my-project
+spec:
+  description: test
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: real-app
+spec:
+  source:
+    repoURL: https://github.com/org/repo
+    path: manifests
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+`,
+			wantKeys: []string{"real-app"},
+		},
+		{
+			name:      "empty YAML returns empty map",
+			content:   "",
+			wantEmpty: true,
+		},
+		{
+			name:      "non-Kubernetes YAML returns empty map",
+			content:   "key: value\nanother: 123\n",
+			wantEmpty: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ParseApplicationContentFromYAML([]byte(tt.content))
+
+			if tt.wantEmpty {
+				if len(result) != 0 {
+					t.Fatalf("expected empty map, got %d entries", len(result))
+				}
+				return
+			}
+
+			if len(result) != len(tt.wantKeys) {
+				t.Fatalf("got %d entries, want %d; keys: %v", len(result), len(tt.wantKeys), mapKeys(result))
+			}
+
+			for _, key := range tt.wantKeys {
+				content, ok := result[key]
+				if !ok {
+					t.Errorf("expected key %q in result, got keys: %v", key, mapKeys(result))
+					continue
+				}
+				if len(content) == 0 {
+					t.Errorf("content for key %q is empty", key)
+				}
+			}
+		})
+	}
+}
+
+// mapKeys returns the keys of a map for error reporting.
+func mapKeys(m map[string][]byte) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func TestParsedApplications_String(t *testing.T) {
 	tests := []struct {
 		name string

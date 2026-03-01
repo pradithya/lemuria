@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 
 	"github.com/org/lemuria/internal/argocd"
@@ -190,10 +191,12 @@ func (e *Executor) getRepoConfig(ctx context.Context, event *models.PREvent) *co
 }
 
 // findAffectedApplications determines which applications are affected by a PR.
-// This includes:
-// - Existing applications with changed manifest paths
-// - New applications being created in this PR
-// - Existing applications being deleted in this PR
+// It uses a repo-scan-first approach:
+// 1. Get changed files from VCS
+// 2. Scan repo for Application/ApplicationSet CRs (head and base branches)
+// 3. Match scanned apps against changed files
+// 4. Detect new/deleted/modified apps by comparing head vs base
+// 5. Fallback: query ArgoCD API for cross-repo apps
 func (e *Executor) findAffectedApplications(ctx context.Context, event *models.PREvent) ([]models.Application, error) {
 	slog.Debug("finding affected applications",
 		"repo", event.Repo.FullName,
@@ -202,13 +205,13 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		"base_ref", event.PR.BaseRef,
 	)
 
-	// Get changed files
+	// Step 0: Get changed files
 	files, err := e.vcs.GetChangedFiles(ctx, event.Repo.Owner, event.Repo.Name, event.PR.Number)
 	if err != nil {
 		return nil, fmt.Errorf("getting changed files: %w", err)
 	}
 
-	filePaths := vcs.GetFilePaths(files)
+	filePaths := vcs.GetAllFilePaths(files)
 	slog.Debug("retrieved changed files",
 		"count", len(filePaths),
 		"files", filePaths,
@@ -216,9 +219,12 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 
 	// Load repo config (cached)
 	repoConfig := e.getRepoConfig(ctx, event)
+	var crPaths []string
 	if repoConfig != nil {
+		crPaths = repoConfig.CRPaths
 		slog.Debug("loaded .lemuria.yaml",
 			"applications_count", len(repoConfig.Applications),
+			"cr_paths", crPaths,
 			"autoplan", repoConfig.Autoplan,
 			"require_approval", repoConfig.RequireApproval,
 		)
@@ -231,47 +237,30 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 		}
 	}
 
-	// Get all applications from Argo CD
-	existingApps, err := e.argocd.ListApplications(ctx)
+	// Step 1-2: Scan repo for all Application/ApplicationSet CRs
+	scanned, err := e.scanRepoForApplications(ctx, event, crPaths)
 	if err != nil {
-		return nil, fmt.Errorf("listing applications: %w", err)
-	}
-	slog.Debug("retrieved ArgoCD applications",
-		"count", len(existingApps),
-	)
-
-	// Build map of existing app names
-	existingByName := make(map[string]bool)
-	for _, app := range existingApps {
-		existingByName[app.Name] = true
-		slog.Debug("existing ArgoCD application",
-			"name", app.Name,
-			"repo_urls", app.GetRepoURLs(),
-			"path", app.Path,
-			"has_autosync", app.HasAutoSync(),
-		)
+		return nil, fmt.Errorf("scanning repo for applications: %w", err)
 	}
 
-	// Filter to existing applications affected by this PR
+	// Step 3: Match scanned apps against changed files
 	var affected []models.Application
 	repoURL := event.Repo.HTMLURL
-	slog.Debug("checking applications against repo URL",
-		"repo_url", repoURL,
-	)
+	alreadyDetected := make(map[string]bool)
 
-	for _, app := range existingApps {
-		isAffected := e.isAppAffected(app, repoURL, filePaths, repoConfig)
-		slog.Debug("checked if application is affected",
-			"app", app.Name,
-			"affected", isAffected,
-		)
-		if isAffected {
+	for _, app := range scanned.HeadApps {
+		if e.isAppAffected(app, repoURL, filePaths, repoConfig) {
+			slog.Debug("scanned application affected",
+				"app", app.Name,
+				"source_file", app.SourceFile,
+			)
 			app.ChangeType = models.ApplicationExisting
 			affected = append(affected, app)
+			alreadyDetected[app.Name] = true
 		}
 	}
 
-	slog.Debug("found existing affected applications",
+	slog.Debug("found affected applications from repo scan",
 		"count", len(affected),
 	)
 
@@ -301,121 +290,136 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 				continue
 			}
 			for _, app := range expandedApps {
-				if !containsAppByName(affected, app.Name) {
+				if !alreadyDetected[app.Name] {
 					app.ChangeType = models.ApplicationExisting
 					affected = append(affected, app)
+					alreadyDetected[app.Name] = true
 				}
 			}
 		}
 	}
 
-	// Detect new and deleted applications from Application CR files
-	parsed, headContents, baseContents, err := e.detectApplicationChanges(ctx, event)
-	if err != nil {
-		slog.Warn("failed to detect application changes from files", "error", err)
+	// Step 4: Detect new/deleted/modified apps by comparing head vs base
+	parsed := detectApplicationChangesFromScan(scanned)
+
+	slog.Debug("detected application changes from scan",
+		"new_count", len(parsed.New),
+		"modified_count", len(parsed.Modified),
+		"deleted_count", len(parsed.Deleted),
+	)
+
+	// Fetch all existing apps once for verification and cross-repo detection
+	existingApps, listErr := e.argocd.ListApplications(ctx)
+	if listErr != nil {
+		slog.Warn("failed to list existing applications", "error", listErr)
+	}
+	existingByName := make(map[string]bool)
+	for _, app := range existingApps {
+		existingByName[app.Name] = true
+	}
+
+	// Verify new apps don't already exist in ArgoCD
+	verifyNewAppsExist(parsed, existingByName)
+
+	// Verify deleted apps actually exist in ArgoCD
+	verifyDeletedAppsExist(parsed, existingByName)
+
+	// Add new applications
+	for _, app := range parsed.New {
+		slog.Debug("adding new application",
+			"app", app.Name,
+			"source_file", app.SourceFile,
+		)
+		if !alreadyDetected[app.Name] {
+			affected = append(affected, app)
+			alreadyDetected[app.Name] = true
+		}
+	}
+
+	// Process modified apps (Application CRs whose content differs between head and base)
+	changedFileSet := make(map[string]bool, len(filePaths))
+	for _, f := range filePaths {
+		changedFileSet[f] = true
+	}
+	for _, modApp := range parsed.Modified {
+		if alreadyDetected[modApp.Name] {
+			// Already in affected list, just propagate SourceFile
+			for i := range affected {
+				if affected[i].Name == modApp.Name && affected[i].SourceFile == "" {
+					affected[i].SourceFile = modApp.SourceFile
+					break
+				}
+			}
+		} else if modApp.SourceFile != "" && changedFileSet[modApp.SourceFile] {
+			// App CR file is among the PR's changed files — add as affected
+			slog.Debug("adding modified application from scan",
+				"app", modApp.Name,
+				"source_file", modApp.SourceFile,
+			)
+			modApp.ChangeType = models.ApplicationExisting
+			affected = append(affected, modApp)
+			alreadyDetected[modApp.Name] = true
+		} else {
+			slog.Debug("skipping modified app — CR file not in PR changed files",
+				"app", modApp.Name,
+				"source_file", modApp.SourceFile,
+			)
+		}
+	}
+
+	// Detect ApplicationSet CR changes
+	appSetChanges, appSetErr := e.detectApplicationSetChangesFromScan(ctx, scanned)
+	if appSetErr != nil {
+		slog.Warn("failed to detect applicationset changes", "error", appSetErr)
 	} else {
-		slog.Debug("detected application changes from files",
-			"new_count", len(parsed.New),
-			"modified_count", len(parsed.Modified),
-			"deleted_count", len(parsed.Deleted),
+		slog.Debug("detected applicationset changes",
+			"new_apps", len(appSetChanges.NewApps),
+			"deleted_apps", len(appSetChanges.DeletedApps),
+			"modified_appsets", len(appSetChanges.Modified),
 		)
 
-		// Verify new apps don't already exist in ArgoCD
-		if err := e.verifyNewAppsExist(ctx, parsed); err != nil {
-			slog.Warn("failed to verify new apps", "error", err)
-		}
-
-		// Verify deleted apps actually exist in ArgoCD
-		if err := e.verifyDeletedAppsExist(ctx, parsed); err != nil {
-			slog.Warn("failed to verify deleted apps", "error", err)
-		}
-
-		// Add new applications (not yet in ArgoCD)
-		for _, app := range parsed.New {
-			slog.Debug("adding new application",
-				"app", app.Name,
-				"source_file", app.SourceFile,
-			)
-			if !containsAppByName(affected, app.Name) {
+		for _, app := range appSetChanges.NewApps {
+			if !alreadyDetected[app.Name] {
+				app.IsGeneratedApp = true
+				parsed.New = append(parsed.New, app)
 				affected = append(affected, app)
+				alreadyDetected[app.Name] = true
 			}
 		}
 
-		// Process modified apps (Application CRs modified in the PR)
-		for _, modApp := range parsed.Modified {
-			if containsAppByName(affected, modApp.Name) {
-				// Already in affected list, just propagate SourceFile
-				for i := range affected {
-					if affected[i].Name == modApp.Name && affected[i].SourceFile == "" {
-						affected[i].SourceFile = modApp.SourceFile
-						break
-					}
-				}
-			} else if existingByName[modApp.Name] {
-				// App exists in ArgoCD but wasn't detected by isAppAffected
-				// (e.g., app uses external Helm chart but its CR was modified)
-				for _, existingApp := range existingApps {
-					if existingApp.Name == modApp.Name {
-						slog.Debug("adding modified application with external source",
-							"app", modApp.Name,
-							"source_file", modApp.SourceFile,
-						)
-						existingApp.ChangeType = models.ApplicationExisting
-						existingApp.SourceFile = modApp.SourceFile
-						affected = append(affected, existingApp)
-						break
-					}
-				}
+		for _, app := range appSetChanges.DeletedApps {
+			if !containsAppByName(parsed.Deleted, app.Name) {
+				app.IsGeneratedApp = true
+				parsed.Deleted = append(parsed.Deleted, app)
 			}
 		}
+	}
 
-		// Detect new/deleted applications from ApplicationSet CR changes
-		appSetChanges, appSetErr := e.detectApplicationSetChanges(ctx, event, files, headContents, baseContents)
-		if appSetErr != nil {
-			slog.Warn("failed to detect applicationset changes from files", "error", appSetErr)
+	// Add deleted applications
+	for _, app := range parsed.Deleted {
+		slog.Debug("processing deleted application",
+			"app", app.Name,
+			"source_file", app.SourceFile,
+		)
+		if !alreadyDetected[app.Name] {
+			affected = append(affected, app)
+			alreadyDetected[app.Name] = true
 		} else {
-			slog.Debug("detected applicationset changes from files",
-				"new_apps", len(appSetChanges.NewApps),
-				"deleted_apps", len(appSetChanges.DeletedApps),
-				"modified_appsets", len(appSetChanges.Modified),
-			)
-
-			for _, app := range appSetChanges.NewApps {
-				if !containsAppByName(affected, app.Name) && !containsAppByName(parsed.New, app.Name) {
-					app.IsGeneratedApp = true
-					parsed.New = append(parsed.New, app)
-					affected = append(affected, app)
-				}
-			}
-
-			for _, app := range appSetChanges.DeletedApps {
-				if !containsAppByName(parsed.Deleted, app.Name) {
-					app.IsGeneratedApp = true
-					parsed.Deleted = append(parsed.Deleted, app)
+			// Update the existing entry to mark as deleted
+			for i := range affected {
+				if affected[i].Name == app.Name {
+					affected[i].ChangeType = models.ApplicationDeleted
+					affected[i].SourceFile = app.SourceFile
+					break
 				}
 			}
 		}
+	}
 
-		// Add deleted applications
-		for _, app := range parsed.Deleted {
-			slog.Debug("processing deleted application",
-				"app", app.Name,
-				"source_file", app.SourceFile,
-			)
-			// Mark existing apps as being deleted if not already in affected list
-			if !containsAppByName(affected, app.Name) {
-				affected = append(affected, app)
-			} else {
-				// Update the existing entry to mark as deleted
-				for i := range affected {
-					if affected[i].Name == app.Name {
-						affected[i].ChangeType = models.ApplicationDeleted
-						affected[i].SourceFile = app.SourceFile
-						break
-					}
-				}
-			}
-		}
+	// Step 5: Fallback — ArgoCD API for cross-repo apps
+	if listErr == nil {
+		crossRepoApps := detectCrossRepoAffectedApps(repoURL, filePaths, alreadyDetected, existingApps)
+		affected = append(affected, crossRepoApps...)
 	}
 
 	slog.Debug("final affected applications",
@@ -445,7 +449,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 		hasExactMapping := false
 		for _, mapping := range repoConfig.Applications {
 			nameMatches := matchAppName(mapping.Name, app.Name)
-			isWildcard := strings.ContainsRune(mapping.Name, '*')
+			isWildcard := isPatternMatch(mapping.Name)
 			slog.Debug("checking repo config mapping",
 				"app", app.Name,
 				"mapping_name", mapping.Name,
@@ -481,7 +485,7 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 		// Only check wildcard mappings if no exact mapping was found for this app
 		if !hasExactMapping {
 			for _, mapping := range repoConfig.Applications {
-				if !strings.ContainsRune(mapping.Name, '*') {
+				if !isPatternMatch(mapping.Name) {
 					continue
 				}
 				if !matchAppName(mapping.Name, app.Name) {
@@ -509,18 +513,10 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 
 	// Check if app references this repo
 	appRepos := app.GetRepoURLs()
+	normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
 	repoMatch := false
 	for _, appRepo := range appRepos {
-		normalizedAppRepo := argocd.NormalizeRepoURL(appRepo)
-		normalizedRepoURL := argocd.NormalizeRepoURL(repoURL)
-		slog.Debug("comparing repo URLs",
-			"app", app.Name,
-			"app_repo", appRepo,
-			"normalized_app_repo", normalizedAppRepo,
-			"target_repo", repoURL,
-			"normalized_target_repo", normalizedRepoURL,
-		)
-		if normalizedAppRepo == normalizedRepoURL {
+		if argocd.NormalizeRepoURL(appRepo) == normalizedRepoURL {
 			repoMatch = true
 			break
 		}
@@ -566,19 +562,49 @@ func (e *Executor) isAppAffected(app models.Application, repoURL string, files [
 	return false
 }
 
-// matchAppName checks if an app name matches a pattern (supports wildcards).
+// matchAppName checks if an app name matches a pattern.
+// Supports exact match and regex patterns (delimited by /.../).
+// For backward compatibility, simple glob-style trailing '*' is converted to regex.
 func matchAppName(pattern, name string) bool {
 	if pattern == name {
 		return true
 	}
 
-	// Simple wildcard matching
-	if len(pattern) > 0 && pattern[len(pattern)-1] == '*' {
-		prefix := pattern[:len(pattern)-1]
-		return len(name) >= len(prefix) && name[:len(prefix)] == prefix
+	// Regex pattern: /pattern/
+	if len(pattern) >= 2 && pattern[0] == '/' && pattern[len(pattern)-1] == '/' {
+		re, err := regexp.Compile(pattern[1 : len(pattern)-1])
+		if err != nil {
+			slog.Warn("invalid regex pattern in app name matching",
+				"pattern", pattern, "error", err)
+			return false
+		}
+		return re.MatchString(name)
+	}
+
+	// Backward-compatible glob: convert * to regex
+	if strings.ContainsRune(pattern, '*') {
+		// Escape regex metacharacters except *, then replace * with .*
+		escaped := regexp.QuoteMeta(strings.ReplaceAll(pattern, "*", "\x00"))
+		regexStr := "^" + strings.ReplaceAll(escaped, "\x00", ".*") + "$"
+		re, err := regexp.Compile(regexStr)
+		if err != nil {
+			slog.Warn("invalid glob pattern in app name matching",
+				"pattern", pattern, "error", err)
+			return false
+		}
+		return re.MatchString(name)
 	}
 
 	return false
+}
+
+// isPatternMatch returns true if the pattern contains wildcards or is a regex,
+// i.e. it's not an exact name match.
+func isPatternMatch(pattern string) bool {
+	if len(pattern) >= 2 && pattern[0] == '/' && pattern[len(pattern)-1] == '/' {
+		return true
+	}
+	return strings.ContainsRune(pattern, '*')
 }
 
 // pathContains checks if a file path is within the given directory.
@@ -586,7 +612,13 @@ func pathContains(dir, file string) bool {
 	if dir == "" || dir == "." {
 		return true
 	}
-	return len(file) > len(dir) && file[:len(dir)] == dir
+	// Ensure directory separator after the prefix to avoid false positives
+	// e.g. dir="apps/my-app" should not match file="apps/my-app-other/deploy.yaml"
+	d := dir
+	if !strings.HasSuffix(d, "/") {
+		d += "/"
+	}
+	return strings.HasPrefix(file, d)
 }
 
 // filesToChangedFiles converts string paths to ChangedFile structs.

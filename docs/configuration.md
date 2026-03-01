@@ -41,6 +41,11 @@ require_approval: true
 auto_merge: true
 skip_no_changes: true
 
+# Paths to scan for Application/ApplicationSet CRs (optional)
+cr_paths:
+  - "argocd"
+  - "apps/manifests"
+
 # Application to path mappings
 applications:
   # Exact application name
@@ -79,7 +84,7 @@ Maps Argo CD applications to repository paths. Lemuria uses this to determine wh
 
 ```yaml
 applications:
-  - name: my-app              # Argo CD application name (supports wildcards)
+  - name: my-app              # Argo CD application name (supports glob wildcards and /regex/)
     paths:                    # Paths that affect this app
       - "apps/my-app/**"
       - "base/**"
@@ -99,13 +104,25 @@ applications:
 
 If no `.lemuria.yaml` exists or an app has no explicit path mapping, Lemuria falls back to checking if the app's configured `source.path` in Argo CD contains any of the changed files.
 
+### CR Paths Section
+
+Limits which directories Lemuria scans for Application and ApplicationSet Custom Resource files. When set, only YAML files under these paths are parsed for CR detection. When absent, all YAML files in the repository are scanned.
+
+```yaml
+cr_paths:
+  - "argocd"              # Scan argocd/ directory
+  - "apps/manifests"      # Also scan apps/manifests/
+```
+
+This is useful for large repositories where Application CRs are stored in a specific directory, avoiding unnecessary parsing of non-CR YAML files (e.g., Helm values, Kustomize patches).
+
 ### Sync Requirements Section
 
-Override approval requirements per application. Supports exact names and wildcard patterns.
+Override approval requirements per application. Supports exact names, glob wildcard patterns (e.g. `my-app-*`, `*-prod`), and regex patterns delimited by `/` (e.g. `/my-app-.+/`).
 
 ```yaml
 sync_requirements:
-  - name: production          # Application name (supports wildcards)
+  - name: production          # Application name (supports glob wildcards and /regex/)
     require_approval: true    # Require PR approval
     allowed_users:            # Users allowed to sync
       - "admin"

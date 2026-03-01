@@ -118,6 +118,24 @@ func (c *Client) GetFileContents(ctx context.Context, owner, repo string, paths 
 	return vcs.ExtractFilesFromTarGz(bytes.NewReader(data), paths)
 }
 
+// GetFilesByPattern retrieves all files matching the given filename patterns
+// (e.g. "*.yaml") and optionally limited to specific path prefixes, by
+// downloading a tar.gz archive and extracting matching entries in-memory.
+func (c *Client) GetFilesByPattern(ctx context.Context, owner, repo, ref string, patterns []string, pathPrefixes []string) (map[string][]byte, error) {
+	project := projectPath(owner, repo)
+	format := "tar.gz"
+
+	data, _, err := c.client.Repositories.Archive(project, &gogitlab.ArchiveOptions{
+		Format: gogitlab.Ptr(format),
+		SHA:    gogitlab.Ptr(ref),
+	}, gogitlab.WithContext(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("downloading archive at ref %s: %w", ref, err)
+	}
+
+	return vcs.ExtractFilesByPattern(bytes.NewReader(data), patterns, pathPrefixes)
+}
+
 // GetFileContent retrieves the raw content of a file at a specific ref.
 func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref string) ([]byte, error) {
 	project := projectPath(owner, repo)
