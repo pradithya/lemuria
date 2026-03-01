@@ -427,22 +427,53 @@ func (c *Client) getManagedResources(ctx context.Context, name string) ([]Manage
 	return resp.Items, nil
 }
 
-// computeLiveVsTargetDiff compares live cluster state against target manifests.
-func computeLiveVsTargetDiff(liveResources []ManagedResource, targetManifests []models.Manifest) []models.ManifestDiff {
-	// Build maps for comparison
+// computeStateDiff computes a diff between two states based on their existence.
+// Returns the diff string and the action taken.
+func computeStateDiff(stateA, stateB string, existsA, existsB bool) (string, models.DiffAction) {
+	if !existsA && existsB {
+		return formatCreateDiff(stateB), models.DiffActionCreate
+	}
+	if existsA && !existsB {
+		return formatDeleteDiff(stateA), models.DiffActionDelete
+	}
+	if existsA && existsB {
+		d := computeDiff(stateA, stateB)
+		if d != "" {
+			return d, models.DiffActionUpdate
+		}
+		return "", models.DiffActionNone
+	}
+	return "", models.DiffActionNone
+}
+
+// buildLiveResourceMap builds a map of live resources keyed by resource key,
+// filtering out hooks and secrets.
+func buildLiveResourceMap(liveResources []ManagedResource) map[string]ManagedResource {
 	liveMap := make(map[string]ManagedResource)
 	for _, res := range liveResources {
 		if res.Hook {
 			continue
 		}
-		// Skip secrets
 		if res.Kind == "Secret" && (res.Group == "" || res.Group == "v1") {
 			continue
 		}
 		key := resourceKey(res.Group, res.Kind, res.Namespace, res.Name)
 		liveMap[key] = res
 	}
+	return liveMap
+}
 
+// liveResourceState returns the best available state string for a live resource.
+func liveResourceState(res ManagedResource) string {
+	if res.NormalizedLiveState != "" {
+		return res.NormalizedLiveState
+	}
+	return res.LiveState
+}
+
+// computeLiveVsTargetDiff compares live cluster state against target manifests.
+func computeLiveVsTargetDiff(liveResources []ManagedResource, targetManifests []models.Manifest) []models.ManifestDiff {
+	liveMap := buildLiveResourceMap(liveResources)
 	targetMap := buildManifestMap(targetManifests)
 
 	var diffs []models.ManifestDiff
@@ -450,46 +481,29 @@ func computeLiveVsTargetDiff(liveResources []ManagedResource, targetManifests []
 	// Check resources in target (creates and updates)
 	for key, targetManifest := range targetMap {
 		resource := parseResourceKey(key)
-
-		// Skip secrets
 		if resource.Kind == "Secret" && (resource.APIVersion == "" || resource.APIVersion == "v1") {
 			continue
 		}
 
 		liveRes, exists := liveMap[key]
+		liveState := ""
+		if exists {
+			liveState = liveResourceState(liveRes)
+		}
 
-		if !exists {
-			// Resource doesn't exist in cluster - will be created
+		diffStr, action := computeStateDiff(liveState, targetManifest.Raw, exists, true)
+		if diffStr != "" {
 			diffs = append(diffs, models.ManifestDiff{
 				Resource:    resource,
-				LiveState:   "",
+				LiveState:   liveState,
 				TargetState: targetManifest.Raw,
-				Diff:        formatCreateDiff(targetManifest.Raw),
-				Action:      models.DiffActionCreate,
+				Diff:        diffStr,
+				Action:      action,
 			})
-		} else {
-			// Resource exists - check for updates
-			// Use NormalizedLiveState for cleaner comparison
-			liveState := liveRes.NormalizedLiveState
-			if liveState == "" {
-				liveState = liveRes.LiveState
-			}
-
-			diffStr := computeDiff(liveState, targetManifest.Raw)
-			if diffStr != "" {
-				diffs = append(diffs, models.ManifestDiff{
-					Resource:    resource,
-					LiveState:   liveState,
-					TargetState: targetManifest.Raw,
-					Diff:        diffStr,
-					Action:      models.DiffActionUpdate,
-				})
-			}
 		}
 	}
 
 	// Check for resources that exist live but not in target (deletes)
-	// Note: This only shows resources that ArgoCD is tracking (managed resources)
 	for key, liveRes := range liveMap {
 		if _, exists := targetMap[key]; exists {
 			continue
@@ -502,12 +516,7 @@ func computeLiveVsTargetDiff(liveResources []ManagedResource, targetManifests []
 			Namespace:  liveRes.Namespace,
 		}
 
-		liveState := liveRes.NormalizedLiveState
-		if liveState == "" {
-			liveState = liveRes.LiveState
-		}
-
-		// Only show delete if there's actual live state
+		liveState := liveResourceState(liveRes)
 		if liveState == "" || liveState == "null" {
 			continue
 		}
@@ -599,19 +608,7 @@ func computeManifestsDiff(current, target []models.Manifest) []models.ManifestDi
 func computeThreeWayDiff(baseManifests, targetManifests []models.Manifest, liveResources []ManagedResource) []models.ManifestDiff {
 	baseMap := buildManifestMap(baseManifests)
 	targetMap := buildManifestMap(targetManifests)
-
-	// Build live map
-	liveMap := make(map[string]ManagedResource)
-	for _, res := range liveResources {
-		if res.Hook {
-			continue
-		}
-		if res.Kind == "Secret" && (res.Group == "" || res.Group == "v1") {
-			continue
-		}
-		key := resourceKey(res.Group, res.Kind, res.Namespace, res.Name)
-		liveMap[key] = res
-	}
+	liveMap := buildLiveResourceMap(liveResources)
 
 	// Collect all unique keys
 	allKeys := make(map[string]bool)
@@ -629,8 +626,6 @@ func computeThreeWayDiff(baseManifests, targetManifests []models.Manifest, liveR
 
 	for key := range allKeys {
 		resource := parseResourceKey(key)
-
-		// Skip secrets
 		if resource.Kind == "Secret" && (resource.APIVersion == "" || resource.APIVersion == "v1") {
 			continue
 		}
@@ -639,7 +634,6 @@ func computeThreeWayDiff(baseManifests, targetManifests []models.Manifest, liveR
 		targetManifest, targetExists := targetMap[key]
 		liveRes, liveExists := liveMap[key]
 
-		// Get state strings
 		var baseState, targetState, liveState string
 		if baseExists {
 			baseState = baseManifest.Raw
@@ -648,59 +642,22 @@ func computeThreeWayDiff(baseManifests, targetManifests []models.Manifest, liveR
 			targetState = targetManifest.Raw
 		}
 		if liveExists {
-			liveState = liveRes.NormalizedLiveState
-			if liveState == "" {
-				liveState = liveRes.LiveState
-			}
+			liveState = liveResourceState(liveRes)
 		}
 
-		// Compute branch diff (base → target)
-		var branchDiff string
-		var branchAction models.DiffAction
-		if !baseExists && targetExists {
-			branchDiff = formatCreateDiff(targetState)
-			branchAction = models.DiffActionCreate
-		} else if baseExists && !targetExists {
-			branchDiff = formatDeleteDiff(baseState)
-			branchAction = models.DiffActionDelete
-		} else if baseExists && targetExists {
-			branchDiff = computeDiff(baseState, targetState)
-			if branchDiff != "" {
-				branchAction = models.DiffActionUpdate
-			} else {
-				branchAction = models.DiffActionNone
-			}
-		}
+		branchDiff, branchAction := computeStateDiff(baseState, targetState, baseExists, targetExists)
+		liveDiff, liveAction := computeStateDiff(liveState, targetState, liveExists, targetExists)
 
-		// Compute live diff (live → target)
-		var liveDiff string
-		var liveAction models.DiffAction
-		if !liveExists && targetExists {
-			liveDiff = formatCreateDiff(targetState)
-			liveAction = models.DiffActionCreate
-		} else if liveExists && !targetExists {
-			liveDiff = formatDeleteDiff(liveState)
-			liveAction = models.DiffActionDelete
-		} else if liveExists && targetExists {
-			liveDiff = computeDiff(liveState, targetState)
-			if liveDiff != "" {
-				liveAction = models.DiffActionUpdate
-			} else {
-				liveAction = models.DiffActionNone
-			}
-		}
-
-		// Only include if there's at least one diff
 		if branchDiff != "" || liveDiff != "" {
 			diffs = append(diffs, models.ManifestDiff{
 				Resource:    resource,
 				BaseState:   baseState,
 				LiveState:   liveState,
 				TargetState: targetState,
-				Diff:        branchDiff, // Primary diff is the branch diff
+				Diff:        branchDiff,
 				BranchDiff:  branchDiff,
 				LiveDiff:    liveDiff,
-				Action:      branchAction, // Primary action is the branch action
+				Action:      branchAction,
 				LiveAction:  liveAction,
 			})
 		}

@@ -55,7 +55,8 @@ lemuria/
 │   │   ├── unlock.go            # Unlock: release locks for a PR
 │   │   ├── rollback.go          # Rollback: revert to previous Argo CD deployment history
 │   │   ├── help.go              # Help: post available commands as PR comment
-│   │   ├── appdetect.go         # Match changed files to configured application paths
+│   │   ├── appdetect.go         # Repo scanning for Application/ApplicationSet CRs, change detection
+│   │   ├── autosync.go          # Disable/restore auto-sync for safe planning
 │   │   └── vcs_iface.go         # VCS client interface (GitHub/GitLab, for testability)
 │   ├── config/                  # Configuration management
 │   │   ├── config.go            # All config structs (Config, ServerConfig, GitHubConfig, etc.)
@@ -414,6 +415,7 @@ make clean            # Remove build artifacts
 8. **Frontend embedding**: The frontend is built to `static/` by `make build-frontend`, then embedded into the Go binary. In dev mode, the Vite dev server runs separately on port 5173.
 9. **Config merging**: Multiple `-config` flags are supported. Files are merged in order (later files override earlier ones). This allows base + environment-specific configs.
 10. **Auto-merge**: When enabled, Lemuria merges the PR after a successful sync using the configured `merge_method` (default: `squash`).
+11. **Protected branches**: Configurable via `defaults.protected_branches` (default: `["main", "master", "develop", "development"]`). These branches are never deleted by auto-merge branch cleanup.
 
 ## Code Style
 

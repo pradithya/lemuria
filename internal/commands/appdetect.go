@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/models"
@@ -73,8 +73,8 @@ func (e *Executor) scanRepoForApplications(ctx context.Context, event *models.PR
 	}
 
 	// Sort file paths for deterministic iteration order
-	headPaths := sortedKeys(headContents)
-	basePaths := sortedKeys(baseContents)
+	headPaths := sortedMapKeys(headContents)
+	basePaths := sortedMapKeys(baseContents)
 
 	// Parse Application CRs from head branch
 	for _, filePath := range headPaths {
@@ -166,8 +166,8 @@ func detectApplicationChangesFromScan(scanned *ScannedRepoApps) *argocd.ParsedAp
 	}
 
 	// Sort names for deterministic iteration order
-	headNames := sortedStringKeys(headByName)
-	baseNames := sortedStringKeys(baseByName)
+	headNames := sortedMapKeys(headByName)
+	baseNames := sortedMapKeys(baseByName)
 
 	// New apps: in head but not in base
 	for _, name := range headNames {
@@ -261,8 +261,8 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 	}
 
 	// Sort names for deterministic iteration order
-	headAppSetNames := sortedParsedAppSetKeys(headByName)
-	baseAppSetNames := sortedParsedAppSetKeys(baseByName)
+	headAppSetNames := sortedMapKeys(headByName)
+	baseAppSetNames := sortedMapKeys(baseByName)
 
 	// AppSets in head but not in base → new
 	for _, name := range headAppSetNames {
@@ -334,42 +334,10 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 			continue
 		}
 
-		baseAppNames := make(map[string]bool)
-		for _, a := range baseApps {
-			baseAppNames[a.Name] = true
-		}
-
-		headAppNames := make(map[string]bool)
-		for _, a := range headApps {
-			headAppNames[a.Name] = true
-		}
-
-		mod := AppSetModification{
-			Name:       name,
-			SourceFile: headPAS.SourceFile,
-		}
-
-		for _, a := range headApps {
-			if !baseAppNames[a.Name] {
-				a.ChangeType = models.ApplicationNew
-				a.ApplicationSetName = name
-				a.SourceFile = headPAS.SourceFile
-				mod.NewApps = append(mod.NewApps, a)
-				result.NewApps = append(result.NewApps, a)
-			}
-		}
-
-		for _, a := range baseApps {
-			if !headAppNames[a.Name] {
-				a.ChangeType = models.ApplicationDeleted
-				a.ApplicationSetName = name
-				a.SourceFile = headPAS.SourceFile
-				mod.RemovedApps = append(mod.RemovedApps, a)
-				result.DeletedApps = append(result.DeletedApps, a)
-			}
-		}
-
+		mod := classifyAppSetApps(headApps, baseApps, name, headPAS.SourceFile)
 		if len(mod.NewApps) > 0 || len(mod.RemovedApps) > 0 {
+			result.NewApps = append(result.NewApps, mod.NewApps...)
+			result.DeletedApps = append(result.DeletedApps, mod.RemovedApps...)
 			result.Modified = append(result.Modified, mod)
 			slog.Debug("applicationset generator changed",
 				"appset", name,
@@ -387,6 +355,46 @@ func (e *Executor) detectApplicationSetChangesFromScan(ctx context.Context, scan
 	)
 
 	return result, nil
+}
+
+// classifyAppSetApps computes the set-difference between head and base generated
+// apps, returning an AppSetModification with new apps (in head but not base)
+// and removed apps (in base but not head).
+func classifyAppSetApps(headApps, baseApps []models.Application, appSetName, sourceFile string) AppSetModification {
+	baseAppNames := make(map[string]bool, len(baseApps))
+	for _, a := range baseApps {
+		baseAppNames[a.Name] = true
+	}
+
+	headAppNames := make(map[string]bool, len(headApps))
+	for _, a := range headApps {
+		headAppNames[a.Name] = true
+	}
+
+	mod := AppSetModification{
+		Name:       appSetName,
+		SourceFile: sourceFile,
+	}
+
+	for _, a := range headApps {
+		if !baseAppNames[a.Name] {
+			a.ChangeType = models.ApplicationNew
+			a.ApplicationSetName = appSetName
+			a.SourceFile = sourceFile
+			mod.NewApps = append(mod.NewApps, a)
+		}
+	}
+
+	for _, a := range baseApps {
+		if !headAppNames[a.Name] {
+			a.ChangeType = models.ApplicationDeleted
+			a.ApplicationSetName = appSetName
+			a.SourceFile = sourceFile
+			mod.RemovedApps = append(mod.RemovedApps, a)
+		}
+	}
+
+	return mod
 }
 
 // detectCrossRepoAffectedApps checks the given existing apps for cross-repo references
@@ -437,16 +445,6 @@ func detectCrossRepoAffectedApps(repoURL string, filePaths []string, alreadyDete
 	)
 
 	return affected
-}
-
-// containsAppByName checks if an app with the given name exists in the slice.
-func containsAppByName(apps []models.Application, name string) bool {
-	for _, app := range apps {
-		if app.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // setToSlice converts a string set to a slice.
@@ -520,32 +518,12 @@ func verifyDeletedAppsExist(parsed *argocd.ParsedApplications, existingByName ma
 	parsed.Deleted = actuallyDeleted
 }
 
-// sortedStringKeys returns the keys of a map[string]models.Application sorted alphabetically.
-func sortedStringKeys(m map[string]models.Application) []string {
+// sortedMapKeys returns the keys of a string-keyed map sorted alphabetically.
+func sortedMapKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
-	return keys
-}
-
-// sortedParsedAppSetKeys returns the keys of a map[string]argocd.ParsedAppSet sorted alphabetically.
-func sortedParsedAppSetKeys(m map[string]argocd.ParsedAppSet) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// sortedKeys returns the keys of a map sorted alphabetically.
-func sortedKeys(m map[string][]byte) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }
