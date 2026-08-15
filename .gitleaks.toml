@@ -20,6 +20,6 @@ description = "Non-secret placeholder values used in unit tests"
 # session_secret does NOT emit an "INSECURE CONFIG" warning. It is not, and
 # never was, a live credential.
 regexes = [
-  '''f47ac10b58cc4372a5670e02b2c3d479''',
+  '''^f47ac10b58cc4372a5670e02b2c3d479$''',
 ]
 regexTarget = "secret"
