@@ -263,6 +263,15 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 		return sb.String()
 	}
 
+	// A lock held by a *different* PR means nothing was planned for this app.
+	// Report it before the new/deleted early-returns, otherwise apps that render
+	// no diff (e.g. a deleted app whose source renders zero resources) would
+	// silently omit the conflict and read as if the plan had succeeded.
+	if isForeignLock(result.LockStatus) {
+		sb.WriteString(fmt.Sprintf("⚠️ **%s**\n\n", result.LockStatus))
+		return sb.String()
+	}
+
 	// Handle new applications
 	if result.ChangeType == models.ApplicationNew {
 		if done := r.renderNewAppPlan(&sb, result); done {
@@ -275,11 +284,6 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 		if done := r.renderDeletedAppPlan(&sb, result); done {
 			return sb.String()
 		}
-	}
-
-	if result.LockStatus != "" && !strings.Contains(result.LockStatus, "this PR") && result.LockStatus != "New application" && result.LockStatus != "Will be deleted" {
-		sb.WriteString(fmt.Sprintf("⚠️ **%s**\n\n", result.LockStatus))
-		return sb.String()
 	}
 
 	// Warning (e.g., auto-sync enabled)
@@ -306,6 +310,16 @@ func (r *Renderer) renderAppPlan(result PlanResult) string {
 	}
 
 	return sb.String()
+}
+
+// isForeignLock reports whether LockStatus describes a lock held by a
+// different PR (as opposed to this PR, or one of the informational
+// placeholder values that are not real locks).
+func isForeignLock(status string) bool {
+	if status == "" || status == "New application" || status == "Will be deleted" {
+		return false
+	}
+	return !strings.Contains(status, "this PR")
 }
 
 // renderNewAppPlan writes the new-application-specific content to sb.

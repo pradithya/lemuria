@@ -976,3 +976,77 @@ var errTest = testError("test error")
 type testError string
 
 func (e testError) Error() string { return string(e) }
+
+// A deleted (or new) application whose lock is held by another PR must still
+// surface the conflict. Previously the deleted/new early-return ran first, so
+// when such an app rendered no diff the comment claimed the deletion was
+// planned while no lock had actually been acquired.
+func TestRenderAppPlan_ForeignLockReportedForDeletedApp(t *testing.T) {
+	r := NewRenderer()
+
+	out := r.renderAppPlan(PlanResult{
+		Application: "dev-platform-kyverno",
+		ChangeType:  models.ApplicationDeleted,
+		SourceFile:  "apps/dev-platform/50-kyverno-app.yaml",
+		LockStatus:  "Locked by PR #45 (otheruser)",
+	})
+
+	if !strings.Contains(out, "Locked by PR #45 (otheruser)") {
+		t.Errorf("expected the lock conflict to be reported, got:\n%s", out)
+	}
+	if strings.Contains(out, "will be deleted") {
+		t.Errorf("must not claim a deletion was planned while the lock is held elsewhere, got:\n%s", out)
+	}
+}
+
+func TestRenderAppPlan_ForeignLockReportedForNewApp(t *testing.T) {
+	r := NewRenderer()
+
+	out := r.renderAppPlan(PlanResult{
+		Application: "brand-new",
+		ChangeType:  models.ApplicationNew,
+		LockStatus:  "Locked by PR #45 (otheruser)",
+	})
+
+	if !strings.Contains(out, "Locked by PR #45 (otheruser)") {
+		t.Errorf("expected the lock conflict to be reported, got:\n%s", out)
+	}
+	if strings.Contains(out, "New application") {
+		t.Errorf("must not claim a creation was planned while the lock is held elsewhere, got:\n%s", out)
+	}
+}
+
+// Deleted apps whose lock this PR does hold should render normally.
+func TestRenderAppPlan_OwnLockStillRendersDeletedApp(t *testing.T) {
+	r := NewRenderer()
+
+	out := r.renderAppPlan(PlanResult{
+		Application: "dev-platform-kyverno",
+		ChangeType:  models.ApplicationDeleted,
+		SourceFile:  "apps/dev-platform/50-kyverno-app.yaml",
+		LockStatus:  "Locked by this PR",
+	})
+
+	if !strings.Contains(out, "will be deleted") {
+		t.Errorf("expected the deletion notice, got:\n%s", out)
+	}
+}
+
+func TestIsForeignLock(t *testing.T) {
+	tests := []struct {
+		status string
+		want   bool
+	}{
+		{"", false},
+		{"New application", false},
+		{"Will be deleted", false},
+		{"Locked by this PR", false},
+		{"Locked by PR #45 (otheruser)", true},
+	}
+
+	for _, tt := range tests {
+		if got := isForeignLock(tt.status); got != tt.want {
+			t.Errorf("isForeignLock(%q) = %v, want %v", tt.status, got, tt.want)
+		}
+	}
+}
