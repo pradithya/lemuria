@@ -1,0 +1,25 @@
+# Gitleaks configuration for Lemuria
+#
+# Extends the upstream default ruleset and adds a narrowly-scoped allowlist for
+# known-dummy values that live in test fixtures. Gitleaks scans the full git
+# history (CI checks out with fetch-depth: 0), so allowlisting is the only way
+# to clear a false positive that was committed in the past — editing the file at
+# HEAD does not remove the finding from earlier commits.
+
+title = "Lemuria gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Non-secret placeholder values used in unit tests"
+
+# `f47ac10b58cc4372a5670e02b2c3d479` is the canonical RFC 4122 example UUID
+# (with hyphens stripped). It is used in internal/config/loader_test.go by
+# TestWarnInsecureConfig_StrongSecret purely to assert that a high-entropy
+# session_secret does NOT emit an "INSECURE CONFIG" warning. It is not, and
+# never was, a live credential.
+regexes = [
+  '''f47ac10b58cc4372a5670e02b2c3d479''',
+]
+regexTarget = "secret"
