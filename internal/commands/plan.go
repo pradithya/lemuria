@@ -488,7 +488,11 @@ func (e *Executor) lockAndStorePlan(ctx context.Context, result *appPlanResult, 
 		}
 	}
 	if !lockResult.Acquired {
-		result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
+		if lockResult.HeldBy != nil {
+			result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
+		} else {
+			result.LockStatus = "Locked by another PR"
+		}
 		return fmt.Errorf("lock held by another PR")
 	}
 	result.LockStatus = "Locked by this PR"
