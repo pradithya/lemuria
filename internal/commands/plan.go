@@ -467,7 +467,32 @@ func (e *Executor) lockAndStorePlan(ctx context.Context, result *appPlanResult, 
 		return err
 	}
 	if !lockResult.Acquired {
-		result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
+		// The holder may be a PR that has already been merged or closed — if its
+		// `closed` webhook was never delivered (outage, restart, queue drop) the
+		// lock is orphaned and would block every other PR until the 7-day TTL.
+		// Verify the holder is genuinely still open before reporting a conflict.
+		if e.reclaimStaleLock(ctx, lockResult.HeldBy, app.Name) {
+			lockResult, err = e.lock.Lock(ctx, models.LockRequest{
+				Application: app.Name,
+				PRNumber:    event.PR.Number,
+				Repo:        event.Repo.FullName,
+				RepoURL:     event.Repo.HTMLURL,
+				Provider:    string(event.Provider),
+				User:        event.Sender.Login,
+				ChangeType:  changeType,
+			})
+			if err != nil {
+				result.Error = fmt.Errorf("failed to acquire lock: %w", err)
+				return err
+			}
+		}
+	}
+	if !lockResult.Acquired {
+		if lockResult.HeldBy != nil {
+			result.LockStatus = fmt.Sprintf("Locked by PR #%d (%s)", lockResult.HeldBy.PRNumber, lockResult.HeldBy.User)
+		} else {
+			result.LockStatus = "Locked by another PR"
+		}
 		return fmt.Errorf("lock held by another PR")
 	}
 	result.LockStatus = "Locked by this PR"
@@ -484,6 +509,69 @@ func (e *Executor) lockAndStorePlan(ctx context.Context, result *appPlanResult, 
 	}
 
 	return nil
+}
+
+// reclaimStaleLock releases a lock whose holding PR is no longer open.
+//
+// Locks are normally released by the `closed` pull_request webhook. When that
+// delivery is lost — the worker is down, the queue is flushed, the webhook
+// errors — the lock survives its PR and blocks every subsequent PR touching
+// the same application until the 7-day TTL expires. Guarding lock acquisition
+// with a live state check makes the system self-healing.
+//
+// Returns true if the lock was released and the caller should retry.
+// On any uncertainty (nil holder, cross-repo holder, API error) it returns
+// false and leaves the lock intact — refusing to plan is always safer than
+// stealing a lock from a genuinely active PR.
+func (e *Executor) reclaimStaleLock(ctx context.Context, held *models.Lock, application string) bool {
+	if held == nil {
+		return false
+	}
+
+	owner, repo, ok := splitRepoFullName(held.Repo)
+	if !ok {
+		return false
+	}
+
+	pr, err := e.vcs.GetPR(ctx, owner, repo, held.PRNumber)
+	if err != nil {
+		slog.Warn("could not verify lock holder state, leaving lock intact",
+			"app", application,
+			"holder_pr", held.PRNumber,
+			"error", err,
+		)
+		return false
+	}
+
+	if pr.State != models.PRStateClosed {
+		return false
+	}
+
+	slog.Info("releasing stale lock held by a closed PR",
+		"app", application,
+		"holder_pr", held.PRNumber,
+		"merged", pr.Merged,
+	)
+
+	if err := e.lock.ForceUnlock(ctx, application); err != nil {
+		slog.Warn("failed to release stale lock",
+			"app", application,
+			"holder_pr", held.PRNumber,
+			"error", err,
+		)
+		return false
+	}
+
+	return true
+}
+
+// splitRepoFullName splits an "owner/repo" identifier into its parts.
+func splitRepoFullName(fullName string) (owner, repo string, ok bool) {
+	owner, repo, ok = strings.Cut(fullName, "/")
+	if !ok || owner == "" || repo == "" {
+		return "", "", false
+	}
+	return owner, repo, true
 }
 
 // renderPlanResults formats plan results as markdown comments.
