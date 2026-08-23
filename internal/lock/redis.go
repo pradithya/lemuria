@@ -19,7 +19,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -45,6 +47,13 @@ const (
 	prParentsKeyPrefix = "lemuria:pr-parents:"
 	// lockTTL is the default TTL for locks (7 days).
 	lockTTL = 7 * 24 * time.Hour
+	// indexTTL is the TTL for the PR-to-locks index. It is deliberately longer
+	// than lockTTL so the index always outlives the lock keys it points at:
+	// an index that expires first orphans its locks, making them invisible to
+	// ListByPR while they continue to block other PRs.
+	indexTTL = lockTTL + 24*time.Hour
+	// scanBatchSize is the COUNT hint used when scanning lock keys.
+	scanBatchSize = 100
 )
 
 // RedisManager implements Manager using Redis.
@@ -86,6 +95,13 @@ func (m *RedisManager) Lock(ctx context.Context, req models.LockRequest) (*model
 		if err := m.setLock(ctx, existing); err != nil {
 			return nil, err
 		}
+		// Re-assert the PR index alongside the refreshed lock. setLock resets the
+		// lock's TTL on every replan; without this the index keeps counting down
+		// from its original creation and expires while the lock is still held,
+		// leaving ListByPR (and therefore `lemuria unlock`) blind to it.
+		if err := m.indexLock(ctx, req.Repo, req.PRNumber, req.Application); err != nil {
+			return nil, err
+		}
 		return &models.LockResult{
 			Acquired: true,
 			Lock:     existing,
@@ -117,16 +133,29 @@ func (m *RedisManager) Lock(ctx context.Context, req models.LockRequest) (*model
 	}
 
 	// Add to PR index
-	prKey := m.prLocksKey(req.Repo, req.PRNumber)
-	if err := m.client.SAdd(ctx, prKey, req.Application).Err(); err != nil {
-		return nil, fmt.Errorf("updating PR index: %w", err)
+	if err := m.indexLock(ctx, req.Repo, req.PRNumber, req.Application); err != nil {
+		return nil, err
 	}
-	m.client.Expire(ctx, prKey, lockTTL)
 
 	return &models.LockResult{
 		Acquired: true,
 		Lock:     lock,
 	}, nil
+}
+
+// indexLock adds an application to a PR's lock index and (re-)applies the TTL.
+//
+// The TTL must be refreshed on every write: the index has to outlive the lock
+// keys it points at, and those are themselves refreshed on each replan.
+func (m *RedisManager) indexLock(ctx context.Context, repo string, prNumber int, application string) error {
+	prKey := m.prLocksKey(repo, prNumber)
+	if err := m.client.SAdd(ctx, prKey, application).Err(); err != nil {
+		return fmt.Errorf("updating PR index: %w", err)
+	}
+	if err := m.client.Expire(ctx, prKey, indexTTL).Err(); err != nil {
+		return fmt.Errorf("refreshing PR index TTL: %w", err)
+	}
+	return nil
 }
 
 // setLock stores a lock in Redis.
@@ -209,6 +238,12 @@ func (m *RedisManager) Get(ctx context.Context, application string) (*models.Loc
 }
 
 // ListByPR returns all locks held by a specific PR.
+//
+// The PR index is the fast path. It is not treated as authoritative: if it is
+// missing or incomplete the lock keys are scanned directly, since a lock the
+// index has lost is exactly the lock that most needs releasing — it is still
+// blocking other PRs while being invisible to `lemuria unlock`. Any locks
+// recovered that way are folded back into the index.
 func (m *RedisManager) ListByPR(ctx context.Context, repo string, prNumber int) ([]models.Lock, error) {
 	prKey := m.prLocksKey(repo, prNumber)
 	apps, err := m.client.SMembers(ctx, prKey).Result()
@@ -216,6 +251,7 @@ func (m *RedisManager) ListByPR(ctx context.Context, repo string, prNumber int) 
 		return nil, fmt.Errorf("getting PR locks: %w", err)
 	}
 
+	seen := make(map[string]bool, len(apps))
 	var locks []models.Lock
 	for _, app := range apps {
 		lock, err := m.Get(ctx, app)
@@ -223,11 +259,64 @@ func (m *RedisManager) ListByPR(ctx context.Context, repo string, prNumber int) 
 			continue
 		}
 		if lock != nil && lock.IsHeldByPR(repo, prNumber) {
+			seen[app] = true
 			locks = append(locks, *lock)
 		}
 	}
 
+	recovered, err := m.scanLocksByPR(ctx, repo, prNumber, seen)
+	if err != nil {
+		// The index results are still usable; degrade rather than fail the command.
+		slog.Warn("could not scan for locks missing from the PR index",
+			"repo", repo, "pr", prNumber, "error", err)
+		return locks, nil
+	}
+
+	for _, lock := range recovered {
+		slog.Warn("recovered lock missing from PR index",
+			"app", lock.Application, "repo", repo, "pr", prNumber)
+		if err := m.indexLock(ctx, repo, prNumber, lock.Application); err != nil {
+			slog.Warn("could not repair PR index",
+				"app", lock.Application, "repo", repo, "pr", prNumber, "error", err)
+		}
+		locks = append(locks, lock)
+	}
+
 	return locks, nil
+}
+
+// scanLocksByPR finds locks held by a PR that are absent from its index.
+func (m *RedisManager) scanLocksByPR(ctx context.Context, repo string, prNumber int, seen map[string]bool) ([]models.Lock, error) {
+	var (
+		recovered []models.Lock
+		cursor    uint64
+	)
+	for {
+		keys, next, err := m.client.Scan(ctx, cursor, lockKeyPrefix+"*", scanBatchSize).Result()
+		if err != nil {
+			return nil, fmt.Errorf("scanning lock keys: %w", err)
+		}
+
+		for _, key := range keys {
+			app := strings.TrimPrefix(key, lockKeyPrefix)
+			if app == "" || seen[app] {
+				continue
+			}
+			lock, err := m.Get(ctx, app)
+			if err != nil || lock == nil {
+				continue
+			}
+			if lock.IsHeldByPR(repo, prNumber) {
+				seen[app] = true
+				recovered = append(recovered, *lock)
+			}
+		}
+
+		cursor = next
+		if cursor == 0 {
+			return recovered, nil
+		}
+	}
 }
 
 // ListAll returns all current locks.
