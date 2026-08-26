@@ -32,7 +32,7 @@ COPY web/ ./
 RUN LEMURIA_VERSION=${VERSION} npm run build
 
 # Backend build stage
-FROM golang:1.25-alpine AS backend-builder
+FROM golang:1.26-alpine AS backend-builder
 
 WORKDIR /app
 
