@@ -1396,3 +1396,73 @@ func TestParentAutoSync(t *testing.T) {
 		t.Error("expected parent-2 to remain")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: Error paths for metrics coverage
+// ---------------------------------------------------------------------------
+
+func TestLock_RedisError(t *testing.T) {
+	mgr, mr := newTestManager(t)
+	ctx := context.Background()
+
+	// Close miniredis to force connection errors
+	mr.Close()
+
+	_, err := mgr.Lock(ctx, models.LockRequest{
+		Application: "app1",
+		PRNumber:    10,
+		Repo:        "owner/repo",
+		User:        "alice",
+	})
+	if err == nil {
+		t.Fatal("expected error when Redis is down")
+	}
+}
+
+func TestUnlock_RedisError(t *testing.T) {
+	mgr, mr := newTestManager(t)
+	ctx := context.Background()
+
+	// First lock successfully
+	_, err := mgr.Lock(ctx, models.LockRequest{
+		Application: "app1",
+		PRNumber:    10,
+		Repo:        "owner/repo",
+		User:        "alice",
+	})
+	if err != nil {
+		t.Fatalf("setup lock failed: %v", err)
+	}
+
+	// Close miniredis to force connection errors
+	mr.Close()
+
+	err = mgr.Unlock(ctx, "app1", "owner/repo", 10)
+	if err == nil {
+		t.Fatal("expected error when Redis is down")
+	}
+}
+
+func TestForceUnlock_RedisError(t *testing.T) {
+	mgr, mr := newTestManager(t)
+	ctx := context.Background()
+
+	// First lock successfully
+	_, err := mgr.Lock(ctx, models.LockRequest{
+		Application: "app1",
+		PRNumber:    10,
+		Repo:        "owner/repo",
+		User:        "alice",
+	})
+	if err != nil {
+		t.Fatalf("setup lock failed: %v", err)
+	}
+
+	// Close miniredis to force connection errors
+	mr.Close()
+
+	err = mgr.ForceUnlock(ctx, "app1")
+	if err == nil {
+		t.Fatal("expected error when Redis is down")
+	}
+}

@@ -23,9 +23,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/org/lemuria/internal/commands"
 	"github.com/org/lemuria/internal/config"
+	"github.com/org/lemuria/internal/metrics"
 	"github.com/org/lemuria/internal/models"
 	"github.com/org/lemuria/internal/queue"
 	"github.com/org/lemuria/internal/vcs"
@@ -65,6 +67,7 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	token := r.Header.Get("X-Gitlab-Token")
 	if !h.validateToken(token) {
 		slog.Warn("invalid webhook token")
+		metrics.RecordWebhookRequest("gitlab", "", "rejected")
 		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
@@ -80,6 +83,7 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 	event, err := ParseGitLabEvent(eventType, body)
 	if err != nil {
 		slog.Error("failed to parse event", "error", err)
+		metrics.RecordWebhookRequest("gitlab", eventType, "error")
 		http.Error(w, "failed to parse event", http.StatusBadRequest)
 		return
 	}
@@ -127,6 +131,7 @@ func (h *GitLabHandler) Handle(w http.ResponseWriter, r *http.Request) {
 		go h.processEvent(context.Background(), event)
 	}
 
+	metrics.RecordWebhookRequest("gitlab", eventType, "accepted")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(map[string]string{"status": "accepted"}); err != nil {
 		slog.Warn("failed to encode response", "error", err)
@@ -145,6 +150,9 @@ func (h *GitLabHandler) validateToken(token string) bool {
 
 // processEvent handles the webhook event based on its type.
 func (h *GitLabHandler) processEvent(ctx context.Context, event *models.PREvent) {
+	start := time.Now()
+	defer metrics.ObserveWebhookProcessingDuration("gitlab", string(event.Type), start)
+
 	slog.Info("processing gitlab event",
 		"type", event.Type,
 		"action", event.Action,

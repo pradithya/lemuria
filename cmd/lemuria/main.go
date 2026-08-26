@@ -21,6 +21,8 @@ import (
 	"net/http"
 	"os"
 
+	"errors"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -169,7 +171,9 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 	worker := queue.NewWorker(cfg.Redis, cfg.Queue)
 	worker.RegisterHandler(queue.TypeWebhookProcess, handler)
 
-	// Start Prometheus metrics server with queue collector
+	// Start Prometheus metrics server with queue collector.
+	// Register the queue collector with the default registry so that both
+	// application-level metrics (via promauto) and queue metrics are exposed.
 	if cfg.Server.MetricsPort > 0 {
 		collector := queue.NewQueueCollector(cfg.Redis)
 		defer func() {
@@ -179,11 +183,17 @@ func runWorker(ctx context.Context, cmd *cli.Command) error {
 			}
 		}()
 
-		reg := prometheus.NewRegistry()
-		reg.MustRegister(collector)
+		if err := prometheus.Register(collector); err != nil {
+			// If already registered (e.g., in tests), log and continue.
+			var are prometheus.AlreadyRegisteredError
+			if !errors.As(err, &are) {
+				return fmt.Errorf("registering queue collector: %w", err)
+			}
+			slog.Debug("queue collector already registered, skipping")
+		}
 
 		metricsMux := http.NewServeMux()
-		metricsMux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+		metricsMux.Handle("/metrics", promhttp.Handler())
 
 		metricsAddr := fmt.Sprintf(":%d", cfg.Server.MetricsPort)
 		go func() {

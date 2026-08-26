@@ -25,6 +25,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/org/lemuria/internal/config"
+	"github.com/org/lemuria/internal/metrics"
 	"github.com/org/lemuria/internal/models"
 )
 
@@ -76,6 +77,7 @@ func (m *RedisManager) Lock(ctx context.Context, req models.LockRequest) (*model
 	// Check if lock already exists
 	existing, err := m.Get(ctx, req.Application)
 	if err != nil && !errors.Is(err, redis.Nil) {
+		metrics.RecordLockOperation("lock", "error")
 		return nil, fmt.Errorf("checking existing lock: %w", err)
 	}
 
@@ -84,8 +86,10 @@ func (m *RedisManager) Lock(ctx context.Context, req models.LockRequest) (*model
 		existing.LockedAt = time.Now()
 		existing.ChangeType = req.ChangeType
 		if err := m.setLock(ctx, existing); err != nil {
+			metrics.RecordLockOperation("lock", "error")
 			return nil, err
 		}
+		metrics.RecordLockOperation("lock", "success")
 		return &models.LockResult{
 			Acquired: true,
 			Lock:     existing,
@@ -94,6 +98,7 @@ func (m *RedisManager) Lock(ctx context.Context, req models.LockRequest) (*model
 
 	// If locked by another PR, return conflict
 	if existing != nil {
+		metrics.RecordLockOperation("lock", "contention")
 		return &models.LockResult{
 			Acquired: false,
 			HeldBy:   existing,
@@ -113,16 +118,19 @@ func (m *RedisManager) Lock(ctx context.Context, req models.LockRequest) (*model
 	}
 
 	if err := m.setLock(ctx, lock); err != nil {
+		metrics.RecordLockOperation("lock", "error")
 		return nil, err
 	}
 
 	// Add to PR index
 	prKey := m.prLocksKey(req.Repo, req.PRNumber)
 	if err := m.client.SAdd(ctx, prKey, req.Application).Err(); err != nil {
+		metrics.RecordLockOperation("lock", "error")
 		return nil, fmt.Errorf("updating PR index: %w", err)
 	}
 	m.client.Expire(ctx, prKey, lockTTL)
 
+	metrics.RecordLockOperation("lock", "success")
 	return &models.LockResult{
 		Acquired: true,
 		Lock:     lock,
@@ -151,6 +159,7 @@ func (m *RedisManager) Unlock(ctx context.Context, application, repo string, prN
 		if errors.Is(err, redis.Nil) {
 			return nil // No lock exists
 		}
+		metrics.RecordLockOperation("unlock", "error")
 		return err
 	}
 
@@ -160,10 +169,15 @@ func (m *RedisManager) Unlock(ctx context.Context, application, repo string, prN
 
 	// Only unlock if held by the requesting PR
 	if !lock.IsHeldByPR(repo, prNumber) {
+		metrics.RecordLockOperation("unlock", "error")
 		return fmt.Errorf("lock not held by PR #%d", prNumber)
 	}
 
-	return m.ForceUnlock(ctx, application)
+	if err := m.ForceUnlock(ctx, application); err != nil {
+		return err
+	}
+	metrics.RecordLockOperation("unlock", "success")
+	return nil
 }
 
 // ForceUnlock releases a lock regardless of who holds it.
@@ -171,6 +185,7 @@ func (m *RedisManager) ForceUnlock(ctx context.Context, application string) erro
 	// Get lock first to remove from PR index
 	lock, err := m.Get(ctx, application)
 	if err != nil && !errors.Is(err, redis.Nil) {
+		metrics.RecordLockOperation("force_unlock", "error")
 		return err
 	}
 
@@ -186,7 +201,12 @@ func (m *RedisManager) ForceUnlock(ctx context.Context, application string) erro
 
 	// Delete lock
 	key := lockKeyPrefix + application
-	return m.client.Del(ctx, key).Err()
+	if err := m.client.Del(ctx, key).Err(); err != nil {
+		metrics.RecordLockOperation("force_unlock", "error")
+		return err
+	}
+	metrics.RecordLockOperation("force_unlock", "success")
+	return nil
 }
 
 // Get returns the current lock for an application, if any.

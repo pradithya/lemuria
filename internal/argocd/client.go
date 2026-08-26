@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/org/lemuria/internal/config"
+	"github.com/org/lemuria/internal/metrics"
 )
 
 // Client wraps the Argo CD REST API client.
@@ -57,6 +58,8 @@ func NewClient(cfg config.ArgoCDConfig) (*Client, error) {
 
 // request performs an HTTP request to the Argo CD API.
 func (c *Client) request(ctx context.Context, method, path string, query url.Values, body io.Reader) (*http.Response, error) {
+	start := time.Now()
+
 	u, err := url.Parse(c.baseURL + path)
 	if err != nil {
 		return nil, fmt.Errorf("parsing URL: %w", err)
@@ -75,6 +78,16 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
+
+	statusCode := 0
+	if resp != nil {
+		statusCode = resp.StatusCode
+	}
+
+	normalizedPath := metrics.NormalizePath(path)
+	metrics.RecordArgoCDRequest(method, normalizedPath, statusCode)
+	metrics.ObserveArgoCDRequestDuration(method, start)
+
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}

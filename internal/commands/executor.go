@@ -22,10 +22,12 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/org/lemuria/internal/argocd"
 	"github.com/org/lemuria/internal/config"
 	"github.com/org/lemuria/internal/lock"
+	"github.com/org/lemuria/internal/metrics"
 	"github.com/org/lemuria/internal/models"
 	"github.com/org/lemuria/internal/vcs"
 	"github.com/org/lemuria/pkg/diff"
@@ -53,6 +55,7 @@ func NewExecutor(vcsClient vcs.Client, argo *argocd.Client, lockMgr lock.Manager
 
 // Execute runs a command in the context of a PR event.
 func (e *Executor) Execute(ctx context.Context, cmd *Command, event *models.PREvent) error {
+	start := time.Now()
 	slog.Debug("executing command",
 		"command", cmd.Name,
 		"application", cmd.Application,
@@ -63,24 +66,35 @@ func (e *Executor) Execute(ctx context.Context, cmd *Command, event *models.PREv
 		"head_sha", event.PR.HeadSHA,
 	)
 
+	var err error
 	switch cmd.Name {
 	case CommandPlan:
-		return e.executePlan(ctx, cmd, event)
+		err = e.executePlan(ctx, cmd, event)
 	case CommandSync:
-		return e.executeSync(ctx, cmd, event)
+		err = e.executeSync(ctx, cmd, event)
 	case CommandUnlock:
-		return e.executeUnlock(ctx, cmd, event)
+		err = e.executeUnlock(ctx, cmd, event)
 	case CommandHelp:
-		return e.executeHelp(ctx, event)
+		err = e.executeHelp(ctx, event)
 	case CommandRollback:
-		return e.executeRollback(ctx, cmd, event)
+		err = e.executeRollback(ctx, cmd, event)
 	default:
-		return fmt.Errorf("unknown command: %s", cmd.Name)
+		err = fmt.Errorf("unknown command: %s", cmd.Name)
 	}
+
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	metrics.RecordCommandExecution(string(cmd.Name), status)
+	metrics.ObserveCommandDuration(string(cmd.Name), start)
+
+	return err
 }
 
 // RunAutoplan runs plan for all affected applications.
 func (e *Executor) RunAutoplan(ctx context.Context, event *models.PREvent) error {
+	start := time.Now()
 	slog.Debug("starting autoplan",
 		"repo", event.Repo.FullName,
 		"pr", event.PR.Number,
@@ -90,7 +104,16 @@ func (e *Executor) RunAutoplan(ctx context.Context, event *models.PREvent) error
 	cmd := &Command{
 		Name: CommandPlan,
 	}
-	return e.executePlan(ctx, cmd, event)
+	err := e.executePlan(ctx, cmd, event)
+
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	metrics.RecordCommandExecution("autoplan", status)
+	metrics.ObserveCommandDuration("autoplan", start)
+
+	return err
 }
 
 // UnlockAll releases all locks held by a PR.
@@ -409,12 +432,19 @@ func (e *Executor) findAffectedApplications(ctx context.Context, event *models.P
 	slog.Debug("final affected applications",
 		"count", len(affected),
 	)
+
+	// Record detected applications by change type
+	changeTypeCounts := make(map[string]int)
 	for _, app := range affected {
 		slog.Debug("affected application",
 			"name", app.Name,
 			"change_type", app.ChangeType,
 			"source_file", app.SourceFile,
 		)
+		changeTypeCounts[string(app.ChangeType)]++
+	}
+	for ct, count := range changeTypeCounts {
+		metrics.RecordApplicationsDetected(ct, count)
 	}
 
 	return affected, nil
