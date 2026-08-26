@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Frontend build stage
-FROM node:25-alpine AS frontend-builder
+FROM node:26-alpine AS frontend-builder
 
 ARG VERSION=dev
 
